@@ -1,13 +1,13 @@
 // ADMIN-PAGE-layout-designer-current.js
-// Internal Version: 2026-06-03-006
-// Purpose: Layout Designer v6 with saved design profiles, style history restore, and unsaved-change protection.
+// Internal Version: 2026-06-03-007
+// Purpose: Layout Designer v7 cleanup: corrected visible version, filtered history restore list, reset unsaved changes, and clearer preset/profile help text.
 // Backend contract unchanged from v2. Uses update_active_style_profile and get_active_style_profile.
 // Backend diagnostics include Copy result button.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-003";
+  const VERSION = "2026-06-03-007";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -615,7 +615,7 @@
         .se-button.secondary{background:#fff;color:#1f4f82;}
         .se-button.full{width:100%;justify-content:center;}
         .se-status{margin-top:12px;padding:12px;border-radius:10px;background:#eef3f8;border:1px solid #d6e0ec;color:#26344d;font-size:14px;white-space:pre-wrap;}
-        .se-output{margin-top:14px;background:#101827;color:#e7edf6;border-radius:12px;padding:14px;overflow:auto;min-height:120px;max-height:300px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.45;}.se-color-row{display:grid;grid-template-columns:48px minmax(0,1fr) 30px;gap:8px;align-items:center;}.se-color-picker{width:48px;height:42px;border:1px solid #c7d2e2;border-radius:10px;padding:2px;background:#fff;cursor:pointer;}.se-color-hex{font-family:Consolas,Monaco,monospace;}.se-color-swatch{display:block;width:30px;height:30px;border-radius:999px;border:1px solid #c7d2e2;box-shadow:inset 0 0 0 2px rgba(255,255,255,.7);}.se-diagnostics{margin-top:16px;background:#fff;border:1px solid #d9e0ea;border-radius:14px;padding:16px;}.se-dirty{display:inline-flex;border-radius:999px;padding:6px 10px;background:#edf7ed;color:#265c2b;font-size:12px;font-weight:900;margin:0 0 12px 0;}.se-dirty.is-dirty{background:#fff0d9;color:#8a5200;}.se-current-preset{padding:10px 12px;border:1px solid #d9e0ea;background:#f7f9fc;border-radius:10px;font-size:13px;font-weight:800;margin-bottom:10px;color:#26344d;}.se-history-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;border:1px solid #d9e0ea;border-radius:10px;padding:10px;margin-bottom:8px;background:#fbfcfe;}.se-history-meta{font-size:12px;color:#5d6b82;line-height:1.35;}
+        .se-output{margin-top:14px;background:#101827;color:#e7edf6;border-radius:12px;padding:14px;overflow:auto;min-height:120px;max-height:300px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.45;}.se-color-row{display:grid;grid-template-columns:48px minmax(0,1fr) 30px;gap:8px;align-items:center;}.se-color-picker{width:48px;height:42px;border:1px solid #c7d2e2;border-radius:10px;padding:2px;background:#fff;cursor:pointer;}.se-color-hex{font-family:Consolas,Monaco,monospace;}.se-color-swatch{display:block;width:30px;height:30px;border-radius:999px;border:1px solid #c7d2e2;box-shadow:inset 0 0 0 2px rgba(255,255,255,.7);}.se-diagnostics{margin-top:16px;background:#fff;border:1px solid #d9e0ea;border-radius:14px;padding:16px;}.se-dirty{display:inline-flex;border-radius:999px;padding:6px 10px;background:#edf7ed;color:#265c2b;font-size:12px;font-weight:900;margin:0 0 12px 0;}.se-dirty.is-dirty{background:#fff0d9;color:#8a5200;}.se-current-preset{padding:10px 12px;border:1px solid #d9e0ea;background:#f7f9fc;border-radius:10px;font-size:13px;font-weight:800;margin-bottom:10px;color:#26344d;}.se-help{font-size:12px;line-height:1.35;color:#5d6b82;background:#f7f9fc;border:1px solid #e3e9f2;border-radius:10px;padding:9px 10px;margin:-4px 0 12px 0;}.se-history-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;border:1px solid #d9e0ea;border-radius:10px;padding:10px;margin-bottom:8px;background:#fbfcfe;}.se-history-meta{font-size:12px;color:#5d6b82;line-height:1.35;}
         .se-control-section{border:1px solid #d8e1ed;border-radius:12px;margin-bottom:10px;background:#fbfcfe;overflow:hidden;}
         .se-control-section summary{cursor:pointer;font-weight:900;color:#1f2a44;padding:12px 13px;list-style:none;}
         .se-control-section summary::-webkit-details-marker{display:none;}
@@ -632,7 +632,7 @@
       <main class="se-wrap">
         <section class="se-header-card">
           <h1 class="se-title">Layout Designer</h1>
-          <p class="se-subtitle">Customer-wide style profile controls. Controls now scroll independently while the preview remains visible.</p>
+          <p class="se-subtitle">Customer-wide style profile controls. System presets are starting points; saved design profiles are reusable customer designs.</p>
           <div class="se-badge">ADMIN-PAGE-layout-designer-current.js | ${escapeHtml(VERSION)}</div>
         </section>
 
@@ -641,7 +641,9 @@
             <div class="se-controls-top">
               <label class="se-field"><span class="se-label">Customer</span><select id="se-customer-select" class="se-select"><option value="">Log in and load customers...</option></select></label>
               <label class="se-field"><span class="se-label">Apply system preset</span><select id="se-preset" class="se-select"><option value="">Choose preset...</option>${Object.entries(PRESETS).map(([key,preset])=>`<option value="${escapeHtml(key)}">${escapeHtml(preset.label)}</option>`).join("")}</select></label>
+              <div class="se-help">System presets are starting points. They preview immediately but do not save until you click Save to customer.</div>
               <label class="se-field"><span class="se-label">Apply saved design profile</span><select id="se-saved-profile-select" class="se-select"><option value="">Load saved profiles...</option></select></label>
+              <div class="se-help">Saved design profiles are reusable customer-specific designs created from the current controls.</div>
               <button id="se-apply-saved-profile" class="se-button secondary full" type="button">Apply Saved Design Profile</button>
               <div class="se-actions">
                 <button id="se-login" class="se-button">Log in</button>
@@ -733,6 +735,7 @@
 
             <div class="se-controls-bottom">
               <button id="se-save" class="se-button full">Save to customer</button>
+              <button id="se-reset-unsaved" class="se-button secondary full" type="button" style="margin-top:8px;">Reset unsaved changes</button>
             </div>
           </aside>
 
@@ -761,7 +764,7 @@
               <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
                 <div>
                   <h3 style="margin:0 0 4px 0;font-size:18px;">History / Restore</h3>
-                  <p class="se-subtitle">Shows recent style snapshots for this customer.</p>
+                  <p class="se-subtitle">Shows useful recent restore points for this customer.</p>
                 </div>
                 <button id="se-refresh-history" class="se-button secondary">Refresh history</button>
               </div>
@@ -824,19 +827,29 @@
     const list = document.getElementById("se-history-list");
     if (!list) return;
 
-    if (!styleHistory.length) {
-      list.innerHTML = "No history snapshots yet.";
+    const usefulHistory = styleHistory.filter((row) => {
+      const eventType = String(row.event_type || "");
+      return ["after_save", "after_restore", "after_apply_saved_profile", "saved_profile_created"].includes(eventType);
+    });
+
+    if (!usefulHistory.length) {
+      list.innerHTML = "No useful restore points yet. Save a customer style to create one.";
       return;
     }
 
-    list.innerHTML = styleHistory.map((row) => {
+    list.innerHTML = usefulHistory.map((row) => {
       const snapshot = row.snapshot_json || {};
       const date = row.created_at ? new Date(row.created_at).toLocaleString() : "";
+      const eventLabel = String(row.event_type || "")
+        .replace("after_save", "Saved style")
+        .replace("after_restore", "Restored style")
+        .replace("after_apply_saved_profile", "Applied saved profile")
+        .replace("saved_profile_created", "Saved design profile");
       return `
         <div class="se-history-row">
           <div>
             <strong>${escapeHtml(snapshot.profile_name || "Style Snapshot")}</strong>
-            <div class="se-history-meta">${escapeHtml(row.event_type || "")} | ${escapeHtml(date)} | ${escapeHtml(row.saved_by_email || "")}</div>
+            <div class="se-history-meta">${escapeHtml(eventLabel)} | ${escapeHtml(date)}</div>
             ${row.note ? `<div class="se-history-meta">${escapeHtml(row.note)}</div>` : ""}
           </div>
           <button class="se-button secondary se-restore-history" data-history-id="${escapeHtml(row.history_id)}" type="button">Restore</button>
@@ -1122,6 +1135,31 @@
       catch (error) {
         setStatus("History refresh failed.");
         setOutput({ ok: false, event: "history_refresh_failed", message: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    document.getElementById("se-reset-unsaved")?.addEventListener("click", async () => {
+      try {
+        if (!isDirty) {
+          setStatus("No unsaved changes to reset.");
+          return;
+        }
+
+        if (!window.confirm("Reset unsaved Layout Designer changes and reload the last saved active profile?")) return;
+
+        isSaving = true;
+        setStatus("Resetting unsaved changes...");
+        await loadActiveStyleProfile();
+        await loadCustomerPages();
+        await loadSavedProfiles();
+        await loadStyleHistory();
+        markClean();
+        setStatus("Unsaved changes reset.");
+      } catch (error) {
+        setStatus("Reset failed.");
+        setOutput({ ok: false, event: "reset_unsaved_failed", message: error instanceof Error ? error.message : String(error) });
+      } finally {
+        isSaving = false;
       }
     });
 

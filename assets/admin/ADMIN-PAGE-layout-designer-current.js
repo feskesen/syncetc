@@ -1,6 +1,6 @@
 // ADMIN-PAGE-layout-designer-current.js
-// Internal Version: 2026-06-03-003
-// Purpose: Layout Designer v3 with persistent preview and scrollable sliding-style controls panel.
+// Internal Version: 2026-06-03-004
+// Purpose: Layout Designer v4 with persistent preview, scrollable controls, color pickers, and preview-side diagnostics.
 // Backend contract unchanged from v2. Uses update_active_style_profile and get_active_style_profile.
 // Backend diagnostics include Copy result button.
 
@@ -190,6 +190,10 @@
   function setValue(id, value) {
     const el = document.getElementById(id);
     if (el) el.value = value ?? "";
+
+    if (["se-brand-primary", "se-brand-secondary", "se-surface", "se-text"].includes(id)) {
+      syncColorControl(id, value);
+    }
   }
 
   function setChecked(id, value) {
@@ -423,6 +427,66 @@
     return `<label class="se-field"><span class="se-label">${escapeHtml(label)}</span><input id="${escapeHtml(id)}" class="se-input" type="${type}" ${extra}></label>`;
   }
 
+  function colorField(id, label) {
+    return `
+      <label class="se-field">
+        <span class="se-label">${escapeHtml(label)}</span>
+        <div class="se-color-row">
+          <input id="${escapeHtml(id)}-picker" class="se-color-picker" type="color" value="#1f4f82">
+          <input id="${escapeHtml(id)}" class="se-input se-color-hex" type="text" value="#1f4f82" autocomplete="off" spellcheck="false">
+          <span id="${escapeHtml(id)}-swatch" class="se-color-swatch" aria-hidden="true"></span>
+        </div>
+      </label>
+    `;
+  }
+
+  function isValidHexColor(value) {
+    return /^#[0-9a-fA-F]{6}$/.test(String(value || "").trim());
+  }
+
+  function syncColorControl(id, value) {
+    const textInput = document.getElementById(id);
+    const picker = document.getElementById(`${id}-picker`);
+    const swatch = document.getElementById(`${id}-swatch`);
+    const color = isValidHexColor(value) ? String(value).trim() : "#1f4f82";
+
+    if (textInput) textInput.value = color;
+    if (picker) picker.value = color;
+    if (swatch) swatch.style.background = color;
+  }
+
+  function bindColorPair(id) {
+    const textInput = document.getElementById(id);
+    const picker = document.getElementById(`${id}-picker`);
+    const swatch = document.getElementById(`${id}-swatch`);
+
+    if (picker && textInput) {
+      picker.addEventListener("input", () => {
+        textInput.value = picker.value;
+        if (swatch) swatch.style.background = picker.value;
+        renderPreview();
+      });
+    }
+
+    if (textInput && picker) {
+      textInput.addEventListener("input", () => {
+        if (isValidHexColor(textInput.value)) {
+          picker.value = textInput.value;
+          if (swatch) swatch.style.background = textInput.value;
+          renderPreview();
+        }
+      });
+
+      textInput.addEventListener("blur", () => {
+        if (!isValidHexColor(textInput.value)) {
+          textInput.value = picker.value;
+        }
+        if (swatch) swatch.style.background = textInput.value;
+        renderPreview();
+      });
+    }
+  }
+
   function checkboxField(id, label) {
     return `<label class="se-check"><input id="${escapeHtml(id)}" type="checkbox"><span class="se-label">${escapeHtml(label)}</span></label>`;
   }
@@ -455,7 +519,7 @@
         .se-button.secondary{background:#fff;color:#1f4f82;}
         .se-button.full{width:100%;justify-content:center;}
         .se-status{margin-top:12px;padding:12px;border-radius:10px;background:#eef3f8;border:1px solid #d6e0ec;color:#26344d;font-size:14px;white-space:pre-wrap;}
-        .se-output{margin-top:14px;background:#101827;color:#e7edf6;border-radius:12px;padding:14px;overflow:auto;min-height:100px;max-height:260px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.45;}
+        .se-output{margin-top:14px;background:#101827;color:#e7edf6;border-radius:12px;padding:14px;overflow:auto;min-height:120px;max-height:300px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.45;}.se-color-row{display:grid;grid-template-columns:48px minmax(0,1fr) 30px;gap:8px;align-items:center;}.se-color-picker{width:48px;height:42px;border:1px solid #c7d2e2;border-radius:10px;padding:2px;background:#fff;cursor:pointer;}.se-color-hex{font-family:Consolas,Monaco,monospace;}.se-color-swatch{display:block;width:30px;height:30px;border-radius:999px;border:1px solid #c7d2e2;box-shadow:inset 0 0 0 2px rgba(255,255,255,.7);}.se-diagnostics{margin-top:16px;background:#fff;border:1px solid #d9e0ea;border-radius:14px;padding:16px;}
         .se-control-section{border:1px solid #d8e1ed;border-radius:12px;margin-bottom:10px;background:#fbfcfe;overflow:hidden;}
         .se-control-section summary{cursor:pointer;font-weight:900;color:#1f2a44;padding:12px 13px;list-style:none;}
         .se-control-section summary::-webkit-details-marker{display:none;}
@@ -497,10 +561,10 @@
               `, true)}
 
               ${controlSection("Colors", `
-                ${inputField("se-brand-primary", "Brand Primary")}
-                ${inputField("se-brand-secondary", "Brand Secondary")}
-                ${inputField("se-surface", "Surface")}
-                ${inputField("se-text", "Text")}
+                ${colorField("se-brand-primary", "Brand Primary")}
+                ${colorField("se-brand-secondary", "Brand Secondary")}
+                ${colorField("se-surface", "Surface")}
+                ${colorField("se-text", "Text")}
               `, true)}
 
               ${controlSection("Typography", `
@@ -563,10 +627,6 @@
                 ${checkboxField("se-use-real-page-data", "Use real page data later")}
               `)}
 
-              ${controlSection("Backend Diagnostics", `
-                <button id="se-copy-output" class="se-button secondary full">Copy result</button>
-                <pre id="se-output" class="se-output">{}</pre>
-              `)}
             </div>
 
             <div class="se-controls-bottom">
@@ -583,6 +643,17 @@
               <button id="se-preview-refresh" class="se-button secondary">Refresh preview</button>
             </div>
             <div id="se-preview"></div>
+
+            <section class="se-diagnostics">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                <div>
+                  <h3 style="margin:0 0 4px 0;font-size:18px;">Backend Result</h3>
+                  <p class="se-subtitle">Visible during development so saves and reloads can be verified quickly.</p>
+                </div>
+                <button id="se-copy-output" class="se-button secondary">Copy result</button>
+              </div>
+              <pre id="se-output" class="se-output">{}</pre>
+            </section>
           </section>
         </section>
       </main>
@@ -706,6 +777,8 @@
       el.addEventListener("input", renderPreview);
       el.addEventListener("change", renderPreview);
     });
+
+    ["se-brand-primary", "se-brand-secondary", "se-surface", "se-text"].forEach(bindColorPair);
 
     document.getElementById("se-save")?.addEventListener("click", async () => {
       try { await saveStyleProfile(); }

@@ -1,12 +1,12 @@
 // ADMIN-PAGE-page-editor-current.js
-// Internal Version: 2026-06-03-001
+// Internal Version: 2026-06-03-002
 // Purpose: Schema-driven Page Editor v1 for customer-specific page settings.
 // Reads editable_schema_json from the selected page's template and renders the appropriate fields.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-001";
+  const VERSION = "2026-06-03-002";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -296,7 +296,23 @@
               </div>
             </section>
 
-            <section class="se-card">
+            
+          <section class="se-card">
+            <h2 class="se-title" style="font-size:22px;">Page Features / Components</h2>
+            <p class="se-subtitle">These are page-specific visibility controls. They do not change the customer-wide Layout Designer style.</p>
+            <div class="se-toggle-grid">
+              <label class="se-toggle"><input id="se-feature-announcement-strip" type="checkbox"><span><strong>Announcement strip</strong><br>Short page-level notice near the top.</span></label>
+              <label class="se-toggle"><input id="se-feature-banner-scroller" type="checkbox"><span><strong>Banner scroller</strong><br>Scrolling or rotating banner area.</span></label>
+              <label class="se-toggle"><input id="se-feature-hero-media" type="checkbox"><span><strong>Hero media</strong><br>Hero image/video/media area when supported.</span></label>
+              <label class="se-toggle"><input id="se-feature-primary-cta-block" type="checkbox"><span><strong>Primary CTA block</strong><br>Prominent call-to-action section.</span></label>
+              <label class="se-toggle"><input id="se-feature-secondary-content-section" type="checkbox"><span><strong>Secondary content section</strong><br>Additional reusable text/card section.</span></label>
+              <label class="se-toggle"><input id="se-feature-filter-controls" type="checkbox"><span><strong>Filter controls</strong><br>Page-level filters for module content.</span></label>
+              <label class="se-toggle"><input id="se-feature-dashboard-cards" type="checkbox"><span><strong>Dashboard cards</strong><br>Summary/stat cards where applicable.</span></label>
+              <label class="se-toggle"><input id="se-feature-empty-state-panel" type="checkbox"><span><strong>Empty-state panel</strong><br>Helpful placeholder when no module data exists.</span></label>
+            </div>
+          </section>
+
+<section class="se-card">
               <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
                 <h2 class="se-title" style="font-size:22px;">Last Backend Result</h2>
                 <button id="se-copy-output" class="se-button secondary">Copy result</button>
@@ -576,7 +592,13 @@
     });
 
     setStatus("Saving page settings...");
-    await callCoreAdminAction("update_page_settings", {
+    await (() => {
+          const featureToggles = getFeatureTogglesPayload();
+          if (!payload.visibility_json || typeof payload.visibility_json !== "object") payload.visibility_json = {};
+          payload.visibility_json.features = featureToggles;
+        })();
+
+        callCoreAdminAction("update_page_settings", {
       customer_page_id: selectedCustomerPageId,
       content_json: payload.settings.content_json,
       labels_json: payload.settings.labels_json,
@@ -589,6 +611,22 @@
     await loadCustomerPages();
     await loadSelectedPageEditor();
     setStatus("Page settings saved.");
+  }
+
+
+  function applyFeatureTogglesToForm(pageSettings) {
+    const visibility = pageSettings?.visibility_json || {};
+    const options = pageSettings?.options_json || {};
+    const features = visibility.features || options.features || {};
+
+    setChecked("se-feature-announcement-strip", features.show_announcement_strip);
+    setChecked("se-feature-banner-scroller", features.show_banner_scroller);
+    setChecked("se-feature-hero-media", features.show_hero_media);
+    setChecked("se-feature-primary-cta-block", features.show_primary_cta_block);
+    setChecked("se-feature-secondary-content-section", features.show_secondary_content_section);
+    setChecked("se-feature-filter-controls", features.show_filter_controls);
+    setChecked("se-feature-dashboard-cards", features.show_dashboard_cards);
+    setChecked("se-feature-empty-state-panel", features.show_empty_state_panel);
   }
 
   function bindEvents() {

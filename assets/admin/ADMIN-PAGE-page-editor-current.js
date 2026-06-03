@@ -1,12 +1,12 @@
 // ADMIN-PAGE-page-editor-current.js
-// Internal Version: 2026-06-03-002
+// Internal Version: 2026-06-03-003
 // Purpose: Schema-driven Page Editor v1 for customer-specific page settings.
 // Reads editable_schema_json from the selected page's template and renders the appropriate fields.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-002";
+  const VERSION = "2026-06-03-003";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -18,6 +18,8 @@
   let customerPages = [];
   let selectedCustomerId = "";
   let selectedCustomerPageId = "";
+  let isDirty = false;
+  let isSaving = false;
   let currentPage = null;
   let currentSettings = null;
   let currentSchema = null;
@@ -292,7 +294,9 @@
                 </select>
               </label>
               <div class="se-actions">
-                <button id="se-load-page" class="se-button">Load page editor</button>
+                <button id="se-load-page" class="se-button secondary">Load page editor</button>
+              <button id="se-save-top" class="se-button">Save page</button>
+              <span id="se-dirty-indicator" class="se-dirty">Saved / clean</span>
               </div>
             </section>
 
@@ -575,6 +579,7 @@
 
     renderEditorFields();
     setStatus("Page editor loaded.");
+      markClean();
   }
 
   async function savePageSettings() {
@@ -611,6 +616,7 @@
     await loadCustomerPages();
     await loadSelectedPageEditor();
     setStatus("Page settings saved.");
+        markClean();
   }
 
 
@@ -629,7 +635,37 @@
     setChecked("se-feature-empty-state-panel", features.show_empty_state_panel);
   }
 
+
+  function markDirty() {
+    if (isSaving) return;
+    isDirty = true;
+    updateDirtyIndicator();
+  }
+
+  function markClean() {
+    isDirty = false;
+    updateDirtyIndicator();
+  }
+
+  function updateDirtyIndicator() {
+    const el = document.getElementById("se-dirty-indicator");
+    if (!el) return;
+    el.textContent = isDirty ? "Unsaved changes" : "Saved / clean";
+    el.className = isDirty ? "se-dirty is-dirty" : "se-dirty";
+  }
+
+  function confirmDiscardChanges(message) {
+    if (!isDirty) return true;
+    return window.confirm(message || "You have unsaved Page Editor changes. Continue and discard them?");
+  }
+
   function bindEvents() {
+    window.addEventListener("beforeunload", (event) => {
+      if (!isDirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
+
     document.getElementById("se-login")?.addEventListener("click", async () => {
       try {
         const email = document.getElementById("se-email")?.value || "";
@@ -676,7 +712,12 @@
 
     document.getElementById("se-customer-select")?.addEventListener("change", async (event) => {
       try {
+        if (!confirmDiscardChanges("You have unsaved page changes. Switch customers and discard them?")) {
+          event.target.value = selectedCustomerId;
+          return;
+        }
         selectedCustomerId = event.target.value || "";
+        markClean();
         selectedCustomerPageId = "";
         currentPage = null;
         currentSettings = null;
@@ -690,7 +731,13 @@
     });
 
     document.getElementById("se-page-select")?.addEventListener("change", (event) => {
-      selectedCustomerPageId = event.target.value || "";
+      if (!confirmDiscardChanges("You have unsaved page changes. Switch pages and discard them?")) {
+          event.target.value = selectedCustomerPageId;
+          return;
+        }
+        selectedCustomerPageId = event.target.value || "";
+        markClean();
+        if (selectedCustomerPageId) await loadSelectedPage();
     });
 
     document.getElementById("se-load-page")?.addEventListener("click", async () => {
@@ -711,8 +758,34 @@
       }
     });
 
+
+    document.getElementById("se-save-top")?.addEventListener("click", async () => {
+      try {
+        isSaving = true;
+        await savePage();
+        markClean();
+      } catch (error) {
+        setStatus("Save failed.");
+        setOutput({ ok: false, event: "save_failed", message: error instanceof Error ? error.message : String(error) });
+      } finally {
+        isSaving = false;
+      }
+    });
+
     document.getElementById("se-copy-output")?.addEventListener("click", copyOutput);
   }
+
+
+    function markDirtyPageEditorInputs() {
+      const root = document.getElementById("se-editor-fields") || document.getElementById("syncetc-page-editor-root") || document;
+      root.querySelectorAll("input, textarea, select").forEach((el) => {
+        if (["se-email", "se-password", "se-customer-select", "se-page-select"].includes(el.id)) return;
+        el.addEventListener("input", markDirty);
+        el.addEventListener("change", markDirty);
+      });
+    }
+
+    setTimeout(markDirtyPageEditorInputs, 300);
 
   async function boot() {
     renderShell();

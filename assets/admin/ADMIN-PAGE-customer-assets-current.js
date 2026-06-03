@@ -1,12 +1,12 @@
 // ADMIN-PAGE-customer-assets-current.js
-// Internal Version: 2026-06-03-002
-// Purpose: Customer Assets / Logo Manager v2 with drag-and-drop Supabase Storage upload.
+// Internal Version: 2026-06-03-003
+// Purpose: Customer Assets / Logo Manager v3 with generated storage paths and archived asset restore.
 // Manages customer logo assets by URL/storage path and links active logo to the customer active style profile.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-002";
+  const VERSION = "2026-06-03-003";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -186,37 +186,31 @@
     `;
   }
 
-  function renderAssets() {
-    const list = document.getElementById("se-assets-list");
-    if (!list) return;
+  function renderAssetRow(asset, mode) {
+    const url = getAssetUrl(asset);
+    const isActive = activeStyleProfile?.logo_asset_id === asset.asset_id;
+    const archived = mode === "archived";
 
-    const activeAssets = assets.filter((asset) => asset.status !== "archived");
-
-    if (!activeAssets.length) {
-      list.innerHTML = `<div class="se-empty">No logo assets yet.</div>`;
-      return;
-    }
-
-    list.innerHTML = activeAssets.map((asset) => {
-      const url = getAssetUrl(asset);
-      const isActive = activeStyleProfile?.logo_asset_id === asset.asset_id;
-      return `
-        <div class="se-asset-row">
-          <div class="se-asset-thumb">${url ? `<img src="${escapeHtml(url)}" alt="${escapeHtml(asset.alt_text || "Logo")}">` : "LOGO"}</div>
-          <div class="se-asset-main">
-            <strong>${escapeHtml(asset.alt_text || "Logo asset")}</strong>
-            <div class="se-meta">${escapeHtml(asset.asset_type || "")} · ${escapeHtml(asset.status || "")}</div>
-            <div class="se-url">${escapeHtml(url)}</div>
-          </div>
-          <div class="se-asset-actions">
-            ${isActive ? `<span class="se-active-pill">Active</span>` : `<button class="se-button secondary se-set-logo" data-asset-id="${escapeHtml(asset.asset_id)}" type="button">Set active</button>`}
-            <button class="se-button danger se-archive-asset" data-asset-id="${escapeHtml(asset.asset_id)}" type="button">Archive</button>
-          </div>
+    return `
+      <div class="se-asset-row ${archived ? "is-archived" : ""}">
+        <div class="se-asset-thumb">${url ? `<img src="${escapeHtml(url)}" alt="${escapeHtml(asset.alt_text || "Logo")}">` : "LOGO"}</div>
+        <div class="se-asset-main">
+          <strong>${escapeHtml(asset.alt_text || "Logo asset")}</strong>
+          <div class="se-meta">${escapeHtml(asset.asset_type || "")} · ${escapeHtml(asset.status || "")}</div>
+          <div class="se-url">${escapeHtml(url)}</div>
         </div>
-      `;
-    }).join("");
+        <div class="se-asset-actions">
+          ${archived ? `<button class="se-button secondary se-restore-asset" data-asset-id="${escapeHtml(asset.asset_id)}" type="button">Restore</button>` : ""}
+          ${!archived && isActive ? `<span class="se-active-pill">Active</span>` : ""}
+          ${!archived && !isActive ? `<button class="se-button secondary se-set-logo" data-asset-id="${escapeHtml(asset.asset_id)}" type="button">Set active</button>` : ""}
+          ${!archived ? `<button class="se-button danger se-archive-asset" data-asset-id="${escapeHtml(asset.asset_id)}" type="button">Archive</button>` : ""}
+        </div>
+      </div>
+    `;
+  }
 
-    list.querySelectorAll(".se-set-logo").forEach((button) => {
+  function bindAssetButtons(scope) {
+    scope.querySelectorAll(".se-set-logo").forEach((button) => {
       button.addEventListener("click", async () => {
         try {
           const assetId = button.getAttribute("data-asset-id");
@@ -229,7 +223,7 @@
       });
     });
 
-    list.querySelectorAll(".se-archive-asset").forEach((button) => {
+    scope.querySelectorAll(".se-archive-asset").forEach((button) => {
       button.addEventListener("click", async () => {
         try {
           const assetId = button.getAttribute("data-asset-id");
@@ -242,6 +236,39 @@
         }
       });
     });
+
+    scope.querySelectorAll(".se-restore-asset").forEach((button) => {
+      button.addEventListener("click", async () => {
+        try {
+          const assetId = button.getAttribute("data-asset-id");
+          if (!assetId) return;
+          await restoreAsset(assetId);
+        } catch (error) {
+          setStatus("Restore asset failed.");
+          setOutput({ ok: false, event: "restore_asset_failed", message: error instanceof Error ? error.message : String(error) });
+        }
+      });
+    });
+  }
+
+  function renderAssets() {
+    const list = document.getElementById("se-assets-list");
+    const archivedList = document.getElementById("se-archived-assets-list");
+    if (!list || !archivedList) return;
+
+    const activeAssets = assets.filter((asset) => asset.status !== "archived");
+    const archivedAssets = assets.filter((asset) => asset.status === "archived");
+
+    list.innerHTML = activeAssets.length
+      ? activeAssets.map((asset) => renderAssetRow(asset, "active")).join("")
+      : `<div class="se-empty">No active logo assets.</div>`;
+
+    archivedList.innerHTML = archivedAssets.length
+      ? archivedAssets.map((asset) => renderAssetRow(asset, "archived")).join("")
+      : `<div class="se-empty">No archived logo assets.</div>`;
+
+    bindAssetButtons(list);
+    bindAssetButtons(archivedList);
   }
 
   async function loadCustomers() {
@@ -430,6 +457,19 @@
     setStatus("Logo asset archived.");
   }
 
+  async function restoreAsset(assetId) {
+    if (!selectedCustomerId) return;
+
+    setStatus("Restoring logo asset...");
+    await callCoreAdminAction("restore_customer_asset", {
+      customer_id: selectedCustomerId,
+      asset_id: assetId
+    });
+
+    await loadCustomerAssets();
+    setStatus("Logo asset restored. It was not automatically made active.");
+  }
+
   function renderShell() {
     ensureRoot().innerHTML = `
       <style>
@@ -455,7 +495,7 @@
         .se-dropzone{border:2px dashed #9fb2cc;border-radius:14px;background:#f7f9fc;padding:18px;text-align:center;cursor:pointer;margin-bottom:14px;transition:background .15s ease,border-color .15s ease;}.se-dropzone strong{display:block;color:#1f4f82;font-size:15px;margin-bottom:4px;}.se-dropzone span{display:block;color:#5d6b82;font-size:13px;line-height:1.35;}.se-dropzone.is-dragover{background:#e9f1fb;border-color:#1f4f82;}.se-drop-icon{width:42px;height:42px;border-radius:999px;background:#1f4f82;color:#fff;display:grid;place-items:center;margin:0 auto 10px auto;font-weight:900;}.se-active-logo{display:flex;align-items:center;gap:14px;border:1px solid #d9e0ea;border-radius:14px;padding:14px;background:#fbfcfe;margin-bottom:14px;}
         .se-logo-placeholder,.se-logo-preview{width:92px;height:72px;border-radius:12px;border:1px solid #c7d2e2;background:#eef3f8;color:#1f4f82;display:grid;place-items:center;font-weight:900;overflow:hidden;flex:0 0 auto;}
         .se-logo-preview img,.se-asset-thumb img{max-width:100%;max-height:100%;object-fit:contain;display:block;}
-        .se-asset-row{display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:12px;align-items:center;border:1px solid #d9e0ea;border-radius:14px;padding:12px;margin-bottom:10px;background:#fbfcfe;}
+        .se-asset-row.is-archived{opacity:.74;background:#f7f2f2;}.se-asset-row{display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:12px;align-items:center;border:1px solid #d9e0ea;border-radius:14px;padding:12px;margin-bottom:10px;background:#fbfcfe;}
         .se-asset-thumb{width:76px;height:56px;border:1px solid #c7d2e2;border-radius:10px;display:grid;place-items:center;overflow:hidden;background:#fff;font-weight:900;color:#1f4f82;font-size:11px;}
         .se-meta{font-size:12px;color:#5d6b82;margin-top:4px;}
         .se-url{font-size:12px;color:#5d6b82;word-break:break-all;margin-top:4px;}
@@ -500,10 +540,10 @@
                 <span>or click to choose an image. PNG, JPG, SVG, or WebP under 4 MB.</span>
               </div>
               <label class="se-field"><span class="se-label">Logo URL</span><input id="se-logo-url" class="se-input" type="url" placeholder="https://..."></label>
-              <label class="se-field"><span class="se-label">Supabase Storage Path</span><input id="se-storage-path" class="se-input" type="text" placeholder="customers/test/logo.png"></label>
               <label class="se-field"><span class="se-label">Alt Text</span><input id="se-alt-text" class="se-input" type="text" placeholder="Customer logo"></label>
+              <input id="se-storage-path" type="hidden" value="">
               <button id="se-add-logo" class="se-button full" type="button">Add logo asset</button>
-              <p class="se-subtitle" style="margin-top:10px;">Drag/drop is preferred. Manual URL or public core-assets path remains available for special cases.</p>
+              <p class="se-subtitle" style="margin-top:10px;">Drag/drop is preferred. Storage paths are generated automatically. Manual URL remains available for special cases.</p>
             </section>
 
             <section class="se-card">
@@ -524,6 +564,12 @@
             <section class="se-card">
               <h2 class="se-section-title">Logo Assets</h2>
               <div id="se-assets-list" class="se-empty">No assets loaded yet.</div>
+            </section>
+
+            <section class="se-card">
+              <h2 class="se-section-title">Archived Logo Assets</h2>
+              <p class="se-subtitle" style="margin-bottom:12px;">Restored assets return to the active list but are not automatically set as the active logo.</p>
+              <div id="se-archived-assets-list" class="se-empty">No archived assets loaded yet.</div>
             </section>
           </section>
         </section>

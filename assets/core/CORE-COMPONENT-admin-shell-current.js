@@ -1,5 +1,5 @@
 // CORE-COMPONENT-admin-shell-current.js
-// Internal Version: 2026-06-03-004
+// Internal Version: 2026-06-03-005
 // Purpose: Shared SyncEtc admin shell header with logo and admin navigation bubbles.
 // Logo source: Supabase Storage public core-assets bucket.
 // Live filename is stable. Track versions internally, in Git history, and in local saved copies.
@@ -21,6 +21,11 @@
       label: "Page Setup",
       href: "/page-setup",
       match: "/page-setup"
+    },
+    {
+      label: "Template Detail",
+      href: "/template-detail",
+      match: "/template-detail"
     },
     {
       label: "Page Editor",

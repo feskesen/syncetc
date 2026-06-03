@@ -1,12 +1,13 @@
 // ADMIN-PAGE-page-editor-current.js
-// Internal Version: 2026-06-03-003
+// Internal Version: 2026-06-03-004
 // Purpose: Schema-driven Page Editor v1 for customer-specific page settings.
 // Reads editable_schema_json from the selected page's template and renders the appropriate fields.
+// Correction v4: fixes autoload syntax error, save handler, feature persistence, and dirty-state protection.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-003";
+  const VERSION = "2026-06-03-004";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -247,6 +248,14 @@
           color: #5d6b82;
           background: #fbfcfe;
         }
+
+        .se-toggle-grid{display:grid;grid-template-columns:1fr;gap:7px;margin-top:8px;}
+        .se-toggle{display:flex;align-items:flex-start;gap:7px;font-size:12px;line-height:1.25;}
+        .se-toggle input{margin-top:2px;flex:0 0 auto;}
+        .se-dirty{display:inline-flex;border-radius:999px;padding:6px 10px;background:#edf7ed;color:#265c2b;font-size:12px;font-weight:900;}
+        .se-dirty.is-dirty{background:#fff0d9;color:#8a5200;}
+        .se-note{font-size:12px;line-height:1.35;color:#5d6b82;margin-top:8px;}
+
         @media (max-width: 880px) { .se-grid { grid-template-columns: 1fr; } }
       </style>
 
@@ -559,7 +568,11 @@
     }
 
     renderSelectors();
-    setStatus("Customer pages loaded.");
+    if (selectedCustomerPageId) {
+      await loadSelectedPageEditor();
+    } else {
+      setStatus("Customer pages loaded. No enabled page is available.");
+    }
   }
 
   async function loadSelectedPageEditor() {
@@ -578,8 +591,10 @@
     currentSchema = result.editable_schema_json || currentPage?.core_template_registry?.editable_schema_json || {};
 
     renderEditorFields();
+    applyFeatureTogglesToForm(currentSettings);
+    bindEditorDirtyListeners();
     setStatus("Page editor loaded.");
-      markClean();
+    markClean();
   }
 
   async function savePageSettings() {
@@ -597,13 +612,11 @@
     });
 
     setStatus("Saving page settings...");
-    await (() => {
-          const featureToggles = getFeatureTogglesPayload();
-          if (!payload.visibility_json || typeof payload.visibility_json !== "object") payload.visibility_json = {};
-          payload.visibility_json.features = featureToggles;
-        })();
+    const featureToggles = getFeatureTogglesPayload();
+    if (!payload.settings.visibility_json || typeof payload.settings.visibility_json !== "object") payload.settings.visibility_json = {};
+    payload.settings.visibility_json.features = featureToggles;
 
-        callCoreAdminAction("update_page_settings", {
+    await callCoreAdminAction("update_page_settings", {
       customer_page_id: selectedCustomerPageId,
       content_json: payload.settings.content_json,
       labels_json: payload.settings.labels_json,
@@ -659,6 +672,24 @@
     return window.confirm(message || "You have unsaved Page Editor changes. Continue and discard them?");
   }
 
+
+  function bindEditorDirtyListeners() {
+    const root = document.getElementById("se-editor-fields");
+    if (!root) return;
+    root.querySelectorAll("input, textarea, select").forEach((el) => {
+      if (el.dataset.dirtyBound === "true") return;
+      el.dataset.dirtyBound = "true";
+      el.addEventListener("input", markDirty);
+      el.addEventListener("change", markDirty);
+    });
+
+    document.querySelectorAll("#se-feature-announcement-strip,#se-feature-banner-scroller,#se-feature-hero-media,#se-feature-primary-cta-block,#se-feature-secondary-content-section,#se-feature-filter-controls,#se-feature-dashboard-cards,#se-feature-empty-state-panel").forEach((el) => {
+      if (el.dataset.dirtyBound === "true") return;
+      el.dataset.dirtyBound = "true";
+      el.addEventListener("change", markDirty);
+    });
+  }
+
   function bindEvents() {
     window.addEventListener("beforeunload", (event) => {
       if (!isDirty) return;
@@ -703,7 +734,6 @@
     document.getElementById("se-refresh")?.addEventListener("click", async () => {
       try {
         await loadCustomers();
-        if (selectedCustomerPageId) await loadSelectedPageEditor();
       } catch (error) {
         setStatus("Refresh failed.");
         setOutput({ ok: false, event: "refresh_failed", message: error instanceof Error ? error.message : String(error) });
@@ -730,14 +760,19 @@
       }
     });
 
-    document.getElementById("se-page-select")?.addEventListener("change", (event) => {
-      if (!confirmDiscardChanges("You have unsaved page changes. Switch pages and discard them?")) {
+    document.getElementById("se-page-select")?.addEventListener("change", async (event) => {
+      try {
+        if (!confirmDiscardChanges("You have unsaved page changes. Switch pages and discard them?")) {
           event.target.value = selectedCustomerPageId;
           return;
         }
         selectedCustomerPageId = event.target.value || "";
         markClean();
-        if (selectedCustomerPageId) await loadSelectedPage();
+        if (selectedCustomerPageId) await loadSelectedPageEditor();
+      } catch (error) {
+        setStatus("Page editor load failed.");
+        setOutput({ ok: false, event: "page_editor_load_failed", message: error instanceof Error ? error.message : String(error) });
+      }
     });
 
     document.getElementById("se-load-page")?.addEventListener("click", async () => {
@@ -751,10 +786,14 @@
 
     document.getElementById("se-save-page")?.addEventListener("click", async () => {
       try {
+        isSaving = true;
         await savePageSettings();
+        markClean();
       } catch (error) {
         setStatus("Save failed.");
         setOutput({ ok: false, event: "save_failed", message: error instanceof Error ? error.message : String(error) });
+      } finally {
+        isSaving = false;
       }
     });
 
@@ -774,18 +813,6 @@
 
     document.getElementById("se-copy-output")?.addEventListener("click", copyOutput);
   }
-
-
-    function markDirtyPageEditorInputs() {
-      const root = document.getElementById("se-editor-fields") || document.getElementById("syncetc-page-editor-root") || document;
-      root.querySelectorAll("input, textarea, select").forEach((el) => {
-        if (["se-email", "se-password", "se-customer-select", "se-page-select"].includes(el.id)) return;
-        el.addEventListener("input", markDirty);
-        el.addEventListener("change", markDirty);
-      });
-    }
-
-    setTimeout(markDirtyPageEditorInputs, 300);
 
   async function boot() {
     renderShell();

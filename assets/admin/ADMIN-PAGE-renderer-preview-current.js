@@ -1,6 +1,6 @@
 // ADMIN-PAGE-renderer-preview-current.js
-// Internal Version: 2026-06-03-005
-// Purpose: Admin/test renderer preview v5 honoring page-level feature/component visibility toggles.
+// Internal Version: 2026-06-03-006
+// Purpose: Admin/test renderer preview v6 with active customer logo rendering.
 // Backend contract: uses existing core-admin-action actions only.
 // Actions used: list_customers, list_customer_pages, get_active_style_profile, get_customer_page_settings.
 // Notes: This is a safe preview page, not final public routing.
@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-005";
+  const VERSION = "2026-06-03-006";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -23,6 +23,7 @@
   let selectedCustomerPageId = "";
   let activeStyleProfile = null;
   let selectedPageBundle = null;
+  let activeLogoAsset = null;
   let pendingCustomerKey = "";
   let pendingPageKey = "";
 
@@ -154,6 +155,10 @@
     }
 
     return result;
+  }
+
+  function getAssetUrl(asset) {
+    return asset?.url || (asset?.storage_path ? `${SUPABASE_URL}/storage/v1/object/public/core-assets/${asset.storage_path}` : "");
   }
 
   function getStyle() {
@@ -487,6 +492,7 @@
     const renderSecondary = hasRealPage && hasValue(secondaryLabel) && hasValue(secondaryUrl);
 
     const background = style.media.background === "soft-tint" ? style.colors.brandSecondary : "#f5f7fb";
+    const logoUrl = getAssetUrl(activeLogoAsset);
 
     mount.innerHTML = `
       <style>
@@ -574,7 +580,7 @@
         }
 
         #se-rendered-page .sr-logo {
-          width: 64px;
+          width: 72px;
           height: 64px;
           border-radius: ${style.effects.corners === "pill" ? "999px" : "14px"};
           border: var(--sr-border);
@@ -585,6 +591,14 @@
           font-weight: 900;
           font-size: 13px;
           flex: 0 0 auto;
+          overflow: hidden;
+        }
+
+        #se-rendered-page .sr-logo img {
+          max-width: 100%;
+          max-height: 100%;
+          object-fit: contain;
+          display: block;
         }
 
         #se-rendered-page .sr-brand h1 {
@@ -817,7 +831,7 @@
 
         <header class="sr-header">
           <div class="sr-brand">
-            <div class="sr-logo">LOGO</div>
+            <div class="sr-logo">${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(activeLogoAsset?.alt_text || customerName + " logo")}">` : "LOGO"}</div>
             <div>
               <h1>${escapeHtml(customerName)}</h1>
               <nav class="sr-nav" aria-label="Preview navigation">
@@ -927,8 +941,9 @@
 
     setStatus("Loading customer style and pages...");
 
-    const styleResult = await callCoreAdminAction("get_active_style_profile", { customer_id: selectedCustomerId });
+    const styleResult = await callCoreAdminAction("get_active_customer_logo", { customer_id: selectedCustomerId });
     activeStyleProfile = styleResult.style_profile || null;
+    activeLogoAsset = styleResult.logo_asset || null;
 
     const pagesResult = await callCoreAdminAction("list_customer_pages", { customer_id: selectedCustomerId });
     customerPages = Array.isArray(pagesResult.customer_pages) ? pagesResult.customer_pages : [];
@@ -1196,6 +1211,7 @@
         selectedCustomerPageId = "";
         selectedPageBundle = null;
         activeStyleProfile = null;
+        activeLogoAsset = null;
         renderCustomerSelect();
         renderPageSelect();
         renderCustomerFacingPage();

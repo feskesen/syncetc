@@ -1,17 +1,19 @@
 // ADMIN-PAGE-customer-assets-current.js
-// Internal Version: 2026-06-03-001
-// Purpose: Customer Assets / Logo Manager v1.
+// Internal Version: 2026-06-03-002
+// Purpose: Customer Assets / Logo Manager v2 with drag-and-drop Supabase Storage upload.
 // Manages customer logo assets by URL/storage path and links active logo to the customer active style profile.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-001";
+  const VERSION = "2026-06-03-002";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
   const SUPABASE_JS_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
   const ROOT_ID = "syncetc-customer-assets-root";
+  const STORAGE_BUCKET = "core-assets";
+  const MAX_LOGO_BYTES = 4 * 1024 * 1024;
 
   let supabaseClient = null;
   let customers = [];
@@ -277,6 +279,85 @@
     setStatus("Customer assets loaded.");
   }
 
+  function sanitizeFileName(name) {
+    return String(name || "logo")
+      .trim()
+      .toLowerCase()
+      .replace(/\.[^.]+$/, "")
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "") || "logo";
+  }
+
+  function getSelectedCustomer() {
+    return customers.find((customer) => customer.customer_id === selectedCustomerId) || null;
+  }
+
+  function getCustomerStorageKey() {
+    const customer = getSelectedCustomer();
+    return customer?.customer_key || selectedCustomerId || "customer";
+  }
+
+  function validateLogoFile(file) {
+    if (!file) throw new Error("No file selected.");
+    if (!String(file.type || "").startsWith("image/")) throw new Error("Logo upload must be an image file.");
+    if (file.size > MAX_LOGO_BYTES) throw new Error("Logo file is too large. Use an image under 4 MB.");
+  }
+
+  async function uploadLogoFile(file) {
+    if (!selectedCustomerId) {
+      setStatus("Select a customer first.");
+      return;
+    }
+
+    validateLogoFile(file);
+
+    const customerKey = getCustomerStorageKey();
+    const extension = String(file.name || "").includes(".") ? String(file.name).split(".").pop().toLowerCase() : "png";
+    const cleanName = sanitizeFileName(file.name);
+    const storagePath = `customers/${customerKey}/logos/${Date.now()}-${cleanName}.${extension}`;
+
+    setStatus("Uploading logo to Supabase Storage...");
+
+    const { error: uploadError } = await supabaseClient.storage
+      .from(STORAGE_BUCKET)
+      .upload(storagePath, file, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType: file.type || "image/png"
+      });
+
+    if (uploadError) throw uploadError;
+
+    const { data: publicData } = supabaseClient.storage
+      .from(STORAGE_BUCKET)
+      .getPublicUrl(storagePath);
+
+    const publicUrl = publicData?.publicUrl || "";
+
+    const result = await callCoreAdminAction("create_customer_asset", {
+      customer_id: selectedCustomerId,
+      asset_type: "logo",
+      url: publicUrl,
+      storage_path: storagePath,
+      alt_text: getValue("se-alt-text", "").trim() || `${getSelectedCustomer()?.display_name || "Customer"} logo`,
+      mime_type: file.type || "image",
+      file_size_bytes: file.size
+    });
+
+    setValue("se-logo-url", "");
+    setValue("se-storage-path", "");
+    setValue("se-alt-text", "");
+
+    await loadCustomerAssets();
+
+    if (result.asset?.asset_id) {
+      await setActiveLogo(result.asset.asset_id);
+    }
+
+    setStatus("Logo uploaded and set active.");
+  }
+
   async function addLogoAsset() {
     if (!selectedCustomerId) {
       setStatus("Select a customer first.");
@@ -371,7 +452,7 @@
         .se-button.full{width:100%;}
         .se-status{margin-top:12px;padding:12px;border-radius:10px;background:#eef3f8;border:1px solid #d6e0ec;color:#26344d;font-size:14px;white-space:pre-wrap;}
         .se-output{margin-top:14px;background:#101827;color:#e7edf6;border-radius:12px;padding:14px;overflow:auto;min-height:120px;max-height:300px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.45;}
-        .se-active-logo{display:flex;align-items:center;gap:14px;border:1px solid #d9e0ea;border-radius:14px;padding:14px;background:#fbfcfe;margin-bottom:14px;}
+        .se-dropzone{border:2px dashed #9fb2cc;border-radius:14px;background:#f7f9fc;padding:18px;text-align:center;cursor:pointer;margin-bottom:14px;transition:background .15s ease,border-color .15s ease;}.se-dropzone strong{display:block;color:#1f4f82;font-size:15px;margin-bottom:4px;}.se-dropzone span{display:block;color:#5d6b82;font-size:13px;line-height:1.35;}.se-dropzone.is-dragover{background:#e9f1fb;border-color:#1f4f82;}.se-drop-icon{width:42px;height:42px;border-radius:999px;background:#1f4f82;color:#fff;display:grid;place-items:center;margin:0 auto 10px auto;font-weight:900;}.se-active-logo{display:flex;align-items:center;gap:14px;border:1px solid #d9e0ea;border-radius:14px;padding:14px;background:#fbfcfe;margin-bottom:14px;}
         .se-logo-placeholder,.se-logo-preview{width:92px;height:72px;border-radius:12px;border:1px solid #c7d2e2;background:#eef3f8;color:#1f4f82;display:grid;place-items:center;font-weight:900;overflow:hidden;flex:0 0 auto;}
         .se-logo-preview img,.se-asset-thumb img{max-width:100%;max-height:100%;object-fit:contain;display:block;}
         .se-asset-row{display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:12px;align-items:center;border:1px solid #d9e0ea;border-radius:14px;padding:12px;margin-bottom:10px;background:#fbfcfe;}
@@ -412,11 +493,17 @@
 
             <section class="se-card">
               <h2 class="se-section-title">Add Logo Asset</h2>
+              <div id="se-logo-dropzone" class="se-dropzone">
+                <input id="se-logo-file" type="file" accept="image/*" hidden>
+                <div class="se-drop-icon">⬆</div>
+                <strong>Drag and drop a logo here</strong>
+                <span>or click to choose an image. PNG, JPG, SVG, or WebP under 4 MB.</span>
+              </div>
               <label class="se-field"><span class="se-label">Logo URL</span><input id="se-logo-url" class="se-input" type="url" placeholder="https://..."></label>
               <label class="se-field"><span class="se-label">Supabase Storage Path</span><input id="se-storage-path" class="se-input" type="text" placeholder="customers/test/logo.png"></label>
               <label class="se-field"><span class="se-label">Alt Text</span><input id="se-alt-text" class="se-input" type="text" placeholder="Customer logo"></label>
               <button id="se-add-logo" class="se-button full" type="button">Add logo asset</button>
-              <p class="se-subtitle" style="margin-top:10px;">Use either a full URL or a public path inside the core-assets bucket.</p>
+              <p class="se-subtitle" style="margin-top:10px;">Drag/drop is preferred. Manual URL or public core-assets path remains available for special cases.</p>
             </section>
 
             <section class="se-card">
@@ -493,6 +580,47 @@
       } catch (error) {
         setStatus("Customer assets load failed.");
         setOutput({ ok: false, event: "customer_assets_load_failed", message: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    const dropzone = document.getElementById("se-logo-dropzone");
+    const fileInput = document.getElementById("se-logo-file");
+
+    dropzone?.addEventListener("click", () => fileInput?.click());
+
+    fileInput?.addEventListener("change", async () => {
+      try {
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        await uploadLogoFile(file);
+        fileInput.value = "";
+      } catch (error) {
+        fileInput.value = "";
+        setStatus("Logo upload failed.");
+        setOutput({ ok: false, event: "logo_upload_failed", message: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    dropzone?.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      dropzone.classList.add("is-dragover");
+    });
+
+    dropzone?.addEventListener("dragleave", () => {
+      dropzone.classList.remove("is-dragover");
+    });
+
+    dropzone?.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      dropzone.classList.remove("is-dragover");
+
+      try {
+        const file = event.dataTransfer?.files && event.dataTransfer.files[0];
+        if (!file) return;
+        await uploadLogoFile(file);
+      } catch (error) {
+        setStatus("Logo upload failed.");
+        setOutput({ ok: false, event: "logo_upload_failed", message: error instanceof Error ? error.message : String(error) });
       }
     });
 

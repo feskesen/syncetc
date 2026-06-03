@@ -1,13 +1,13 @@
 // ADMIN-PAGE-layout-designer-current.js
-// Internal Version: 2026-06-03-002
-// Purpose: Expanded Layout Designer v2 for customer-wide style profile controls.
-// Adds richer style buckets: layout_json, effects_json, media_json, component_json, preview_json.
+// Internal Version: 2026-06-03-003
+// Purpose: Layout Designer v3 with persistent preview and scrollable sliding-style controls panel.
+// Backend contract unchanged from v2. Uses update_active_style_profile and get_active_style_profile.
 // Backend diagnostics include Copy result button.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-002";
+  const VERSION = "2026-06-03-003";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -150,7 +150,6 @@
 
   async function callCoreAdminAction(action, payload = {}) {
     const token = await getAccessToken();
-
     const response = await fetch(EDGE_FUNCTION_URL, {
       method: "POST",
       headers: {
@@ -388,7 +387,7 @@
           <div style="background:${colors.brand_primary};color:white;border-radius:${radius};padding:${heroPadding};margin-bottom:14px;">
             <div style="display:inline-block;border:1px solid rgba(255,255,255,.45);border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900;margin-bottom:10px;">${escapeHtml(effects.emphasis_style || "LABELS")}</div>
             <h2 style="margin:0 0 8px 0;font-size:${headingSize};line-height:1.1;">Customer Page Title</h2>
-            <p style="margin:0;line-height:1.5;">This preview shows customer-wide style choices affecting reusable page structure.</p>
+            <p style="margin:0;line-height:1.5;">This preview remains visible while the controls scroll.</p>
           </div>
           <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;">
             <div style="border:1px solid ${secondary};border-radius:${radius};padding:${padding};"><strong>Card one</strong><br><span style="font-size:13px;">${escapeHtml(layout.surface_structure)}</span></div>
@@ -400,132 +399,190 @@
     `;
   }
 
+  function controlSection(title, bodyHtml, open = false) {
+    return `
+      <details class="se-control-section" ${open ? "open" : ""}>
+        <summary>${escapeHtml(title)}</summary>
+        <div class="se-section-body">${bodyHtml}</div>
+      </details>
+    `;
+  }
+
+  function selectField(id, label, options) {
+    return `
+      <label class="se-field">
+        <span class="se-label">${escapeHtml(label)}</span>
+        <select id="${escapeHtml(id)}" class="se-select">
+          ${options.map((opt) => `<option value="${escapeHtml(opt)}">${escapeHtml(opt)}</option>`).join("")}
+        </select>
+      </label>
+    `;
+  }
+
+  function inputField(id, label, type = "text", extra = "") {
+    return `<label class="se-field"><span class="se-label">${escapeHtml(label)}</span><input id="${escapeHtml(id)}" class="se-input" type="${type}" ${extra}></label>`;
+  }
+
+  function checkboxField(id, label) {
+    return `<label class="se-check"><input id="${escapeHtml(id)}" type="checkbox"><span class="se-label">${escapeHtml(label)}</span></label>`;
+  }
+
   function renderShell() {
     ensureRoot().innerHTML = `
       <style>
-        #${ROOT_ID}{font-family:Arial,Helvetica,sans-serif;color:#172033;background:#f5f7fb;min-height:100vh;padding:28px 18px;box-sizing:border-box;}
+        #${ROOT_ID}{font-family:Arial,Helvetica,sans-serif;color:#172033;background:#f5f7fb;min-height:100vh;padding:18px;box-sizing:border-box;}
         #${ROOT_ID} *{box-sizing:border-box;}
-        .se-wrap{max-width:1180px;margin:0 auto;}
-        .se-card{background:#fff;border:1px solid #d9e0ea;border-radius:14px;box-shadow:0 8px 28px rgba(23,32,51,.08);padding:22px;margin-bottom:18px;}
+        .se-wrap{max-width:1380px;margin:0 auto;}
+        .se-header-card{background:#fff;border:1px solid #d9e0ea;border-radius:14px;box-shadow:0 8px 28px rgba(23,32,51,.08);padding:18px;margin-bottom:14px;}
         .se-title{margin:0 0 6px 0;font-size:28px;line-height:1.15;letter-spacing:-.02em;}
         .se-subtitle{margin:0;color:#5d6b82;font-size:15px;line-height:1.45;}
         .se-badge{display:inline-flex;border-radius:999px;background:#e9f1fb;color:#1f4f82;font-size:12px;font-weight:700;padding:6px 10px;margin-top:10px;}
-        .se-grid{display:grid;grid-template-columns:390px 1fr;gap:18px;align-items:start;}
+        .se-main{display:grid;grid-template-columns:400px minmax(0,1fr);gap:16px;align-items:start;}
+        .se-panel{background:#fff;border:1px solid #d9e0ea;border-radius:14px;box-shadow:0 8px 28px rgba(23,32,51,.08);}
+        .se-controls{position:sticky;top:74px;max-height:calc(100vh - 92px);display:flex;flex-direction:column;overflow:hidden;}
+        .se-controls-top{padding:16px;border-bottom:1px solid #e3e9f2;}
+        .se-controls-scroll{padding:12px 16px;overflow:auto;}
+        .se-controls-bottom{padding:12px 16px;border-top:1px solid #e3e9f2;background:#fbfcfe;}
+        .se-preview-panel{position:sticky;top:74px;max-height:calc(100vh - 92px);overflow:auto;padding:18px;}
+        .se-card{background:#fff;border:1px solid #d9e0ea;border-radius:14px;padding:16px;margin-bottom:14px;}
         .se-field{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
         .se-label{font-size:13px;font-weight:800;color:#26344d;}
         .se-input,.se-select{width:100%;border:1px solid #c7d2e2;border-radius:10px;padding:10px 11px;font-size:14px;background:#fff;color:#172033;}
         .se-check{display:flex;align-items:center;gap:8px;margin-bottom:12px;}
         .se-check input{width:18px;height:18px;}
-        .se-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px;}
+        .se-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;}
         .se-button{border:1px solid #1f4f82;background:#1f4f82;color:#fff;border-radius:999px;padding:9px 14px;font-size:13px;font-weight:800;cursor:pointer;}
         .se-button.secondary{background:#fff;color:#1f4f82;}
+        .se-button.full{width:100%;justify-content:center;}
         .se-status{margin-top:12px;padding:12px;border-radius:10px;background:#eef3f8;border:1px solid #d6e0ec;color:#26344d;font-size:14px;white-space:pre-wrap;}
-        .se-output{margin-top:14px;background:#101827;color:#e7edf6;border-radius:12px;padding:14px;overflow:auto;min-height:100px;max-height:320px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.45;}
-        .se-section-title{margin:18px 0 10px 0;font-size:16px;font-weight:900;color:#1f2a44;border-top:1px solid #e3e9f2;padding-top:14px;}
-        @media(max-width:900px){.se-grid{grid-template-columns:1fr;}}
+        .se-output{margin-top:14px;background:#101827;color:#e7edf6;border-radius:12px;padding:14px;overflow:auto;min-height:100px;max-height:260px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.45;}
+        .se-control-section{border:1px solid #d8e1ed;border-radius:12px;margin-bottom:10px;background:#fbfcfe;overflow:hidden;}
+        .se-control-section summary{cursor:pointer;font-weight:900;color:#1f2a44;padding:12px 13px;list-style:none;}
+        .se-control-section summary::-webkit-details-marker{display:none;}
+        .se-control-section summary:after{content:"+";float:right;color:#1f4f82;font-weight:900;}
+        .se-control-section[open] summary:after{content:"–";}
+        .se-section-body{border-top:1px solid #e3e9f2;padding:12px 13px;}
+        .se-preview-title{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;}
+        @media(max-width:980px){
+          .se-main{grid-template-columns:1fr;}
+          .se-controls,.se-preview-panel{position:relative;top:auto;max-height:none;}
+        }
       </style>
 
       <main class="se-wrap">
-        <section class="se-card">
+        <section class="se-header-card">
           <h1 class="se-title">Layout Designer</h1>
-          <p class="se-subtitle">Expanded customer-wide style profile controls. Page-specific component visibility still belongs in Page Editor/template settings.</p>
+          <p class="se-subtitle">Customer-wide style profile controls. Controls now scroll independently while the preview remains visible.</p>
           <div class="se-badge">ADMIN-PAGE-layout-designer-current.js | ${escapeHtml(VERSION)}</div>
         </section>
 
-        <section class="se-card">
-          <h2 class="se-title" style="font-size:22px;">Platform Admin Login</h2>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px;">
-            <label class="se-field"><span class="se-label">Email</span><input id="se-email" class="se-input" type="email" value="frank@syncetc.com" autocomplete="username"></label>
-            <label class="se-field"><span class="se-label">Password</span><input id="se-password" class="se-input" type="password" autocomplete="current-password"></label>
-          </div>
-          <div class="se-actions"><button id="se-login" class="se-button">Log in</button><button id="se-logout" class="se-button secondary">Log out</button><button id="se-refresh" class="se-button secondary">Refresh</button></div>
-          <div id="se-status" class="se-status">Loading Supabase client...</div>
-        </section>
-
-        <section class="se-grid">
-          <div>
-            <section class="se-card">
-              <h2 class="se-title" style="font-size:22px;">Style Controls</h2>
+        <section class="se-main">
+          <aside class="se-panel se-controls">
+            <div class="se-controls-top">
               <label class="se-field"><span class="se-label">Customer</span><select id="se-customer-select" class="se-select"><option value="">Log in and load customers...</option></select></label>
               <label class="se-field"><span class="se-label">Apply preset</span><select id="se-preset" class="se-select"><option value="">Choose preset...</option>${Object.entries(PRESETS).map(([key,preset])=>`<option value="${escapeHtml(key)}">${escapeHtml(preset.label)}</option>`).join("")}</select></label>
+              <div class="se-actions">
+                <button id="se-login" class="se-button">Log in</button>
+                <button id="se-logout" class="se-button secondary">Log out</button>
+                <button id="se-refresh" class="se-button secondary">Refresh</button>
+              </div>
+              <div id="se-status" class="se-status">Loading Supabase client...</div>
+            </div>
 
-              <div class="se-section-title">Profile</div>
-              <label class="se-field"><span class="se-label">Profile Name</span><input id="se-profile-name" class="se-input" type="text" value="Default"></label>
-              <label class="se-field"><span class="se-label">Preset Key</span><input id="se-preset-key" class="se-input" type="text"></label>
-              <label class="se-field"><span class="se-label">Preset Source</span><select id="se-preset-source" class="se-select"><option value="custom">custom</option><option value="system">system</option><option value="customer_saved">customer_saved</option><option value="copied">copied</option><option value="imported">imported</option></select></label>
+            <div class="se-controls-scroll">
+              ${controlSection("Profile", `
+                ${inputField("se-profile-name", "Profile Name")}
+                ${inputField("se-preset-key", "Preset Key")}
+                ${selectField("se-preset-source", "Preset Source", ["custom","system","customer_saved","copied","imported"])}
+              `, true)}
 
-              <div class="se-section-title">Colors</div>
-              <label class="se-field"><span class="se-label">Brand Primary</span><input id="se-brand-primary" class="se-input" type="text"></label>
-              <label class="se-field"><span class="se-label">Brand Secondary</span><input id="se-brand-secondary" class="se-input" type="text"></label>
-              <label class="se-field"><span class="se-label">Surface</span><input id="se-surface" class="se-input" type="text"></label>
-              <label class="se-field"><span class="se-label">Text</span><input id="se-text" class="se-input" type="text"></label>
+              ${controlSection("Colors", `
+                ${inputField("se-brand-primary", "Brand Primary")}
+                ${inputField("se-brand-secondary", "Brand Secondary")}
+                ${inputField("se-surface", "Surface")}
+                ${inputField("se-text", "Text")}
+              `, true)}
 
-              <div class="se-section-title">Typography</div>
-              <label class="se-field"><span class="se-label">Font Family</span><select id="se-font-family" class="se-select"><option value="system">system</option></select></label>
-              <label class="se-field"><span class="se-label">Heading Scale</span><select id="se-heading-scale" class="se-select"><option value="compact">compact</option><option value="normal">normal</option><option value="large">large</option></select></label>
-              <label class="se-field"><span class="se-label">Body Scale</span><select id="se-body-scale" class="se-select"><option value="compact">compact</option><option value="normal">normal</option><option value="large">large</option></select></label>
+              ${controlSection("Typography", `
+                ${selectField("se-font-family", "Font Family", ["system"])}
+                ${selectField("se-heading-scale", "Heading Scale", ["compact","normal","large"])}
+                ${selectField("se-body-scale", "Body Scale", ["compact","normal","large"])}
+              `)}
 
-              <div class="se-section-title">Layout</div>
-              <label class="se-field"><span class="se-label">Preset Layout</span><select id="se-preset-layout" class="se-select"><option value="standard">standard</option><option value="ops-dashboard">ops-dashboard</option><option value="field-dashboard">field-dashboard</option><option value="marketing">marketing</option></select></label>
-              <label class="se-field"><span class="se-label">Default Width</span><select id="se-default-width" class="se-select"><option value="narrow">narrow</option><option value="normal">normal</option><option value="wide">wide</option></select></label>
-              <label class="se-field"><span class="se-label">Header</span><select id="se-header" class="se-select"><option value="standard">standard</option><option value="dashboard">dashboard</option><option value="compact">compact</option></select></label>
-              <label class="se-field"><span class="se-label">Hero</span><select id="se-hero" class="se-select"><option value="standard">standard</option><option value="compact">compact</option><option value="bold">bold</option></select></label>
-              <label class="se-field"><span class="se-label">Section Rhythm</span><select id="se-section-rhythm" class="se-select"><option value="compact">compact</option><option value="normal">normal</option><option value="divided">divided</option><option value="generous">generous</option></select></label>
-              <label class="se-field"><span class="se-label">Surface Structure</span><select id="se-surface-structure" class="se-select"><option value="cards">cards</option><option value="panels">panels</option><option value="open">open</option></select></label>
+              ${controlSection("Layout", `
+                ${selectField("se-preset-layout", "Preset Layout", ["standard","ops-dashboard","field-dashboard","marketing"])}
+                ${selectField("se-default-width", "Default Width", ["narrow","normal","wide"])}
+                ${selectField("se-header", "Header", ["standard","dashboard","compact"])}
+                ${selectField("se-hero", "Hero", ["standard","compact","bold"])}
+                ${selectField("se-section-rhythm", "Section Rhythm", ["compact","normal","divided","generous"])}
+                ${selectField("se-surface-structure", "Surface Structure", ["cards","panels","open"])}
+              `)}
 
-              <div class="se-section-title">Spacing</div>
-              <label class="se-field"><span class="se-label">Page Width</span><select id="se-page-width" class="se-select"><option value="narrow">narrow</option><option value="normal">normal</option><option value="wide">wide</option></select></label>
-              <label class="se-field"><span class="se-label">Section Spacing</span><select id="se-section-spacing" class="se-select"><option value="compact">compact</option><option value="normal">normal</option><option value="generous">generous</option></select></label>
-              <label class="se-field"><span class="se-label">Card Padding</span><select id="se-card-padding" class="se-select"><option value="compact">compact</option><option value="normal">normal</option><option value="generous">generous</option></select></label>
-              <label class="se-field"><span class="se-label">Density</span><select id="se-density" class="se-select"><option value="compact">compact</option><option value="normal">normal</option><option value="comfortable">comfortable</option></select></label>
+              ${controlSection("Spacing", `
+                ${selectField("se-page-width", "Page Width", ["narrow","normal","wide"])}
+                ${selectField("se-section-spacing", "Section Spacing", ["compact","normal","generous"])}
+                ${selectField("se-card-padding", "Card Padding", ["compact","normal","generous"])}
+                ${selectField("se-density", "Density", ["compact","normal","comfortable"])}
+              `)}
 
-              <div class="se-section-title">Effects</div>
-              <label class="se-field"><span class="se-label">Shadows</span><select id="se-shadows" class="se-select"><option value="none">none</option><option value="soft">soft</option><option value="strong">strong</option><option value="hairline">hairline</option></select></label>
-              <label class="se-field"><span class="se-label">Borders</span><select id="se-borders" class="se-select"><option value="none">none</option><option value="standard">standard</option><option value="hairline">hairline</option></select></label>
-              <label class="se-field"><span class="se-label">Corners</span><select id="se-corners" class="se-select"><option value="sharp">sharp</option><option value="soft">soft</option><option value="pill">pill</option></select></label>
-              <label class="se-field"><span class="se-label">Gradients</span><select id="se-gradients" class="se-select"><option value="none">none</option><option value="subtle">subtle</option><option value="bold">bold</option></select></label>
-              <label class="se-field"><span class="se-label">Motion</span><select id="se-motion" class="se-select"><option value="none">none</option><option value="subtle">subtle</option></select></label>
-              <label class="se-field"><span class="se-label">Divider Style</span><select id="se-divider-style" class="se-select"><option value="none">none</option><option value="subtle">subtle</option><option value="section-rules">section-rules</option></select></label>
-              <label class="se-field"><span class="se-label">Emphasis Style</span><select id="se-emphasis-style" class="se-select"><option value="labels">labels</option><option value="badges">badges</option><option value="bars">bars</option></select></label>
-              <label class="se-field"><span class="se-label">Surface Style</span><select id="se-surface-style" class="se-select"><option value="panels">panels</option><option value="soft-panels">soft-panels</option><option value="flat">flat</option></select></label>
-              <label class="se-field"><span class="se-label">Card Style</span><select id="se-card-style" class="se-select"><option value="standard">standard</option><option value="soft">soft</option><option value="panel">panel</option><option value="sharp">sharp</option></select></label>
-              <label class="se-field"><span class="se-label">Hero Style</span><select id="se-hero-style" class="se-select"><option value="standard">standard</option><option value="bold">bold</option><option value="dashboard">dashboard</option></select></label>
+              ${controlSection("Effects", `
+                ${selectField("se-shadows", "Shadows", ["none","soft","strong","hairline"])}
+                ${selectField("se-borders", "Borders", ["none","standard","hairline"])}
+                ${selectField("se-corners", "Corners", ["sharp","soft","pill"])}
+                ${selectField("se-gradients", "Gradients", ["none","subtle","bold"])}
+                ${selectField("se-motion", "Motion", ["none","subtle"])}
+                ${selectField("se-divider-style", "Divider Style", ["none","subtle","section-rules"])}
+                ${selectField("se-emphasis-style", "Emphasis Style", ["labels","badges","bars"])}
+                ${selectField("se-surface-style", "Surface Style", ["panels","soft-panels","flat"])}
+                ${selectField("se-card-style", "Card Style", ["standard","soft","panel","sharp"])}
+                ${selectField("se-hero-style", "Hero Style", ["standard","bold","dashboard"])}
+              `)}
 
-              <div class="se-section-title">Media / Background</div>
-              <label class="se-field"><span class="se-label">Image Treatment</span><select id="se-image-treatment" class="se-select"><option value="none">none</option><option value="inset">inset</option><option value="cover">cover</option><option value="framed">framed</option></select></label>
-              <label class="se-field"><span class="se-label">Hero Media Treatment</span><select id="se-hero-media-treatment" class="se-select"><option value="standard">standard</option><option value="compact">compact</option><option value="wide">wide</option></select></label>
-              <label class="se-field"><span class="se-label">Background</span><select id="se-background" class="se-select"><option value="none">none</option><option value="soft-tint">soft-tint</option><option value="image">image</option></select></label>
-              <label class="se-field"><span class="se-label">Background Opacity</span><input id="se-background-opacity" class="se-input" type="number" min="0" max="1" step="0.01"></label>
-              <label class="se-field"><span class="se-label">Background Overlay</span><select id="se-background-overlay" class="se-select"><option value="none">none</option><option value="soft">soft</option><option value="green-soft">green-soft</option><option value="dark">dark</option></select></label>
-              <label class="se-field"><span class="se-label">Background Blur</span><select id="se-background-blur" class="se-select"><option value="none">none</option><option value="soft">soft</option><option value="strong">strong</option></select></label>
-              <label class="se-field"><span class="se-label">Mobile Background</span><select id="se-mobile-background" class="se-select"><option value="hide">hide</option><option value="soft-tint">soft-tint</option><option value="same">same</option></select></label>
+              ${controlSection("Media / Background", `
+                ${selectField("se-image-treatment", "Image Treatment", ["none","inset","cover","framed"])}
+                ${selectField("se-hero-media-treatment", "Hero Media Treatment", ["standard","compact","wide"])}
+                ${selectField("se-background", "Background", ["none","soft-tint","image"])}
+                ${inputField("se-background-opacity", "Background Opacity", "number", 'min="0" max="1" step="0.01"')}
+                ${selectField("se-background-overlay", "Background Overlay", ["none","soft","green-soft","dark"])}
+                ${selectField("se-background-blur", "Background Blur", ["none","soft","strong"])}
+                ${selectField("se-mobile-background", "Mobile Background", ["hide","soft-tint","same"])}
+              `)}
 
-              <div class="se-section-title">Component Defaults</div>
-              <label class="se-check"><input id="se-show-global-banner-default" type="checkbox"><span class="se-label">Show global banner by default</span></label>
-              <label class="se-check"><input id="se-show-scroller-default" type="checkbox"><span class="se-label">Show scroller by default</span></label>
-              <label class="se-field"><span class="se-label">Banner Style</span><select id="se-banner-style" class="se-select"><option value="standard">standard</option><option value="soft">soft</option><option value="ops">ops</option></select></label>
-              <label class="se-field"><span class="se-label">CTA Style</span><select id="se-cta-style" class="se-select"><option value="standard">standard</option><option value="compact">compact</option><option value="rounded">rounded</option></select></label>
-              <label class="se-field"><span class="se-label">Card Component Style</span><select id="se-card-component-style" class="se-select"><option value="standard">standard</option><option value="panel">panel</option><option value="soft">soft</option></select></label>
-              <label class="se-field"><span class="se-label">Empty State Style</span><select id="se-empty-state-style" class="se-select"><option value="standard">standard</option><option value="compact">compact</option><option value="friendly">friendly</option></select></label>
+              ${controlSection("Component Defaults", `
+                ${checkboxField("se-show-global-banner-default", "Show global banner by default")}
+                ${checkboxField("se-show-scroller-default", "Show scroller by default")}
+                ${selectField("se-banner-style", "Banner Style", ["standard","soft","ops"])}
+                ${selectField("se-cta-style", "CTA Style", ["standard","compact","rounded"])}
+                ${selectField("se-card-component-style", "Card Component Style", ["standard","panel","soft"])}
+                ${selectField("se-empty-state-style", "Empty State Style", ["standard","compact","friendly"])}
+              `)}
 
-              <div class="se-section-title">Preview</div>
-              <label class="se-field"><span class="se-label">Preview Mode</span><select id="se-preview-mode" class="se-select"><option value="generic">generic</option><option value="real-page">real-page</option></select></label>
-              <label class="se-field"><span class="se-label">Preview Page Key</span><select id="se-preview-page-key" class="se-select"><option value="home">home</option><option value="aircraft">aircraft</option><option value="calendar">calendar</option><option value="documents">documents</option></select></label>
-              <label class="se-check"><input id="se-use-real-page-data" type="checkbox"><span class="se-label">Use real page data later</span></label>
+              ${controlSection("Preview", `
+                ${selectField("se-preview-mode", "Preview Mode", ["generic","real-page"])}
+                ${selectField("se-preview-page-key", "Preview Page Key", ["home","aircraft","calendar","documents"])}
+                ${checkboxField("se-use-real-page-data", "Use real page data later")}
+              `)}
 
-              <div class="se-actions"><button id="se-save" class="se-button">Save to customer</button><button id="se-preview-refresh" class="se-button secondary">Refresh preview</button></div>
-            </section>
+              ${controlSection("Backend Diagnostics", `
+                <button id="se-copy-output" class="se-button secondary full">Copy result</button>
+                <pre id="se-output" class="se-output">{}</pre>
+              `)}
+            </div>
 
-            <section class="se-card">
-              <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><h2 class="se-title" style="font-size:22px;">Last Backend Result</h2><button id="se-copy-output" class="se-button secondary">Copy result</button></div>
-              <pre id="se-output" class="se-output">{}</pre>
-            </section>
-          </div>
+            <div class="se-controls-bottom">
+              <button id="se-save" class="se-button full">Save to customer</button>
+            </div>
+          </aside>
 
-          <section class="se-card">
-            <h2 class="se-title" style="font-size:22px;">Preview</h2>
-            <p class="se-subtitle">Immediate approximation of the active customer-wide style profile.</p>
-            <div id="se-preview" style="margin-top:16px;"></div>
+          <section class="se-panel se-preview-panel">
+            <div class="se-preview-title">
+              <div>
+                <h2 class="se-title" style="font-size:22px;">Preview</h2>
+                <p class="se-subtitle">Always visible while style controls scroll.</p>
+              </div>
+              <button id="se-preview-refresh" class="se-button secondary">Refresh preview</button>
+            </div>
+            <div id="se-preview"></div>
           </section>
         </section>
       </main>

@@ -1,6 +1,6 @@
 // ADMIN-PAGE-layout-designer-current.js
-// Internal Version: 2026-06-03-005
-// Purpose: Layout Designer v5 with persistent preview, color pickers, preview-side diagnostics, and real enabled-page preview data.
+// Internal Version: 2026-06-03-006
+// Purpose: Layout Designer v6 with saved design profiles, style history restore, and unsaved-change protection.
 // Backend contract unchanged from v2. Uses update_active_style_profile and get_active_style_profile.
 // Backend diagnostics include Copy result button.
 
@@ -20,6 +20,10 @@
   let activeStyleProfile = null;
   let customerPages = [];
   let selectedPreviewPageId = "";
+  let isDirty = false;
+  let isSaving = false;
+  let savedProfiles = [];
+  let styleHistory = [];
 
   const PRESETS = {
     "clean-blue": {
@@ -203,6 +207,39 @@
     if (el) el.checked = Boolean(value);
   }
 
+  function markDirty() {
+    if (isSaving) return;
+    isDirty = true;
+    updateDirtyIndicator();
+  }
+
+  function markClean() {
+    isDirty = false;
+    updateDirtyIndicator();
+  }
+
+  function updateDirtyIndicator() {
+    const el = document.getElementById("se-dirty-indicator");
+    if (!el) return;
+    el.textContent = isDirty ? "Unsaved changes" : "Saved / clean";
+    el.className = isDirty ? "se-dirty is-dirty" : "se-dirty";
+  }
+
+  function confirmDiscardChanges(message) {
+    if (!isDirty) return true;
+    return window.confirm(message || "You have unsaved Layout Designer changes. Continue and discard them?");
+  }
+
+  function updateCurrentPresetDisplay(profile) {
+    const el = document.getElementById("se-current-preset");
+    if (!el) return;
+
+    const presetName = profile?.profile_name || "Default";
+    const source = profile?.preset_source || "custom";
+    const key = profile?.preset_key || "none";
+    el.textContent = `Current profile: ${presetName} | Source: ${source} | Key: ${key}`;
+  }
+
   function getFormPayload() {
     const colors_json = {
       brand_primary: getValue("se-brand-primary", "#1f4f82"),
@@ -271,8 +308,8 @@
 
     return {
       profile_name: getValue("se-profile-name", "Default"),
-      preset_key: getValue("se-preset-key", ""),
-      preset_source: getValue("se-preset-source", "custom"),
+      preset_key: activeStyleProfile?.preset_key || "",
+      preset_source: activeStyleProfile?.preset_source || "custom",
       colors_json,
       typography_json,
       spacing_json,
@@ -298,8 +335,7 @@
     const preview = profile?.preview_json || {};
 
     setValue("se-profile-name", profile?.profile_name || "Default");
-    setValue("se-preset-key", profile?.preset_key || "");
-    setValue("se-preset-source", profile?.preset_source || "custom");
+    updateCurrentPresetDisplay(profile);
 
     setValue("se-brand-primary", colors.brand_primary || "#1f4f82");
     setValue("se-brand-secondary", colors.brand_secondary || "#eef3f8");
@@ -522,6 +558,7 @@
       picker.addEventListener("input", () => {
         textInput.value = picker.value;
         if (swatch) swatch.style.background = picker.value;
+        markDirty();
         renderPreview();
       });
     }
@@ -531,7 +568,8 @@
         if (isValidHexColor(textInput.value)) {
           picker.value = textInput.value;
           if (swatch) swatch.style.background = textInput.value;
-          renderPreview();
+          markDirty();
+        renderPreview();
         }
       });
 
@@ -577,7 +615,7 @@
         .se-button.secondary{background:#fff;color:#1f4f82;}
         .se-button.full{width:100%;justify-content:center;}
         .se-status{margin-top:12px;padding:12px;border-radius:10px;background:#eef3f8;border:1px solid #d6e0ec;color:#26344d;font-size:14px;white-space:pre-wrap;}
-        .se-output{margin-top:14px;background:#101827;color:#e7edf6;border-radius:12px;padding:14px;overflow:auto;min-height:120px;max-height:300px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.45;}.se-color-row{display:grid;grid-template-columns:48px minmax(0,1fr) 30px;gap:8px;align-items:center;}.se-color-picker{width:48px;height:42px;border:1px solid #c7d2e2;border-radius:10px;padding:2px;background:#fff;cursor:pointer;}.se-color-hex{font-family:Consolas,Monaco,monospace;}.se-color-swatch{display:block;width:30px;height:30px;border-radius:999px;border:1px solid #c7d2e2;box-shadow:inset 0 0 0 2px rgba(255,255,255,.7);}.se-diagnostics{margin-top:16px;background:#fff;border:1px solid #d9e0ea;border-radius:14px;padding:16px;}
+        .se-output{margin-top:14px;background:#101827;color:#e7edf6;border-radius:12px;padding:14px;overflow:auto;min-height:120px;max-height:300px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.45;}.se-color-row{display:grid;grid-template-columns:48px minmax(0,1fr) 30px;gap:8px;align-items:center;}.se-color-picker{width:48px;height:42px;border:1px solid #c7d2e2;border-radius:10px;padding:2px;background:#fff;cursor:pointer;}.se-color-hex{font-family:Consolas,Monaco,monospace;}.se-color-swatch{display:block;width:30px;height:30px;border-radius:999px;border:1px solid #c7d2e2;box-shadow:inset 0 0 0 2px rgba(255,255,255,.7);}.se-diagnostics{margin-top:16px;background:#fff;border:1px solid #d9e0ea;border-radius:14px;padding:16px;}.se-dirty{display:inline-flex;border-radius:999px;padding:6px 10px;background:#edf7ed;color:#265c2b;font-size:12px;font-weight:900;margin:0 0 12px 0;}.se-dirty.is-dirty{background:#fff0d9;color:#8a5200;}.se-current-preset{padding:10px 12px;border:1px solid #d9e0ea;background:#f7f9fc;border-radius:10px;font-size:13px;font-weight:800;margin-bottom:10px;color:#26344d;}.se-history-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;border:1px solid #d9e0ea;border-radius:10px;padding:10px;margin-bottom:8px;background:#fbfcfe;}.se-history-meta{font-size:12px;color:#5d6b82;line-height:1.35;}
         .se-control-section{border:1px solid #d8e1ed;border-radius:12px;margin-bottom:10px;background:#fbfcfe;overflow:hidden;}
         .se-control-section summary{cursor:pointer;font-weight:900;color:#1f2a44;padding:12px 13px;list-style:none;}
         .se-control-section summary::-webkit-details-marker{display:none;}
@@ -602,7 +640,9 @@
           <aside class="se-panel se-controls">
             <div class="se-controls-top">
               <label class="se-field"><span class="se-label">Customer</span><select id="se-customer-select" class="se-select"><option value="">Log in and load customers...</option></select></label>
-              <label class="se-field"><span class="se-label">Apply preset</span><select id="se-preset" class="se-select"><option value="">Choose preset...</option>${Object.entries(PRESETS).map(([key,preset])=>`<option value="${escapeHtml(key)}">${escapeHtml(preset.label)}</option>`).join("")}</select></label>
+              <label class="se-field"><span class="se-label">Apply system preset</span><select id="se-preset" class="se-select"><option value="">Choose preset...</option>${Object.entries(PRESETS).map(([key,preset])=>`<option value="${escapeHtml(key)}">${escapeHtml(preset.label)}</option>`).join("")}</select></label>
+              <label class="se-field"><span class="se-label">Apply saved design profile</span><select id="se-saved-profile-select" class="se-select"><option value="">Load saved profiles...</option></select></label>
+              <button id="se-apply-saved-profile" class="se-button secondary full" type="button">Apply Saved Design Profile</button>
               <div class="se-actions">
                 <button id="se-login" class="se-button">Log in</button>
                 <button id="se-logout" class="se-button secondary">Log out</button>
@@ -613,9 +653,12 @@
 
             <div class="se-controls-scroll">
               ${controlSection("Profile", `
-                ${inputField("se-profile-name", "Profile Name")}
-                ${inputField("se-preset-key", "Preset Key")}
-                ${selectField("se-preset-source", "Preset Source", ["custom","system","customer_saved","copied","imported"])}
+                <div id="se-current-preset" class="se-current-preset">Current profile: loading...</div>
+                <div id="se-dirty-indicator" class="se-dirty">Saved / clean</div>
+                ${inputField("se-profile-name", "Active Profile Name")}
+                <div class="se-actions">
+                  <button id="se-save-new-profile" class="se-button secondary full">Save as New Design Profile</button>
+                </div>
               `, true)}
 
               ${controlSection("Colors", `
@@ -713,6 +756,17 @@
               </div>
               <pre id="se-output" class="se-output">{}</pre>
             </section>
+
+            <section class="se-diagnostics">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                <div>
+                  <h3 style="margin:0 0 4px 0;font-size:18px;">History / Restore</h3>
+                  <p class="se-subtitle">Shows recent style snapshots for this customer.</p>
+                </div>
+                <button id="se-refresh-history" class="se-button secondary">Refresh history</button>
+              </div>
+              <div id="se-history-list" style="margin-top:12px;">No history loaded yet.</div>
+            </section>
           </section>
         </section>
       </main>
@@ -751,6 +805,97 @@
     }).join("");
   }
 
+  function renderSavedProfiles() {
+    const select = document.getElementById("se-saved-profile-select");
+    if (!select) return;
+
+    const profiles = savedProfiles.filter((profile) => !profile.is_active);
+    if (!profiles.length) {
+      select.innerHTML = `<option value="">No saved profiles yet</option>`;
+      return;
+    }
+
+    select.innerHTML = `<option value="">Choose saved profile...</option>` + profiles.map((profile) => {
+      return `<option value="${escapeHtml(profile.style_profile_id)}">${escapeHtml(profile.profile_name || "Saved Profile")} (${escapeHtml(profile.preset_key || "custom")})</option>`;
+    }).join("");
+  }
+
+  function renderHistory() {
+    const list = document.getElementById("se-history-list");
+    if (!list) return;
+
+    if (!styleHistory.length) {
+      list.innerHTML = "No history snapshots yet.";
+      return;
+    }
+
+    list.innerHTML = styleHistory.map((row) => {
+      const snapshot = row.snapshot_json || {};
+      const date = row.created_at ? new Date(row.created_at).toLocaleString() : "";
+      return `
+        <div class="se-history-row">
+          <div>
+            <strong>${escapeHtml(snapshot.profile_name || "Style Snapshot")}</strong>
+            <div class="se-history-meta">${escapeHtml(row.event_type || "")} | ${escapeHtml(date)} | ${escapeHtml(row.saved_by_email || "")}</div>
+            ${row.note ? `<div class="se-history-meta">${escapeHtml(row.note)}</div>` : ""}
+          </div>
+          <button class="se-button secondary se-restore-history" data-history-id="${escapeHtml(row.history_id)}" type="button">Restore</button>
+        </div>
+      `;
+    }).join("");
+
+    list.querySelectorAll(".se-restore-history").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const historyId = button.getAttribute("data-history-id");
+        if (!historyId) return;
+        if (!confirmDiscardChanges("You have unsaved changes. Restore this history snapshot and discard them?")) return;
+        if (!window.confirm("Restore this style snapshot to the active customer style profile?")) return;
+
+        try {
+          isSaving = true;
+          setStatus("Restoring history snapshot...");
+          const result = await callCoreAdminAction("restore_style_profile_snapshot", {
+            customer_id: selectedCustomerId,
+            history_id: historyId
+          });
+          activeStyleProfile = result.style_profile;
+          applyPayloadToForm(activeStyleProfile);
+          await loadSavedProfiles();
+          await loadStyleHistory();
+          markClean();
+          setStatus("History snapshot restored.");
+        } catch (error) {
+          setStatus("Restore failed.");
+          setOutput({ ok: false, event: "restore_failed", message: error instanceof Error ? error.message : String(error) });
+        } finally {
+          isSaving = false;
+        }
+      });
+    });
+  }
+
+  async function loadSavedProfiles() {
+    if (!selectedCustomerId) {
+      savedProfiles = [];
+      renderSavedProfiles();
+      return;
+    }
+    const result = await callCoreAdminAction("list_customer_style_profiles", { customer_id: selectedCustomerId });
+    savedProfiles = Array.isArray(result.style_profiles) ? result.style_profiles : [];
+    renderSavedProfiles();
+  }
+
+  async function loadStyleHistory() {
+    if (!selectedCustomerId) {
+      styleHistory = [];
+      renderHistory();
+      return;
+    }
+    const result = await callCoreAdminAction("list_style_profile_history", { customer_id: selectedCustomerId, limit: 10 });
+    styleHistory = Array.isArray(result.history) ? result.history : [];
+    renderHistory();
+  }
+
   async function loadCustomerPages() {
     if (!selectedCustomerId) {
       customerPages = [];
@@ -781,6 +926,8 @@
     if (selectedCustomerId) {
       await loadActiveStyleProfile();
       await loadCustomerPages();
+      await loadSavedProfiles();
+      await loadStyleHistory();
     }
     setStatus("Customers loaded.");
   }
@@ -801,13 +948,24 @@
     }
     const payload = getFormPayload();
     setStatus("Saving style profile...");
-    const result = await callCoreAdminAction("update_active_style_profile", { customer_id: selectedCustomerId, ...payload });
+    isSaving = true;
+    const result = await callCoreAdminAction("update_active_style_profile", { customer_id: selectedCustomerId, note: "Layout Designer save", ...payload });
     activeStyleProfile = result.style_profile;
     applyPayloadToForm(activeStyleProfile);
+    await loadSavedProfiles();
+    await loadStyleHistory();
+    markClean();
+    isSaving = false;
     setStatus("Style profile saved.");
   }
 
   function bindEvents() {
+    window.addEventListener("beforeunload", (event) => {
+      if (!isDirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
+
     document.getElementById("se-login")?.addEventListener("click", async () => {
       try {
         const email = document.getElementById("se-email")?.value || "";
@@ -847,11 +1005,18 @@
 
     document.getElementById("se-customer-select")?.addEventListener("change", async (event) => {
       try {
+        if (!confirmDiscardChanges("You have unsaved changes. Switch customers and discard them?")) {
+          event.target.value = selectedCustomerId;
+          return;
+        }
         selectedCustomerId = event.target.value || "";
         selectedPreviewPageId = "";
+        markClean();
         if (selectedCustomerId) {
           await loadActiveStyleProfile();
           await loadCustomerPages();
+          await loadSavedProfiles();
+          await loadStyleHistory();
         }
       } catch (error) {
         setStatus("Style profile load failed.");
@@ -862,6 +1027,10 @@
     document.getElementById("se-preset")?.addEventListener("change", (event) => {
       const preset = PRESETS[event.target.value];
       if (!preset) return;
+      if (!confirmDiscardChanges("Apply this system preset and discard unsaved changes?")) {
+        event.target.value = "";
+        return;
+      }
       applyPayloadToForm({
         profile_name: preset.label,
         preset_key: preset.preset_key,
@@ -878,19 +1047,88 @@
         card_style: preset.card_style,
         hero_style: preset.hero_style
       });
+      markDirty();
       renderRealPagePreview();
     });
 
     document.querySelectorAll("input, select").forEach((el) => {
-      el.addEventListener("input", renderRealPagePreview);
-      el.addEventListener("change", renderRealPagePreview);
+      el.addEventListener("input", () => { markDirty(); renderRealPagePreview(); });
+      el.addEventListener("change", () => { markDirty(); renderRealPagePreview(); });
     });
 
     ["se-brand-primary", "se-brand-secondary", "se-surface", "se-text"].forEach(bindColorPair);
 
+    document.getElementById("se-save-new-profile")?.addEventListener("click", async () => {
+      try {
+        if (!selectedCustomerId) {
+          setStatus("Select a customer first.");
+          return;
+        }
+        const profileName = window.prompt("Name this new design profile:");
+        if (!profileName || !profileName.trim()) return;
+
+        isSaving = true;
+        const payload = getFormPayload();
+        setStatus("Saving new design profile...");
+        const result = await callCoreAdminAction("save_design_profile", {
+          customer_id: selectedCustomerId,
+          profile_name: profileName.trim(),
+          note: "Saved from Layout Designer",
+          ...payload
+        });
+        await loadSavedProfiles();
+        await loadStyleHistory();
+        setStatus(`Saved new design profile: ${result.saved_profile?.profile_name || profileName.trim()}`);
+      } catch (error) {
+        setStatus("Save as new design profile failed.");
+        setOutput({ ok: false, event: "save_new_profile_failed", message: error instanceof Error ? error.message : String(error) });
+      } finally {
+        isSaving = false;
+      }
+    });
+
+    document.getElementById("se-apply-saved-profile")?.addEventListener("click", async () => {
+      try {
+        if (!confirmDiscardChanges("Apply this saved design profile and discard unsaved changes?")) return;
+        const sourceStyleProfileId = getValue("se-saved-profile-select", "");
+        if (!sourceStyleProfileId) {
+          setStatus("Choose a saved design profile first.");
+          return;
+        }
+
+        isSaving = true;
+        setStatus("Applying saved design profile...");
+        const result = await callCoreAdminAction("apply_saved_design_profile", {
+          customer_id: selectedCustomerId,
+          source_style_profile_id: sourceStyleProfileId
+        });
+
+        activeStyleProfile = result.style_profile;
+        applyPayloadToForm(activeStyleProfile);
+        await loadSavedProfiles();
+        await loadStyleHistory();
+        markClean();
+        setStatus("Saved design profile applied.");
+      } catch (error) {
+        setStatus("Apply saved design profile failed.");
+        setOutput({ ok: false, event: "apply_saved_profile_failed", message: error instanceof Error ? error.message : String(error) });
+      } finally {
+        isSaving = false;
+      }
+    });
+
+    document.getElementById("se-refresh-history")?.addEventListener("click", async () => {
+      try { await loadStyleHistory(); }
+      catch (error) {
+        setStatus("History refresh failed.");
+        setOutput({ ok: false, event: "history_refresh_failed", message: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
     document.getElementById("se-save")?.addEventListener("click", async () => {
       try { await saveStyleProfile(); }
       catch (error) {
+        isSaving = false;
         setStatus("Save failed.");
         setOutput({ ok: false, event: "save_failed", message: error instanceof Error ? error.message : String(error) });
       }

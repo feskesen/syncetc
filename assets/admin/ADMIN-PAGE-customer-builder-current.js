@@ -1,13 +1,13 @@
 // ADMIN-PAGE-customer-builder-current.js
-// Internal Version: 2026-06-03-002
+// Internal Version: 2026-06-03-003
 // Purpose: Customer Builder v1 for creating, listing, editing, archiving, and recovering core customer records.
-// Change from 2026-06-03-001: Customer Key is no longer editable. Backend generates it and auto-suffixes duplicates.
+// Change from 2026-06-03-002: adds Copy result button for backend diagnostics.
 // Live filename is stable. Track versions internally, in Git history, and in local saved copies.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-002";
+  const VERSION = "2026-06-03-003";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -55,6 +55,17 @@
     const el = document.getElementById("se-output");
     if (!el) return;
     el.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  }
+
+  async function copyOutput() {
+    const el = document.getElementById("se-output");
+    const text = el ? el.textContent || "" : "";
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus("Backend result copied to clipboard.");
+    } catch {
+      setStatus("Copy failed. Select the backend result manually.");
+    }
   }
 
   function loadScript(src) {
@@ -501,7 +512,10 @@
             </section>
 
             <section class="se-card">
-              <h2 class="se-title" style="font-size:22px;">Last Backend Result</h2>
+              <div class="se-customer-top">
+                <h2 class="se-title" style="font-size:22px;">Last Backend Result</h2>
+                <button id="se-copy-output" class="se-button secondary">Copy result</button>
+              </div>
               <pre id="se-output" class="se-output">{}</pre>
             </section>
           </div>
@@ -801,6 +815,7 @@
     });
 
     document.getElementById("se-clear-create")?.addEventListener("click", clearCreateForm);
+    document.getElementById("se-copy-output")?.addEventListener("click", copyOutput);
   }
 
   async function boot() {

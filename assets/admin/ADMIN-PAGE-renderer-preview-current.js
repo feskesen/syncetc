@@ -1,6 +1,6 @@
 // ADMIN-PAGE-renderer-preview-current.js
-// Internal Version: 2026-06-03-003
-// Purpose: Admin/test renderer preview v3 with clickable rendered navigation and query-state preservation.
+// Internal Version: 2026-06-03-004
+// Purpose: Admin/test renderer preview v4 with corrected query-state preservation on customer-only and no-page fallback renders.
 // Backend contract: uses existing core-admin-action actions only.
 // Actions used: list_customers, list_customer_pages, get_active_style_profile, get_customer_page_settings.
 // Notes: This is a safe preview page, not final public routing.
@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-003";
+  const VERSION = "2026-06-03-004";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -52,10 +52,18 @@
   }
 
   function writeQueryState() {
-    const params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams();
+
     if (selectedCustomer?.customer_key) params.set("customer", selectedCustomer.customer_key);
-    if (selectedPageBundle?.customer_page?.page_key) params.set("page", selectedPageBundle.customer_page.page_key);
-    const nextUrl = `${window.location.pathname}?${params.toString()}`;
+
+    const selectedPage = selectedPageBundle?.customer_page
+      || customerPages.find((page) => page.customer_page_id === selectedCustomerPageId)
+      || null;
+
+    if (selectedPage?.page_key) params.set("page", selectedPage.page_key);
+
+    const query = params.toString();
+    const nextUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname;
     window.history.replaceState({}, "", nextUrl);
   }
 
@@ -711,6 +719,7 @@
     } else {
       selectedPageBundle = null;
       renderCustomerFacingPage();
+      writeQueryState();
     }
 
     setStatus("Customer style and pages loaded.");
@@ -720,6 +729,7 @@
     if (!selectedCustomerPageId) {
       selectedPageBundle = null;
       renderCustomerFacingPage();
+      writeQueryState();
       setStatus("No enabled page selected. Showing general customer style preview.");
       return;
     }
@@ -987,6 +997,8 @@
         selectedCustomerId = event.target.value || "";
         selectedCustomer = customers.find((customer) => customer.customer_id === selectedCustomerId) || null;
         selectedCustomerPageId = "";
+        selectedPageBundle = null;
+        writeQueryState();
         selectedPageBundle = null;
         activeStyleProfile = null;
         customerPages = [];

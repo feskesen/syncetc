@@ -1,6 +1,6 @@
 // ADMIN-PAGE-renderer-preview-current.js
-// Internal Version: 2026-06-03-004
-// Purpose: Admin/test renderer preview v4 with corrected query-state preservation on customer-only and no-page fallback renders.
+// Internal Version: 2026-06-03-005
+// Purpose: Admin/test renderer preview v5 honoring page-level feature/component visibility toggles.
 // Backend contract: uses existing core-admin-action actions only.
 // Actions used: list_customers, list_customer_pages, get_active_style_profile, get_customer_page_settings.
 // Notes: This is a safe preview page, not final public routing.
@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-004";
+  const VERSION = "2026-06-03-005";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -257,6 +257,115 @@
     return hasValue(value);
   }
 
+  function getPageFeatures() {
+    const { settings } = getPageData();
+    const visibility = settings.visibility_json || {};
+    const options = settings.options_json || {};
+    return {
+      show_announcement_strip: false,
+      show_banner_scroller: false,
+      show_hero_media: false,
+      show_primary_cta_block: false,
+      show_secondary_content_section: false,
+      show_filter_controls: false,
+      show_dashboard_cards: false,
+      show_empty_state_panel: false,
+      ...(options.features || {}),
+      ...(visibility.features || {})
+    };
+  }
+
+  function renderAnnouncementStrip(features, content) {
+    if (!features.show_announcement_strip) return "";
+    const text = content.announcement_text || "Announcement strip is enabled for this page.";
+    return `<div class="sr-announcement">${escapeHtml(text)}</div>`;
+  }
+
+  function renderBannerScroller(features) {
+    if (!features.show_banner_scroller) return "";
+    return `
+      <section class="sr-scroller" aria-label="Banner scroller preview">
+        <div class="sr-scroller-track">
+          <span>Banner scroller enabled</span>
+          <span>Customer updates can rotate here</span>
+          <span>Future module content can feed this strip</span>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderHeroMedia(features) {
+    if (!features.show_hero_media) return "";
+    return `
+      <div class="sr-hero-media">
+        <div class="sr-hero-media-inner">Hero media placeholder</div>
+      </div>
+    `;
+  }
+
+  function renderPrimaryCtaBlock(features, labels, options, content) {
+    if (!features.show_primary_cta_block) return "";
+    const label = labels.primary_cta_label || content.primary_cta_label || "Primary CTA";
+    return `
+      <section class="sr-section sr-cta-block">
+        <div>
+          <span class="sr-kicker">Call to action</span>
+          <h2>${escapeHtml(label)}</h2>
+          <p>This page-level CTA block is enabled in Page Editor.</p>
+        </div>
+        <a class="sr-button primary" href="${escapeHtml(options.primary_cta_url || "#")}" onclick="return false;">${escapeHtml(label)}</a>
+      </section>
+    `;
+  }
+
+  function renderSecondaryContentSection(features, content) {
+    if (!features.show_secondary_content_section) return "";
+    const heading = content.secondary_heading || "Secondary content section";
+    const body = content.secondary_body || "This optional page section is enabled in Page Editor and styled by the customer-wide Layout Designer profile.";
+    return `
+      <section class="sr-section">
+        <div class="sr-section-heading">
+          <span class="sr-kicker">Optional section</span>
+          <h2>${escapeHtml(heading)}</h2>
+        </div>
+        <p>${escapeHtml(body)}</p>
+      </section>
+    `;
+  }
+
+  function renderFilterControls(features) {
+    if (!features.show_filter_controls) return "";
+    return `
+      <section class="sr-section sr-filter-row">
+        <span class="sr-filter-pill active">All</span>
+        <span class="sr-filter-pill">Current</span>
+        <span class="sr-filter-pill">Archived</span>
+        <span class="sr-filter-pill">Featured</span>
+      </section>
+    `;
+  }
+
+  function renderDashboardCards(features) {
+    if (!features.show_dashboard_cards) return "";
+    return `
+      <section class="sr-card-grid sr-dashboard-grid">
+        <article class="sr-card"><h3>Summary</h3><p>Dashboard card enabled.</p></article>
+        <article class="sr-card"><h3>Status</h3><p>Module summary placeholder.</p></article>
+        <article class="sr-card"><h3>Action</h3><p>Future real data can render here.</p></article>
+      </section>
+    `;
+  }
+
+  function renderEmptyStatePanel(features) {
+    if (!features.show_empty_state_panel) return "";
+    return `
+      <section class="sr-empty-state">
+        <strong>Empty-state panel enabled</strong>
+        <p>This panel appears when module data is unavailable or intentionally blank.</p>
+      </section>
+    `;
+  }
+
   function renderGenericCards(style, vars) {
     const cards = [
       { title: "Design profile", body: activeStyleProfile?.profile_name || "Default" },
@@ -361,6 +470,16 @@
     const primaryUrl = options.primary_cta_url || content.primary_cta_url || "";
     const secondaryLabel = labels.secondary_cta_label || content.secondary_cta_label || "";
     const secondaryUrl = options.secondary_cta_url || content.secondary_cta_url || "";
+    const features = hasRealPage ? getPageFeatures() : {
+      show_announcement_strip: false,
+      show_banner_scroller: false,
+      show_hero_media: false,
+      show_primary_cta_block: false,
+      show_secondary_content_section: false,
+      show_filter_controls: false,
+      show_dashboard_cards: false,
+      show_empty_state_panel: true
+    };
 
     const renderEyebrow = hasRealPage ? shouldRenderField("hero_eyebrow", heroEyebrow, hideFields) : true;
     const renderIntro = hasRealPage ? shouldRenderField("hero_intro", intro, hideFields) : true;
@@ -403,6 +522,35 @@
           margin-bottom: var(--sr-section-gap);
           font-size: 14px;
           font-weight: 800;
+        }
+
+
+        #se-rendered-page .sr-announcement {
+          border: 1px solid var(--sr-primary);
+          color: var(--sr-primary);
+          background: rgba(255,255,255,.78);
+          border-radius: var(--sr-radius);
+          padding: 11px 14px;
+          margin-bottom: var(--sr-section-gap);
+          font-weight: 900;
+        }
+
+        #se-rendered-page .sr-scroller {
+          border: var(--sr-border);
+          background: var(--sr-surface);
+          border-radius: 999px;
+          padding: 9px 12px;
+          margin-bottom: var(--sr-section-gap);
+          overflow: hidden;
+        }
+
+        #se-rendered-page .sr-scroller-track {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 14px;
+          color: var(--sr-primary);
+          font-weight: 800;
+          font-size: 13px;
         }
 
         #se-rendered-page .sr-header {
@@ -509,6 +657,24 @@
           line-height: 1.55;
         }
 
+
+        #se-rendered-page .sr-hero-media {
+          margin-top: 18px;
+          border: 1px solid rgba(255,255,255,.45);
+          border-radius: var(--sr-radius);
+          padding: 12px;
+          background: rgba(255,255,255,.12);
+        }
+
+        #se-rendered-page .sr-hero-media-inner {
+          min-height: 140px;
+          display: grid;
+          place-items: center;
+          border: 1px dashed rgba(255,255,255,.55);
+          border-radius: calc(var(--sr-radius) - 4px);
+          font-weight: 900;
+        }
+
         #se-rendered-page .sr-actions {
           display: flex;
           gap: 10px;
@@ -560,6 +726,52 @@
           color: var(--sr-text);
         }
 
+
+        #se-rendered-page .sr-cta-block {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 16px;
+        }
+
+        #se-rendered-page .sr-filter-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        #se-rendered-page .sr-filter-pill {
+          border: 1px solid var(--sr-primary);
+          color: var(--sr-primary);
+          border-radius: 999px;
+          padding: 7px 10px;
+          font-size: 13px;
+          font-weight: 800;
+        }
+
+        #se-rendered-page .sr-filter-pill.active {
+          background: var(--sr-primary);
+          color: white;
+        }
+
+        #se-rendered-page .sr-dashboard-grid {
+          margin-bottom: var(--sr-section-gap);
+        }
+
+        #se-rendered-page .sr-empty-state {
+          border: 1px dashed var(--sr-primary);
+          border-radius: var(--sr-radius);
+          background: rgba(255,255,255,.65);
+          padding: var(--sr-card-padding);
+          margin-bottom: var(--sr-section-gap);
+          color: var(--sr-text);
+        }
+
+        #se-rendered-page .sr-empty-state p {
+          margin: 8px 0 0 0;
+          line-height: 1.45;
+        }
+
         #se-rendered-page .sr-list {
           display: grid;
           gap: 10px;
@@ -600,6 +812,9 @@
         ${!hasEnabledPages ? `<div class="sr-notice">No enabled pages for this customer yet. Showing general customer style preview. Add pages in Page Setup to preview real page output.</div>` : ""}
         ${hasEnabledPages && !hasRealPage ? `<div class="sr-notice">Enabled pages exist, but no page is selected. Showing general customer style preview.</div>` : ""}
 
+        ${hasRealPage ? renderAnnouncementStrip(features, content) : ""}
+        ${hasRealPage ? renderBannerScroller(features) : ""}
+
         <header class="sr-header">
           <div class="sr-brand">
             <div class="sr-logo">LOGO</div>
@@ -619,6 +834,7 @@
           ${renderEyebrow ? `<div class="sr-eyebrow">${escapeHtml(heroEyebrow)}</div>` : ""}
           <h2>${escapeHtml(title)}</h2>
           ${renderIntro ? `<p>${escapeHtml(intro)}</p>` : ""}
+          ${renderHeroMedia(features)}
           ${(renderPrimary || renderSecondary) ? `
             <div class="sr-actions">
               ${renderPrimary ? `<a class="sr-button primary" href="${escapeHtml(primaryUrl)}" onclick="return false;">${escapeHtml(primaryLabel)}</a>` : ""}
@@ -627,7 +843,12 @@
           ` : ""}
         </section>
 
+        ${renderFilterControls(features)}
+        ${renderDashboardCards(features)}
         ${hasRealPage ? renderPageSpecificSection(page.page_key || template.template_key, style, vars) : renderGenericCards(style, vars)}
+        ${renderPrimaryCtaBlock(features, labels, options, content)}
+        ${renderSecondaryContentSection(features, content)}
+        ${renderEmptyStatePanel(features)}
 
         <footer class="sr-footer">
           ${escapeHtml(customerName)} preview · Powered by SyncEtc

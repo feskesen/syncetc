@@ -1,6 +1,6 @@
 // ADMIN-PAGE-renderer-preview-current.js
-// Internal Version: 2026-06-03-002
-// Purpose: Admin/test renderer preview with auto-render and no-enabled-pages fallback.
+// Internal Version: 2026-06-03-003
+// Purpose: Admin/test renderer preview v3 with clickable rendered navigation and query-state preservation.
 // Backend contract: uses existing core-admin-action actions only.
 // Actions used: list_customers, list_customer_pages, get_active_style_profile, get_customer_page_settings.
 // Notes: This is a safe preview page, not final public routing.
@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-002";
+  const VERSION = "2026-06-03-003";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -23,6 +23,8 @@
   let selectedCustomerPageId = "";
   let activeStyleProfile = null;
   let selectedPageBundle = null;
+  let pendingCustomerKey = "";
+  let pendingPageKey = "";
 
   function ensureRoot() {
     let root = document.getElementById(ROOT_ID);
@@ -41,6 +43,20 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
+  }
+
+  function readQueryState() {
+    const params = new URLSearchParams(window.location.search);
+    pendingCustomerKey = params.get("customer") || "";
+    pendingPageKey = params.get("page") || "";
+  }
+
+  function writeQueryState() {
+    const params = new URLSearchParams(window.location.search);
+    if (selectedCustomer?.customer_key) params.set("customer", selectedCustomer.customer_key);
+    if (selectedPageBundle?.customer_page?.page_key) params.set("page", selectedPageBundle.customer_page.page_key);
+    const nextUrl = `${window.location.pathname}?${params.toString()}`;
+    window.history.replaceState({}, "", nextUrl);
   }
 
   function setStatus(message) {
@@ -430,6 +446,7 @@
         }
 
         #se-rendered-page .sr-nav span,
+        #se-rendered-page .sr-nav button,
         #se-rendered-page .sr-button {
           border: 1px solid var(--sr-primary);
           color: var(--sr-primary);
@@ -439,9 +456,12 @@
           font-weight: 800;
           font-size: 13px;
           text-decoration: none;
+          cursor: pointer;
+          font-family: inherit;
         }
 
         #se-rendered-page .sr-nav span.active,
+        #se-rendered-page .sr-nav button.active,
         #se-rendered-page .sr-button.primary {
           background: var(--sr-primary);
           color: white;
@@ -579,7 +599,7 @@
               <h1>${escapeHtml(customerName)}</h1>
               <nav class="sr-nav" aria-label="Preview navigation">
                 ${navPages.length ? navPages.map((navPage) => `
-                  <span class="${navPage.customer_page_id === selectedCustomerPageId ? "active" : ""}">${escapeHtml(navPage.nav_label || navPage.page_key || "Page")}</span>
+                  <button class="sr-nav-item ${navPage.customer_page_id === selectedCustomerPageId ? "active" : ""}" data-customer-page-id="${escapeHtml(navPage.customer_page_id)}" type="button">${escapeHtml(navPage.nav_label || navPage.page_key || "Page")}</button>
                 `).join("") : `<span>Home</span><span>About</span><span>Contact</span>`}
               </nav>
             </div>
@@ -636,6 +656,11 @@
       return;
     }
 
+    if ((!selectedCustomerPageId || !activePages.some((page) => page.customer_page_id === selectedCustomerPageId)) && pendingPageKey) {
+      const pendingPage = activePages.find((page) => page.page_key === pendingPageKey);
+      if (pendingPage) selectedCustomerPageId = pendingPage.customer_page_id;
+    }
+
     if (!selectedCustomerPageId || !activePages.some((page) => page.customer_page_id === selectedCustomerPageId)) {
       selectedCustomerPageId = activePages[0].customer_page_id;
     }
@@ -650,6 +675,11 @@
     setStatus("Loading customers...");
     const result = await callCoreAdminAction("list_customers");
     customers = Array.isArray(result.customers) ? result.customers : [];
+
+    if (!selectedCustomerId && pendingCustomerKey) {
+      const pendingCustomer = customers.find((customer) => customer.customer_key === pendingCustomerKey);
+      if (pendingCustomer) selectedCustomerId = pendingCustomer.customer_id;
+    }
 
     if (!selectedCustomerId && customers.length) selectedCustomerId = customers[0].customer_id;
     selectedCustomer = customers.find((customer) => customer.customer_id === selectedCustomerId) || null;
@@ -698,6 +728,7 @@
     const result = await callCoreAdminAction("get_customer_page_settings", { customer_page_id: selectedCustomerPageId });
     selectedPageBundle = result;
     renderCustomerFacingPage();
+    writeQueryState();
     setStatus("Renderer preview updated.");
   }
 
@@ -984,10 +1015,31 @@
       }
     });
 
+    document.getElementById("se-rendered-page")?.addEventListener("click", async (event) => {
+      const target = event.target;
+      if (!target || !target.closest) return;
+      const button = target.closest("[data-customer-page-id]");
+      if (!button) return;
+
+      const nextPageId = button.getAttribute("data-customer-page-id");
+      if (!nextPageId || nextPageId === selectedCustomerPageId) return;
+
+      try {
+        selectedCustomerPageId = nextPageId;
+        const select = document.getElementById("se-page-select");
+        if (select) select.value = selectedCustomerPageId;
+        await loadSelectedPage();
+      } catch (error) {
+        setStatus("Rendered navigation failed.");
+        setOutput({ ok: false, event: "rendered_nav_failed", message: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
     document.getElementById("se-copy-output")?.addEventListener("click", copyOutput);
   }
 
   async function boot() {
+    readQueryState();
     renderShell();
     bindEvents();
     renderCustomerFacingPage();

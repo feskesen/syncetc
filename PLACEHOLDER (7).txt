@@ -1,1 +1,0 @@
-Supabase Edge Function files go here.

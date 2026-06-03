@@ -1,6 +1,6 @@
 // ADMIN-PAGE-layout-designer-current.js
-// Internal Version: 2026-06-03-004
-// Purpose: Layout Designer v4 with persistent preview, scrollable controls, color pickers, and preview-side diagnostics.
+// Internal Version: 2026-06-03-005
+// Purpose: Layout Designer v5 with persistent preview, color pickers, preview-side diagnostics, and real enabled-page preview data.
 // Backend contract unchanged from v2. Uses update_active_style_profile and get_active_style_profile.
 // Backend diagnostics include Copy result button.
 
@@ -18,6 +18,8 @@
   let customers = [];
   let selectedCustomerId = "";
   let activeStyleProfile = null;
+  let customerPages = [];
+  let selectedPreviewPageId = "";
 
   const PRESETS = {
     "clean-blue": {
@@ -31,7 +33,7 @@
       effects_json: { shadows: "soft", borders: "standard", corners: "soft", gradients: "subtle", motion: "none", emphasis_style: "labels", surface_style: "panels" },
       media_json: { image_treatment: "inset", hero_media_treatment: "standard", background: "none", background_opacity: 0.18, background_overlay: "soft", background_blur: "none", mobile_background: "hide" },
       component_json: { show_global_banner_default: false, show_scroller_default: false, banner_style: "standard", cta_style: "standard", card_component_style: "standard", empty_state_style: "standard" },
-      preview_json: { preview_mode: "generic", preview_page_key: "home", use_real_page_data: false },
+      preview_json: { preview_mode: "generic", preview_page_key: "home", preview_customer_page_id: "", use_real_page_data: false },
       density: "normal",
       card_style: "standard",
       hero_style: "standard"
@@ -47,7 +49,7 @@
       effects_json: { shadows: "hairline", borders: "hairline", corners: "soft", gradients: "none", motion: "none", emphasis_style: "labels", surface_style: "panels" },
       media_json: { image_treatment: "inset", hero_media_treatment: "compact", background: "soft-tint", background_opacity: 0.12, background_overlay: "soft", background_blur: "none", mobile_background: "hide" },
       component_json: { show_global_banner_default: false, show_scroller_default: false, banner_style: "ops", cta_style: "compact", card_component_style: "panel", empty_state_style: "compact" },
-      preview_json: { preview_mode: "generic", preview_page_key: "aircraft", use_real_page_data: false },
+      preview_json: { preview_mode: "generic", preview_page_key: "aircraft", preview_customer_page_id: "", use_real_page_data: false },
       density: "compact",
       card_style: "panel",
       hero_style: "dashboard"
@@ -63,7 +65,7 @@
       effects_json: { shadows: "soft", borders: "standard", corners: "soft", gradients: "subtle", motion: "none", emphasis_style: "badges", surface_style: "soft-panels" },
       media_json: { image_treatment: "inset", hero_media_treatment: "wide", background: "soft-tint", background_opacity: 0.18, background_overlay: "green-soft", background_blur: "none", mobile_background: "soft-tint" },
       component_json: { show_global_banner_default: false, show_scroller_default: true, banner_style: "soft", cta_style: "rounded", card_component_style: "soft", empty_state_style: "friendly" },
-      preview_json: { preview_mode: "generic", preview_page_key: "aircraft", use_real_page_data: false },
+      preview_json: { preview_mode: "generic", preview_page_key: "aircraft", preview_customer_page_id: "", use_real_page_data: false },
       density: "normal",
       card_style: "soft",
       hero_style: "bold"
@@ -263,6 +265,7 @@
     const preview_json = {
       preview_mode: getValue("se-preview-mode", "generic"),
       preview_page_key: getValue("se-preview-page-key", "home"),
+      preview_customer_page_id: getValue("se-preview-customer-page-id", ""),
       use_real_page_data: getChecked("se-use-real-page-data")
     };
 
@@ -344,6 +347,9 @@
 
     setValue("se-preview-mode", preview.preview_mode || "generic");
     setValue("se-preview-page-key", preview.preview_page_key || "home");
+    if (preview.preview_customer_page_id) selectedPreviewPageId = String(preview.preview_customer_page_id);
+    renderPreviewPageSelect();
+    setValue("se-preview-customer-page-id", selectedPreviewPageId || "");
     setChecked("se-use-real-page-data", preview.use_real_page_data);
 
     setValue("se-density", profile?.density || "normal");
@@ -401,6 +407,58 @@
         </div>
       </div>
     `;
+  }
+
+  async function renderRealPagePreview() {
+    const useRealPageData = getChecked("se-use-real-page-data");
+    const previewMode = getValue("se-preview-mode", "generic");
+    const customerPageId = getValue("se-preview-customer-page-id", selectedPreviewPageId || "");
+
+    if (!useRealPageData && previewMode !== "real-page") {
+      renderPreview();
+      return;
+    }
+
+    renderPreview();
+
+    if (!customerPageId) return;
+
+    try {
+      const data = await loadPreviewPageData(customerPageId);
+      const page = data?.customer_page || {};
+      const settings = data?.page_settings || {};
+      const content = settings.content_json || {};
+      const labels = settings.labels_json || {};
+      const preview = document.getElementById("se-preview");
+      if (!preview) return;
+
+      const title = settings.title || content.hero_title || page.nav_label || "Customer Page Title";
+      const intro = settings.intro_text || content.hero_intro || "This is real saved page data rendered through the Layout Designer preview.";
+      const eyebrow = content.hero_eyebrow || page.page_key || "PAGE PREVIEW";
+      const primaryLabel = labels.primary_cta_label || "Primary Action";
+
+      const payload = getFormPayload();
+      const colors = payload.colors_json;
+      const effects = payload.effects_json;
+      const secondary = colors.brand_secondary || "#eef3f8";
+
+      const realNotice = `
+        <div style="border:1px solid ${secondary};background:#fff;border-radius:12px;padding:10px 12px;margin-bottom:12px;font-size:13px;color:${colors.text};">
+          Real page preview: <strong>${escapeHtml(page.nav_label || page.page_key || "Selected page")}</strong>
+        </div>
+      `;
+
+      preview.innerHTML = realNotice + preview.innerHTML.replace(
+        /<div style="display:inline-block;border:1px solid rgba\(255,255,255,.45\);border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900;margin-bottom:10px;">.*?<\/div>\s*<h2 style="margin:0 0 8px 0;font-size:.*?;line-height:1.1;">.*?<\/h2>\s*<p style="margin:0;line-height:1.5;">.*?<\/p>/s,
+        `<div style="display:inline-block;border:1px solid rgba(255,255,255,.45);border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900;margin-bottom:10px;">${escapeHtml(eyebrow || effects.emphasis_style || "PAGE PREVIEW")}</div>
+            <h2 style="margin:0 0 8px 0;font-size:29px;line-height:1.1;">${escapeHtml(title)}</h2>
+            <p style="margin:0;line-height:1.5;">${escapeHtml(intro)}</p>
+            <div style="margin-top:14px;display:inline-block;background:white;color:${colors.brand_primary};border-radius:999px;padding:8px 12px;font-weight:900;font-size:13px;">${escapeHtml(primaryLabel)}</div>`
+      );
+    } catch (error) {
+      setStatus("Real page preview failed.");
+      setOutput({ ok: false, event: "real_page_preview_failed", message: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   function controlSection(title, bodyHtml, open = false) {
@@ -624,7 +682,8 @@
               ${controlSection("Preview", `
                 ${selectField("se-preview-mode", "Preview Mode", ["generic","real-page"])}
                 ${selectField("se-preview-page-key", "Preview Page Key", ["home","aircraft","calendar","documents"])}
-                ${checkboxField("se-use-real-page-data", "Use real page data later")}
+                <label class="se-field"><span class="se-label">Enabled Page Preview</span><select id="se-preview-customer-page-id" class="se-select"><option value="">Load customer pages...</option></select></label>
+                ${checkboxField("se-use-real-page-data", "Use real page data")}
               `)}
 
             </div>
@@ -672,13 +731,57 @@
     `).join("");
   }
 
+  function renderPreviewPageSelect() {
+    const select = document.getElementById("se-preview-customer-page-id");
+    if (!select) return;
+
+    const activePages = customerPages.filter((page) => page.status !== "archived");
+    if (!activePages.length) {
+      select.innerHTML = `<option value="">No enabled pages yet</option>`;
+      return;
+    }
+
+    if (!selectedPreviewPageId || !activePages.some((page) => page.customer_page_id === selectedPreviewPageId)) {
+      selectedPreviewPageId = activePages[0].customer_page_id;
+    }
+
+    select.innerHTML = activePages.map((page) => {
+      const templateName = page.core_template_registry?.template_name || page.page_key || "Page";
+      return `<option value="${escapeHtml(page.customer_page_id)}" ${page.customer_page_id === selectedPreviewPageId ? "selected" : ""}>${escapeHtml(page.nav_label || templateName)} (${escapeHtml(page.page_key || "")})</option>`;
+    }).join("");
+  }
+
+  async function loadCustomerPages() {
+    if (!selectedCustomerId) {
+      customerPages = [];
+      selectedPreviewPageId = "";
+      renderPreviewPageSelect();
+      renderPreview();
+      return;
+    }
+
+    const result = await callCoreAdminAction("list_customer_pages", { customer_id: selectedCustomerId });
+    customerPages = Array.isArray(result.customer_pages) ? result.customer_pages : [];
+    renderPreviewPageSelect();
+    await renderRealPagePreview();
+  }
+
+  async function loadPreviewPageData(customerPageId) {
+    if (!customerPageId) return null;
+    const result = await callCoreAdminAction("get_customer_page_settings", { customer_page_id: customerPageId });
+    return result;
+  }
+
   async function loadCustomers() {
     setStatus("Loading customers...");
     const result = await callCoreAdminAction("list_customers");
     customers = Array.isArray(result.customers) ? result.customers : [];
     if (!selectedCustomerId && customers.length) selectedCustomerId = customers[0].customer_id;
     renderCustomerSelect();
-    if (selectedCustomerId) await loadActiveStyleProfile();
+    if (selectedCustomerId) {
+      await loadActiveStyleProfile();
+      await loadCustomerPages();
+    }
     setStatus("Customers loaded.");
   }
 
@@ -745,7 +848,11 @@
     document.getElementById("se-customer-select")?.addEventListener("change", async (event) => {
       try {
         selectedCustomerId = event.target.value || "";
-        if (selectedCustomerId) await loadActiveStyleProfile();
+        selectedPreviewPageId = "";
+        if (selectedCustomerId) {
+          await loadActiveStyleProfile();
+          await loadCustomerPages();
+        }
       } catch (error) {
         setStatus("Style profile load failed.");
         setOutput({ ok: false, event: "style_profile_load_failed", message: error instanceof Error ? error.message : String(error) });
@@ -771,11 +878,12 @@
         card_style: preset.card_style,
         hero_style: preset.hero_style
       });
+      renderRealPagePreview();
     });
 
     document.querySelectorAll("input, select").forEach((el) => {
-      el.addEventListener("input", renderPreview);
-      el.addEventListener("change", renderPreview);
+      el.addEventListener("input", renderRealPagePreview);
+      el.addEventListener("change", renderRealPagePreview);
     });
 
     ["se-brand-primary", "se-brand-secondary", "se-surface", "se-text"].forEach(bindColorPair);
@@ -788,7 +896,7 @@
       }
     });
 
-    document.getElementById("se-preview-refresh")?.addEventListener("click", renderPreview);
+    document.getElementById("se-preview-refresh")?.addEventListener("click", renderRealPagePreview);
     document.getElementById("se-copy-output")?.addEventListener("click", copyOutput);
   }
 

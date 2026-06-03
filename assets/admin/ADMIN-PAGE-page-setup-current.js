@@ -1,13 +1,13 @@
 // ADMIN-PAGE-page-setup-current.js
-// Internal Version: 2026-06-03-002
-// Purpose: Page Setup v2 showing expanded generic platform template inventory with ready/draft separation.
+// Internal Version: 2026-06-03-003
+// Purpose: Page Setup v3 showing registry status separately from honest build status.
 // Uses existing core-admin-action backend actions.
 // Actions used: list_customers, list_templates, list_customer_pages, enable_customer_page, archive_customer_page, recover_customer_page.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-002";
+  const VERSION = "2026-06-03-003";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -20,6 +20,7 @@
   let customerPages = [];
   let selectedCustomerId = "";
   let filterStatus = "usable";
+  let filterBuildStatus = "all";
   let filterCategory = "all";
   let filterSearch = "";
 
@@ -149,9 +150,27 @@
   }
 
   function getTemplateStatusLabel(template) {
-    if (template.status === "active") return "Ready";
-    if (template.status === "draft") return "Draft / future";
+    if (template.status === "active") return "Available";
+    if (template.status === "draft") return "Inventory draft";
     return template.status || "unknown";
+  }
+
+  function getBuildStatus(template) {
+    return template.build_status || "planned";
+  }
+
+  function getBuildStatusLabel(template) {
+    const status = getBuildStatus(template);
+    if (status === "planned") return "Planned";
+    if (status === "prototype") return "Prototype";
+    if (status === "implemented") return "Implemented";
+    if (status === "production") return "Production";
+    if (status === "deprecated") return "Deprecated";
+    return status;
+  }
+
+  function isActuallyUsable(template) {
+    return ["prototype", "implemented", "production"].includes(getBuildStatus(template));
   }
 
   function getTemplateCategory(template) {
@@ -196,9 +215,10 @@
       const status = template.status || "draft";
       const category = getTemplateCategory(template);
 
-      if (filterStatus === "ready" && status !== "active") return false;
+      if (filterStatus === "available" && status !== "active") return false;
       if (filterStatus === "draft" && status !== "draft") return false;
       if (filterStatus === "usable" && !["active", "draft"].includes(status)) return false;
+      if (filterBuildStatus !== "all" && getBuildStatus(template) !== filterBuildStatus) return false;
       if (filterCategory !== "all" && category !== filterCategory) return false;
 
       if (search) {
@@ -231,15 +251,17 @@
 
     const enabled = customerPages.filter(isEnabledPage).length;
     const archived = customerPages.filter((page) => page.status === "archived").length;
-    const readyTemplates = templates.filter((template) => template.status === "active").length;
-    const draftTemplates = templates.filter((template) => template.status === "draft").length;
+    const availableTemplates = templates.filter((template) => template.status === "active").length;
+    const plannedTemplates = templates.filter((template) => getBuildStatus(template) === "planned").length;
+    const prototypeTemplates = templates.filter((template) => getBuildStatus(template) === "prototype").length;
 
     el.innerHTML = `
       <div class="se-stat"><strong>${escapeHtml(getSelectedCustomer()?.display_name || "No customer")}</strong><span>Selected customer</span></div>
       <div class="se-stat"><strong>${enabled}</strong><span>Enabled pages</span></div>
       <div class="se-stat"><strong>${archived}</strong><span>Archived pages</span></div>
-      <div class="se-stat"><strong>${readyTemplates}</strong><span>Ready templates</span></div>
-      <div class="se-stat"><strong>${draftTemplates}</strong><span>Draft/future templates</span></div>
+      <div class="se-stat"><strong>${availableTemplates}</strong><span>Available in registry</span></div>
+      <div class="se-stat"><strong>${prototypeTemplates}</strong><span>Prototype builds</span></div>
+      <div class="se-stat"><strong>${plannedTemplates}</strong><span>Planned builds</span></div>
     `;
   }
 
@@ -286,17 +308,23 @@
     const category = getTemplateCategory(template);
     const complexity = getTemplateComplexity(template);
     const statusLabel = getTemplateStatusLabel(template);
+    const buildStatus = getBuildStatus(template);
+    const buildStatusLabel = getBuildStatusLabel(template);
     const requiresData = template.requires_module_data === true;
     const isDraft = template.status === "draft";
+    const actuallyUsable = isActuallyUsable(template);
 
     return `
-      <article class="se-template-card ${enabled ? "is-enabled" : ""} ${isDraft ? "is-draft" : ""}">
+      <article class="se-template-card ${enabled ? "is-enabled" : ""} ${isDraft ? "is-draft" : ""} build-${escapeHtml(buildStatus)}">
         <div class="se-template-head">
           <div>
             <h3>${escapeHtml(template.template_name || template.template_key)}</h3>
             <div class="se-key">${escapeHtml(template.template_key || "")}</div>
           </div>
-          <span class="se-pill ${isDraft ? "draft" : "ready"}">${escapeHtml(statusLabel)}</span>
+          <div class="se-pill-stack">
+            <span class="se-pill registry ${isDraft ? "draft" : "available"}">${escapeHtml(statusLabel)}</span>
+            <span class="se-pill build ${escapeHtml(buildStatus)}">${escapeHtml(buildStatusLabel)}</span>
+          </div>
         </div>
 
         <p>${escapeHtml(template.description || "No description yet.")}</p>
@@ -308,12 +336,12 @@
           ${requiresData ? `<span class="se-chip warning">module data</span>` : `<span class="se-chip">page settings only</span>`}
         </div>
 
-        <div class="se-template-notes">${escapeHtml(template.notes || "")}</div>
+        <div class="se-template-notes">${escapeHtml(template.build_notes || template.notes || "")}</div>
 
         <div class="se-template-actions">
           ${enabled ? `<span class="se-active-pill">Enabled</span>` : ""}
           ${archived ? `<button class="se-button secondary se-recover-template" data-page-id="${escapeHtml(page.customer_page_id)}" type="button">Recover</button>` : ""}
-          ${!enabled && !archived ? `<button class="se-button ${isDraft ? "secondary" : ""} se-enable-template" data-template-id="${escapeHtml(template.template_id)}" type="button">${isDraft ? "Enable draft" : "Enable"}</button>` : ""}
+          ${!enabled && !archived ? `<button class="se-button ${actuallyUsable ? "" : "secondary"} se-enable-template" data-template-id="${escapeHtml(template.template_id)}" type="button">${actuallyUsable ? "Enable" : "Enable planned/prototype"}</button>` : ""}
         </div>
       </article>
     `;
@@ -401,8 +429,11 @@
     const template = templates.find((item) => item.template_id === templateId);
     if (!template) return;
 
-    if (template.status === "draft") {
-      const ok = window.confirm("This is a draft/future template. Enable it for this customer anyway?");
+    if (!isActuallyUsable(template)) {
+      const ok = window.confirm("This template is not fully built yet. Enable it for planning/testing anyway?");
+      if (!ok) return;
+    } else if (template.status === "draft") {
+      const ok = window.confirm("This template is still an inventory draft. Enable it for this customer anyway?");
       if (!ok) return;
     }
 
@@ -460,13 +491,13 @@
         .se-button.danger{background:#fff;color:#9b1c1c;border-color:#9b1c1c;}
         .se-status{margin-top:12px;padding:12px;border-radius:10px;background:#eef3f8;border:1px solid #d6e0ec;color:#26344d;font-size:14px;white-space:pre-wrap;}
         .se-output{margin-top:14px;background:#101827;color:#e7edf6;border-radius:12px;padding:14px;overflow:auto;min-height:120px;max-height:260px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.45;}
-        .se-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:14px;}
+        .se-summary{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:14px;}
         .se-stat{background:#fbfcfe;border:1px solid #d9e0ea;border-radius:12px;padding:12px;}
         .se-stat strong{display:block;font-size:16px;color:#172033;margin-bottom:4px;}
         .se-stat span{display:block;color:#5d6b82;font-size:12px;}
         .se-page-row{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid #d9e0ea;border-radius:12px;padding:11px;margin-bottom:8px;background:#fbfcfe;}
         .se-meta,.se-key,.se-template-notes{font-size:12px;color:#5d6b82;line-height:1.35;margin-top:4px;}
-        .se-filter-row{display:grid;grid-template-columns:180px 180px minmax(0,1fr);gap:10px;margin-bottom:14px;}
+        .se-filter-row{display:grid;grid-template-columns:170px 170px 170px minmax(0,1fr);gap:10px;margin-bottom:14px;}
         .se-template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
         .se-template-card{border:1px solid #d9e0ea;border-radius:14px;background:#fff;padding:14px;display:flex;flex-direction:column;gap:10px;}
         .se-template-card.is-enabled{border-color:#2f7d32;background:#fbfffb;}
@@ -478,8 +509,14 @@
         .se-chip{display:inline-flex;border-radius:999px;background:#eef3f8;color:#26344d;padding:5px 8px;font-size:12px;font-weight:800;}
         .se-chip.warning{background:#fff0d9;color:#8a5200;}
         .se-pill{display:inline-flex;border-radius:999px;padding:6px 9px;font-size:12px;font-weight:900;}
-        .se-pill.ready,.se-active-pill{background:#edf7ed;color:#265c2b;}
+        .se-pill.available,.se-active-pill{background:#edf7ed;color:#265c2b;}
         .se-pill.draft{background:#fff0d9;color:#8a5200;}
+        .se-pill-stack{display:flex;flex-direction:column;gap:5px;align-items:flex-end;}
+        .se-pill.build.planned{background:#f1f3f6;color:#4b5565;}
+        .se-pill.build.prototype{background:#e9f1fb;color:#1f4f82;}
+        .se-pill.build.implemented{background:#edf7ed;color:#265c2b;}
+        .se-pill.build.production{background:#dff5e2;color:#16551d;}
+        .se-pill.build.deprecated{background:#f7e8e8;color:#8a1f1f;}
         .se-active-pill{display:inline-flex;border-radius:999px;padding:8px 10px;font-size:12px;font-weight:900;}
         .se-template-actions{margin-top:auto;display:flex;justify-content:flex-end;gap:8px;align-items:center;}
         .se-empty{border:1px dashed #c7d2e2;border-radius:12px;padding:16px;color:#5d6b82;background:#fbfcfe;}
@@ -489,7 +526,7 @@
       <main class="se-wrap">
         <section class="se-card">
           <h1 class="se-title">Page Setup</h1>
-          <p class="se-subtitle">Enable reusable SyncEtc templates for a customer. Draft/future templates are visible for platform planning but should be enabled deliberately.</p>
+          <p class="se-subtitle">Enable reusable SyncEtc templates for a customer. Registry status and build status are shown separately so unfinished modules are not mistaken for production-ready pages.</p>
           <div class="se-badge">ADMIN-PAGE-page-setup-current.js | ${escapeHtml(VERSION)}</div>
         </section>
 
@@ -532,12 +569,20 @@
               <h2 class="se-section-title">Template Inventory</h2>
               <div class="se-filter-row">
                 <label class="se-field"><span class="se-label">Status</span><select id="se-status-filter" class="se-select">
-                  <option value="usable">Ready + draft</option>
-                  <option value="ready">Ready only</option>
+                  <option value="usable">Available + inventory draft</option>
+                  <option value="available">Available in registry</option>
                   <option value="draft">Draft/future only</option>
                   <option value="all">All statuses</option>
                 </select></label>
                 <label class="se-field"><span class="se-label">Category</span><select id="se-category-filter" class="se-select"><option value="all">All categories</option></select></label>
+                <label class="se-field"><span class="se-label">Build</span><select id="se-build-filter" class="se-select">
+                  <option value="all">All builds</option>
+                  <option value="planned">Planned</option>
+                  <option value="prototype">Prototype</option>
+                  <option value="implemented">Implemented</option>
+                  <option value="production">Production</option>
+                  <option value="deprecated">Deprecated</option>
+                </select></label>
                 <label class="se-field"><span class="se-label">Search</span><input id="se-search-filter" class="se-input" type="search" placeholder="Search template, module, category, notes..."></label>
               </div>
               <div id="se-template-list" class="se-template-grid"><div class="se-empty">No templates loaded.</div></div>
@@ -606,6 +651,11 @@
 
     document.getElementById("se-category-filter")?.addEventListener("change", (event) => {
       filterCategory = event.target.value || "all";
+      renderTemplates();
+    });
+
+    document.getElementById("se-build-filter")?.addEventListener("change", (event) => {
+      filterBuildStatus = event.target.value || "all";
       renderTemplates();
     });
 

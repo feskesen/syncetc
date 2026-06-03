@@ -1,6 +1,6 @@
 // ADMIN-PAGE-renderer-preview-current.js
-// Internal Version: 2026-06-03-001
-// Purpose: Admin/test renderer preview that combines customer style profile + enabled page + page settings.
+// Internal Version: 2026-06-03-002
+// Purpose: Admin/test renderer preview with auto-render and no-enabled-pages fallback.
 // Backend contract: uses existing core-admin-action actions only.
 // Actions used: list_customers, list_customer_pages, get_active_style_profile, get_customer_page_settings.
 // Notes: This is a safe preview page, not final public routing.
@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-001";
+  const VERSION = "2026-06-03-002";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -318,24 +318,30 @@
 
     const style = getStyle();
     const vars = styleVars(style);
-    const { page, settings, template, content, labels, options, visibility } = getPageData();
+    const { page, settings, template, content, labels, options } = getPageData();
     const hideFields = getSchemaHideFields(selectedPageBundle?.editable_schema_json || template.editable_schema_json || {});
 
     const customerName = selectedCustomer?.display_name || "Customer";
     const navPages = customerPages.filter((item) => item.status !== "archived" && item.show_in_nav !== false);
+    const hasEnabledPages = customerPages.filter((item) => item.status !== "archived").length > 0;
+    const hasRealPage = Boolean(selectedPageBundle && selectedCustomerPageId);
 
-    const heroEyebrow = content.hero_eyebrow || template.template_category || page.page_key || "";
-    const title = settings.title || content.hero_title || page.nav_label || template.template_name || "Customer Page";
-    const intro = settings.intro_text || content.hero_intro || "";
+    const heroEyebrow = hasRealPage ? (content.hero_eyebrow || template.template_category || page.page_key || "") : "GENERAL STYLE PREVIEW";
+    const title = hasRealPage
+      ? (settings.title || content.hero_title || page.nav_label || template.template_name || "Customer Page")
+      : `${customerName} Site Preview`;
+    const intro = hasRealPage
+      ? (settings.intro_text || content.hero_intro || "")
+      : "No enabled pages are available for this customer yet. This fallback preview displays the active customer-wide style profile. Add pages in Page Setup to preview real page output.";
     const primaryLabel = labels.primary_cta_label || content.primary_cta_label || "";
     const primaryUrl = options.primary_cta_url || content.primary_cta_url || "";
     const secondaryLabel = labels.secondary_cta_label || content.secondary_cta_label || "";
     const secondaryUrl = options.secondary_cta_url || content.secondary_cta_url || "";
 
-    const renderEyebrow = shouldRenderField("hero_eyebrow", heroEyebrow, hideFields);
-    const renderIntro = shouldRenderField("hero_intro", intro, hideFields);
-    const renderPrimary = hasValue(primaryLabel) && hasValue(primaryUrl);
-    const renderSecondary = hasValue(secondaryLabel) && hasValue(secondaryUrl);
+    const renderEyebrow = hasRealPage ? shouldRenderField("hero_eyebrow", heroEyebrow, hideFields) : true;
+    const renderIntro = hasRealPage ? shouldRenderField("hero_intro", intro, hideFields) : true;
+    const renderPrimary = hasRealPage && hasValue(primaryLabel) && hasValue(primaryUrl);
+    const renderSecondary = hasRealPage && hasValue(secondaryLabel) && hasValue(secondaryUrl);
 
     const background = style.media.background === "soft-tint" ? style.colors.brandSecondary : "#f5f7fb";
 
@@ -362,6 +368,17 @@
           max-width: ${vars.width};
           margin: 0 auto;
           padding: 22px;
+        }
+
+        #se-rendered-page .sr-notice {
+          border: 1px solid var(--sr-primary);
+          color: var(--sr-primary);
+          background: rgba(255,255,255,.72);
+          border-radius: var(--sr-radius);
+          padding: 12px 14px;
+          margin-bottom: var(--sr-section-gap);
+          font-size: 14px;
+          font-weight: 800;
         }
 
         #se-rendered-page .sr-header {
@@ -552,15 +569,18 @@
       </style>
 
       <div class="sr-page">
+        ${!hasEnabledPages ? `<div class="sr-notice">No enabled pages for this customer yet. Showing general customer style preview. Add pages in Page Setup to preview real page output.</div>` : ""}
+        ${hasEnabledPages && !hasRealPage ? `<div class="sr-notice">Enabled pages exist, but no page is selected. Showing general customer style preview.</div>` : ""}
+
         <header class="sr-header">
           <div class="sr-brand">
             <div class="sr-logo">LOGO</div>
             <div>
               <h1>${escapeHtml(customerName)}</h1>
               <nav class="sr-nav" aria-label="Preview navigation">
-                ${navPages.map((navPage) => `
+                ${navPages.length ? navPages.map((navPage) => `
                   <span class="${navPage.customer_page_id === selectedCustomerPageId ? "active" : ""}">${escapeHtml(navPage.nav_label || navPage.page_key || "Page")}</span>
-                `).join("")}
+                `).join("") : `<span>Home</span><span>About</span><span>Contact</span>`}
               </nav>
             </div>
           </div>
@@ -579,7 +599,7 @@
           ` : ""}
         </section>
 
-        ${renderPageSpecificSection(page.page_key || template.template_key, style, vars)}
+        ${hasRealPage ? renderPageSpecificSection(page.page_key || template.template_key, style, vars) : renderGenericCards(style, vars)}
 
         <footer class="sr-footer">
           ${escapeHtml(customerName)} preview · Powered by SyncEtc
@@ -611,6 +631,7 @@
     const activePages = customerPages.filter((page) => page.status !== "archived");
 
     if (!activePages.length) {
+      selectedCustomerPageId = "";
       select.innerHTML = `<option value="">No enabled pages yet</option>`;
       return;
     }
@@ -655,7 +676,12 @@
 
     renderPageSelect();
 
-    if (selectedCustomerPageId) await loadSelectedPage();
+    if (selectedCustomerPageId) {
+      await loadSelectedPage();
+    } else {
+      selectedPageBundle = null;
+      renderCustomerFacingPage();
+    }
 
     setStatus("Customer style and pages loaded.");
   }
@@ -664,6 +690,7 @@
     if (!selectedCustomerPageId) {
       selectedPageBundle = null;
       renderCustomerFacingPage();
+      setStatus("No enabled page selected. Showing general customer style preview.");
       return;
     }
 
@@ -856,7 +883,7 @@
               <span class="se-label">Enabled Page</span>
               <select id="se-page-select" class="se-select"><option value="">Select customer first...</option></select>
             </label>
-            <button id="se-render" class="se-button">Render selected page</button>
+            <button id="se-render" class="se-button">Refresh rendered page</button>
           </div>
 
           <div id="se-status" class="se-status">Loading Supabase client...</div>

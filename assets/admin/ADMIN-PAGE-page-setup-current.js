@@ -1,11 +1,13 @@
 // ADMIN-PAGE-page-setup-current.js
-// Internal Version: 2026-06-03-001
-// Purpose: Page Setup v1. Select a customer and enable/archive/recover template-backed customer pages.
+// Internal Version: 2026-06-03-002
+// Purpose: Page Setup v2 showing expanded generic platform template inventory with ready/draft separation.
+// Uses existing core-admin-action backend actions.
+// Actions used: list_customers, list_templates, list_customer_pages, enable_customer_page, archive_customer_page, recover_customer_page.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-001";
+  const VERSION = "2026-06-03-002";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -17,6 +19,9 @@
   let templates = [];
   let customerPages = [];
   let selectedCustomerId = "";
+  let filterStatus = "usable";
+  let filterCategory = "all";
+  let filterSearch = "";
 
   function ensureRoot() {
     let root = document.getElementById(ROOT_ID);
@@ -48,10 +53,16 @@
     el.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   }
 
+  function getValue(id, fallback = "") {
+    const el = document.getElementById(id);
+    return el ? el.value : fallback;
+  }
+
   async function copyOutput() {
     const el = document.getElementById("se-output");
+    const text = el ? el.textContent || "" : "";
     try {
-      await navigator.clipboard.writeText(el ? el.textContent || "" : "");
+      await navigator.clipboard.writeText(text);
       setStatus("Backend result copied to clipboard.");
     } catch {
       setStatus("Copy failed. Select the backend result manually.");
@@ -71,8 +82,23 @@
     });
   }
 
+  async function initSupabase() {
+    await loadScript(SUPABASE_JS_URL);
+    if (!window.supabase || !window.supabase.createClient) throw new Error("Supabase JS did not load correctly.");
+
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+    window.syncetcSupabase = supabaseClient;
+
+    const { data } = await supabaseClient.auth.getSession();
+    if (data?.session?.user?.email) {
+      setStatus(`Logged in as ${data.session.user.email}`);
+      await loadAll();
+    } else {
+      setStatus("No active login session. Log in first.");
+    }
+  }
+
   async function getAccessToken() {
-    if (!supabaseClient) throw new Error("Supabase client is not ready.");
     const { data, error } = await supabaseClient.auth.getSession();
     if (error) throw error;
     const token = data?.session?.access_token;
@@ -82,6 +108,7 @@
 
   async function callCoreAdminAction(action, payload = {}) {
     const token = await getAccessToken();
+
     const response = await fetch(EDGE_FUNCTION_URL, {
       method: "POST",
       headers: {
@@ -91,147 +118,515 @@
       },
       body: JSON.stringify({ action, ...payload })
     });
+
     let result;
-    try { result = await response.json(); }
-    catch { result = { ok: false, error: "non_json_response", status: response.status, text: await response.text() }; }
+    try {
+      result = await response.json();
+    } catch {
+      result = { ok: false, error: "non_json_response", status: response.status, text: await response.text() };
+    }
+
     setOutput({ http_status: response.status, result });
-    if (!response.ok || result.ok === false) throw new Error(result.message || result.error || `HTTP ${response.status}`);
+
+    if (!response.ok || result.ok === false) {
+      const message = result.message || result.error || `HTTP ${response.status}`;
+      throw new Error(message);
+    }
+
     return result;
+  }
+
+  function getSelectedCustomer() {
+    return customers.find((customer) => customer.customer_id === selectedCustomerId) || null;
+  }
+
+  function getPageForTemplate(template) {
+    return customerPages.find((page) => page.template_id === template.template_id || page.template_key === template.template_key) || null;
+  }
+
+  function isEnabledPage(page) {
+    return Boolean(page && page.status !== "archived");
+  }
+
+  function getTemplateStatusLabel(template) {
+    if (template.status === "active") return "Ready";
+    if (template.status === "draft") return "Draft / future";
+    return template.status || "unknown";
+  }
+
+  function getTemplateCategory(template) {
+    return template.module_category || template.template_category || "uncategorized";
+  }
+
+  function getTemplateComplexity(template) {
+    return template.complexity_level || "simple";
+  }
+
+  function renderCustomers() {
+    const select = document.getElementById("se-customer-select");
+    if (!select) return;
+
+    if (!customers.length) {
+      select.innerHTML = `<option value="">No customers found</option>`;
+      return;
+    }
+
+    select.innerHTML = `<option value="">Select customer...</option>` + customers.map((customer) => `
+      <option value="${escapeHtml(customer.customer_id)}" ${customer.customer_id === selectedCustomerId ? "selected" : ""}>
+        ${escapeHtml(customer.display_name)} (${escapeHtml(customer.customer_key)})
+      </option>
+    `).join("");
+  }
+
+  function renderCategoryFilter() {
+    const select = document.getElementById("se-category-filter");
+    if (!select) return;
+
+    const categories = [...new Set(templates.map(getTemplateCategory).filter(Boolean))].sort();
+
+    select.innerHTML = `<option value="all">All categories</option>` + categories.map((category) => `
+      <option value="${escapeHtml(category)}" ${filterCategory === category ? "selected" : ""}>${escapeHtml(category)}</option>
+    `).join("");
+  }
+
+  function getFilteredTemplates() {
+    const search = filterSearch.trim().toLowerCase();
+
+    return templates.filter((template) => {
+      const status = template.status || "draft";
+      const category = getTemplateCategory(template);
+
+      if (filterStatus === "ready" && status !== "active") return false;
+      if (filterStatus === "draft" && status !== "draft") return false;
+      if (filterStatus === "usable" && !["active", "draft"].includes(status)) return false;
+      if (filterCategory !== "all" && category !== filterCategory) return false;
+
+      if (search) {
+        const haystack = [
+          template.template_key,
+          template.template_name,
+          template.description,
+          template.module_key,
+          template.module_category,
+          template.complexity_level,
+          template.access_default,
+          template.notes
+        ].join(" ").toLowerCase();
+
+        if (!haystack.includes(search)) return false;
+      }
+
+      return true;
+    }).sort((a, b) => {
+      const orderA = Number.isFinite(Number(a.sort_order)) ? Number(a.sort_order) : 9999;
+      const orderB = Number.isFinite(Number(b.sort_order)) ? Number(b.sort_order) : 9999;
+      if (orderA !== orderB) return orderA - orderB;
+      return String(a.template_key || "").localeCompare(String(b.template_key || ""));
+    });
+  }
+
+  function renderSummary() {
+    const el = document.getElementById("se-summary");
+    if (!el) return;
+
+    const enabled = customerPages.filter(isEnabledPage).length;
+    const archived = customerPages.filter((page) => page.status === "archived").length;
+    const readyTemplates = templates.filter((template) => template.status === "active").length;
+    const draftTemplates = templates.filter((template) => template.status === "draft").length;
+
+    el.innerHTML = `
+      <div class="se-stat"><strong>${escapeHtml(getSelectedCustomer()?.display_name || "No customer")}</strong><span>Selected customer</span></div>
+      <div class="se-stat"><strong>${enabled}</strong><span>Enabled pages</span></div>
+      <div class="se-stat"><strong>${archived}</strong><span>Archived pages</span></div>
+      <div class="se-stat"><strong>${readyTemplates}</strong><span>Ready templates</span></div>
+      <div class="se-stat"><strong>${draftTemplates}</strong><span>Draft/future templates</span></div>
+    `;
+  }
+
+  function renderEnabledPages() {
+    const el = document.getElementById("se-enabled-pages");
+    if (!el) return;
+
+    const enabledPages = customerPages.filter(isEnabledPage).sort((a, b) => {
+      const orderA = Number.isFinite(Number(a.nav_order)) ? Number(a.nav_order) : 9999;
+      const orderB = Number.isFinite(Number(b.nav_order)) ? Number(b.nav_order) : 9999;
+      if (orderA !== orderB) return orderA - orderB;
+      return String(a.nav_label || a.page_key || "").localeCompare(String(b.nav_label || b.page_key || ""));
+    });
+
+    if (!enabledPages.length) {
+      el.innerHTML = `<div class="se-empty">No enabled pages for this customer yet.</div>`;
+      return;
+    }
+
+    el.innerHTML = enabledPages.map((page) => `
+      <div class="se-page-row">
+        <div>
+          <strong>${escapeHtml(page.nav_label || page.page_key || "Page")}</strong>
+          <div class="se-meta">${escapeHtml(page.page_key || "")} · ${escapeHtml(page.status || "")} · ${page.show_in_nav === false ? "hidden from nav" : "shown in nav"}</div>
+        </div>
+        <button class="se-button danger se-archive-page" data-page-id="${escapeHtml(page.customer_page_id)}" type="button">Archive</button>
+      </div>
+    `).join("");
+
+    el.querySelectorAll(".se-archive-page").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const pageId = button.getAttribute("data-page-id");
+        if (!pageId) return;
+        if (!window.confirm("Archive this customer page?")) return;
+        await archiveCustomerPage(pageId);
+      });
+    });
+  }
+
+  function renderTemplateCard(template) {
+    const page = getPageForTemplate(template);
+    const enabled = isEnabledPage(page);
+    const archived = page?.status === "archived";
+    const category = getTemplateCategory(template);
+    const complexity = getTemplateComplexity(template);
+    const statusLabel = getTemplateStatusLabel(template);
+    const requiresData = template.requires_module_data === true;
+    const isDraft = template.status === "draft";
+
+    return `
+      <article class="se-template-card ${enabled ? "is-enabled" : ""} ${isDraft ? "is-draft" : ""}">
+        <div class="se-template-head">
+          <div>
+            <h3>${escapeHtml(template.template_name || template.template_key)}</h3>
+            <div class="se-key">${escapeHtml(template.template_key || "")}</div>
+          </div>
+          <span class="se-pill ${isDraft ? "draft" : "ready"}">${escapeHtml(statusLabel)}</span>
+        </div>
+
+        <p>${escapeHtml(template.description || "No description yet.")}</p>
+
+        <div class="se-chip-row">
+          <span class="se-chip">${escapeHtml(category)}</span>
+          <span class="se-chip">${escapeHtml(complexity)}</span>
+          <span class="se-chip">${escapeHtml(template.access_default || "public")}</span>
+          ${requiresData ? `<span class="se-chip warning">module data</span>` : `<span class="se-chip">page settings only</span>`}
+        </div>
+
+        <div class="se-template-notes">${escapeHtml(template.notes || "")}</div>
+
+        <div class="se-template-actions">
+          ${enabled ? `<span class="se-active-pill">Enabled</span>` : ""}
+          ${archived ? `<button class="se-button secondary se-recover-template" data-page-id="${escapeHtml(page.customer_page_id)}" type="button">Recover</button>` : ""}
+          ${!enabled && !archived ? `<button class="se-button ${isDraft ? "secondary" : ""} se-enable-template" data-template-id="${escapeHtml(template.template_id)}" type="button">${isDraft ? "Enable draft" : "Enable"}</button>` : ""}
+        </div>
+      </article>
+    `;
+  }
+
+  function renderTemplates() {
+    const el = document.getElementById("se-template-list");
+    if (!el) return;
+
+    const filtered = getFilteredTemplates();
+
+    if (!filtered.length) {
+      el.innerHTML = `<div class="se-empty">No templates match the current filters.</div>`;
+      return;
+    }
+
+    el.innerHTML = filtered.map(renderTemplateCard).join("");
+
+    el.querySelectorAll(".se-enable-template").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const templateId = button.getAttribute("data-template-id");
+        if (!templateId) return;
+        await enableTemplate(templateId);
+      });
+    });
+
+    el.querySelectorAll(".se-recover-template").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const pageId = button.getAttribute("data-page-id");
+        if (!pageId) return;
+        await recoverCustomerPage(pageId);
+      });
+    });
+  }
+
+  function renderAll() {
+    renderCustomers();
+    renderCategoryFilter();
+    renderSummary();
+    renderEnabledPages();
+    renderTemplates();
+  }
+
+  async function loadAll() {
+    setStatus("Loading customers and template inventory...");
+
+    const [customerResult, templateResult] = await Promise.all([
+      callCoreAdminAction("list_customers"),
+      callCoreAdminAction("list_templates")
+    ]);
+
+    customers = Array.isArray(customerResult.customers) ? customerResult.customers : [];
+    templates = Array.isArray(templateResult.templates) ? templateResult.templates : [];
+
+    if (!selectedCustomerId && customers.length) selectedCustomerId = customers[0].customer_id;
+
+    if (selectedCustomerId) {
+      await loadCustomerPages();
+    } else {
+      customerPages = [];
+    }
+
+    renderAll();
+    setStatus("Page Setup loaded.");
+  }
+
+  async function loadCustomerPages() {
+    if (!selectedCustomerId) {
+      customerPages = [];
+      renderAll();
+      return;
+    }
+
+    setStatus("Loading customer pages...");
+    const result = await callCoreAdminAction("list_customer_pages", { customer_id: selectedCustomerId });
+    customerPages = Array.isArray(result.customer_pages) ? result.customer_pages : [];
+  }
+
+  async function enableTemplate(templateId) {
+    if (!selectedCustomerId) {
+      setStatus("Select a customer first.");
+      return;
+    }
+
+    const template = templates.find((item) => item.template_id === templateId);
+    if (!template) return;
+
+    if (template.status === "draft") {
+      const ok = window.confirm("This is a draft/future template. Enable it for this customer anyway?");
+      if (!ok) return;
+    }
+
+    setStatus(`Enabling ${template.template_name || template.template_key}...`);
+
+    await callCoreAdminAction("enable_customer_page", {
+      customer_id: selectedCustomerId,
+      template_id: templateId,
+      nav_label: template.template_name || template.template_key,
+      page_key: template.template_key,
+      status: template.status === "active" ? "published" : "draft",
+      show_in_nav: template.status === "active"
+    });
+
+    await loadCustomerPages();
+    renderAll();
+    setStatus("Customer page enabled.");
+  }
+
+  async function archiveCustomerPage(customerPageId) {
+    setStatus("Archiving customer page...");
+    await callCoreAdminAction("archive_customer_page", { customer_page_id: customerPageId });
+    await loadCustomerPages();
+    renderAll();
+    setStatus("Customer page archived.");
+  }
+
+  async function recoverCustomerPage(customerPageId) {
+    setStatus("Recovering customer page...");
+    await callCoreAdminAction("recover_customer_page", { customer_page_id: customerPageId });
+    await loadCustomerPages();
+    renderAll();
+    setStatus("Customer page recovered.");
   }
 
   function renderShell() {
     ensureRoot().innerHTML = `
       <style>
-        #${ROOT_ID}{font-family:Arial,Helvetica,sans-serif;color:#172033;background:#f5f7fb;min-height:100vh;padding:28px 18px;box-sizing:border-box}#${ROOT_ID} *{box-sizing:border-box}.se-wrap{max-width:1180px;margin:0 auto}.se-card{background:#fff;border:1px solid #d9e0ea;border-radius:14px;box-shadow:0 8px 28px rgba(23,32,51,.08);padding:22px;margin-bottom:18px}.se-title{margin:0 0 6px 0;font-size:28px;line-height:1.15;letter-spacing:-.02em}.se-subtitle{margin:0;color:#5d6b82;font-size:15px;line-height:1.45}.se-badge{display:inline-flex;border-radius:999px;background:#e9f1fb;color:#1f4f82;font-size:12px;font-weight:700;padding:6px 10px;margin-top:10px}.se-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}.se-field{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}.se-label{font-size:13px;font-weight:700;color:#26344d}.se-input,.se-select{width:100%;border:1px solid #c7d2e2;border-radius:10px;padding:10px 11px;font-size:14px;background:#fff;color:#172033}.se-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}.se-button{border:1px solid #1f4f82;background:#1f4f82;color:#fff;border-radius:999px;padding:9px 14px;font-size:13px;font-weight:700;cursor:pointer}.se-button.secondary{background:#fff;color:#1f4f82}.se-button.warning{border-color:#8a5b16;background:#8a5b16}.se-button:disabled{opacity:.55;cursor:not-allowed}.se-status{margin-top:12px;padding:12px;border-radius:10px;background:#eef3f8;border:1px solid #d6e0ec;color:#26344d;font-size:14px;white-space:pre-wrap}.se-output{margin-top:14px;background:#101827;color:#e7edf6;border-radius:12px;padding:14px;overflow:auto;min-height:100px;max-height:320px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.45}.se-list{display:grid;gap:10px}.se-row{border:1px solid #d8e1ed;border-radius:12px;padding:12px;background:#fff}.se-row-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.se-name{font-size:16px;font-weight:800;margin:0 0 3px 0}.se-meta{color:#5d6b82;font-size:12px;line-height:1.4}.se-pill{display:inline-flex;align-items:center;border-radius:999px;background:#eef3f8;color:#26344d;font-size:11px;font-weight:800;padding:5px 8px;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}.se-pill.active{background:#e6f4ea;color:#17692e}.se-pill.archived{background:#f8e8e8;color:#8a2630}.se-empty{border:1px dashed #b8c6d8;border-radius:12px;padding:18px;color:#5d6b82;background:#fbfcfe}@media(max-width:880px){.se-grid{grid-template-columns:1fr}}
+        #${ROOT_ID}{font-family:Arial,Helvetica,sans-serif;color:#172033;background:#f5f7fb;min-height:100vh;padding:18px;box-sizing:border-box;}
+        #${ROOT_ID} *{box-sizing:border-box;}
+        .se-wrap{max-width:1320px;margin:0 auto;}
+        .se-card{background:#fff;border:1px solid #d9e0ea;border-radius:14px;box-shadow:0 8px 28px rgba(23,32,51,.08);padding:18px;margin-bottom:14px;}
+        .se-title{margin:0 0 6px 0;font-size:28px;line-height:1.15;letter-spacing:-.02em;}
+        .se-section-title{margin:0 0 14px 0;font-size:20px;line-height:1.2;}
+        .se-subtitle{margin:0;color:#5d6b82;font-size:14px;line-height:1.45;}
+        .se-badge{display:inline-flex;border-radius:999px;background:#e9f1fb;color:#1f4f82;font-size:12px;font-weight:700;padding:6px 10px;margin-top:10px;}
+        .se-controls{display:grid;grid-template-columns:1fr 1fr auto auto auto;gap:10px;align-items:end;}
+        .se-layout{display:grid;grid-template-columns:360px minmax(0,1fr);gap:14px;align-items:start;}
+        .se-sidebar{position:sticky;top:76px;}
+        .se-field{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
+        .se-label{font-size:13px;font-weight:800;color:#26344d;}
+        .se-input,.se-select{width:100%;border:1px solid #c7d2e2;border-radius:10px;padding:10px 11px;font-size:14px;background:#fff;color:#172033;}
+        .se-button{border:1px solid #1f4f82;background:#1f4f82;color:#fff;border-radius:999px;padding:10px 14px;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap;}
+        .se-button.secondary{background:#fff;color:#1f4f82;}
+        .se-button.danger{background:#fff;color:#9b1c1c;border-color:#9b1c1c;}
+        .se-status{margin-top:12px;padding:12px;border-radius:10px;background:#eef3f8;border:1px solid #d6e0ec;color:#26344d;font-size:14px;white-space:pre-wrap;}
+        .se-output{margin-top:14px;background:#101827;color:#e7edf6;border-radius:12px;padding:14px;overflow:auto;min-height:120px;max-height:260px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.45;}
+        .se-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:14px;}
+        .se-stat{background:#fbfcfe;border:1px solid #d9e0ea;border-radius:12px;padding:12px;}
+        .se-stat strong{display:block;font-size:16px;color:#172033;margin-bottom:4px;}
+        .se-stat span{display:block;color:#5d6b82;font-size:12px;}
+        .se-page-row{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid #d9e0ea;border-radius:12px;padding:11px;margin-bottom:8px;background:#fbfcfe;}
+        .se-meta,.se-key,.se-template-notes{font-size:12px;color:#5d6b82;line-height:1.35;margin-top:4px;}
+        .se-filter-row{display:grid;grid-template-columns:180px 180px minmax(0,1fr);gap:10px;margin-bottom:14px;}
+        .se-template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
+        .se-template-card{border:1px solid #d9e0ea;border-radius:14px;background:#fff;padding:14px;display:flex;flex-direction:column;gap:10px;}
+        .se-template-card.is-enabled{border-color:#2f7d32;background:#fbfffb;}
+        .se-template-card.is-draft{background:#fffdf7;}
+        .se-template-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
+        .se-template-head h3{margin:0;font-size:18px;line-height:1.2;}
+        .se-template-card p{margin:0;color:#39465c;line-height:1.45;font-size:14px;}
+        .se-chip-row{display:flex;flex-wrap:wrap;gap:6px;}
+        .se-chip{display:inline-flex;border-radius:999px;background:#eef3f8;color:#26344d;padding:5px 8px;font-size:12px;font-weight:800;}
+        .se-chip.warning{background:#fff0d9;color:#8a5200;}
+        .se-pill{display:inline-flex;border-radius:999px;padding:6px 9px;font-size:12px;font-weight:900;}
+        .se-pill.ready,.se-active-pill{background:#edf7ed;color:#265c2b;}
+        .se-pill.draft{background:#fff0d9;color:#8a5200;}
+        .se-active-pill{display:inline-flex;border-radius:999px;padding:8px 10px;font-size:12px;font-weight:900;}
+        .se-template-actions{margin-top:auto;display:flex;justify-content:flex-end;gap:8px;align-items:center;}
+        .se-empty{border:1px dashed #c7d2e2;border-radius:12px;padding:16px;color:#5d6b82;background:#fbfcfe;}
+        @media(max-width:1000px){.se-layout{grid-template-columns:1fr;}.se-sidebar{position:relative;top:auto;}.se-controls,.se-filter-row,.se-summary{grid-template-columns:1fr;}.se-template-grid{grid-template-columns:1fr;}}
       </style>
+
       <main class="se-wrap">
-        <section class="se-card"><h1 class="se-title">Page Setup</h1><p class="se-subtitle">Select a customer, then enable template-backed pages for that customer.</p><div class="se-badge">ADMIN-PAGE-page-setup-current.js | ${escapeHtml(VERSION)}</div></section>
-        <section class="se-card"><h2 class="se-title" style="font-size:22px">Platform Admin Login</h2><div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px"><label class="se-field"><span class="se-label">Email</span><input id="se-email" class="se-input" type="email" value="frank@syncetc.com" autocomplete="username"></label><label class="se-field"><span class="se-label">Password</span><input id="se-password" class="se-input" type="password" autocomplete="current-password"></label></div><div class="se-actions"><button id="se-login" class="se-button">Log in</button><button id="se-logout" class="se-button secondary">Log out</button><button id="se-refresh" class="se-button secondary">Refresh</button></div><div id="se-status" class="se-status">Loading Supabase client...</div></section>
-        <section class="se-card"><label class="se-field"><span class="se-label">Customer</span><select id="se-customer-select" class="se-select"><option value="">Log in and load customers...</option></select></label></section>
-        <section class="se-grid"><div class="se-card"><h2 class="se-title" style="font-size:22px">Available Templates</h2><div id="se-template-list" class="se-list" style="margin-top:14px"><div class="se-empty">No templates loaded yet.</div></div></div><div><section class="se-card"><h2 class="se-title" style="font-size:22px">Enabled Customer Pages</h2><div id="se-page-list" class="se-list" style="margin-top:14px"><div class="se-empty">Select a customer.</div></div></section><section class="se-card"><div class="se-row-top"><h2 class="se-title" style="font-size:22px">Last Backend Result</h2><button id="se-copy-output" class="se-button secondary">Copy result</button></div><pre id="se-output" class="se-output">{}</pre></section></div></section>
-      </main>`;
-  }
+        <section class="se-card">
+          <h1 class="se-title">Page Setup</h1>
+          <p class="se-subtitle">Enable reusable SyncEtc templates for a customer. Draft/future templates are visible for platform planning but should be enabled deliberately.</p>
+          <div class="se-badge">ADMIN-PAGE-page-setup-current.js | ${escapeHtml(VERSION)}</div>
+        </section>
 
-  function pageForTemplate(templateId) { return customerPages.find((page) => page.template_id === templateId); }
+        <section class="se-card">
+          <div class="se-controls">
+            <label class="se-field"><span class="se-label">Email</span><input id="se-email" class="se-input" type="email" value="frank@syncetc.com" autocomplete="username"></label>
+            <label class="se-field"><span class="se-label">Password</span><input id="se-password" class="se-input" type="password" autocomplete="current-password"></label>
+            <button id="se-login" class="se-button">Log in</button>
+            <button id="se-logout" class="se-button secondary">Log out</button>
+            <button id="se-refresh" class="se-button secondary">Refresh</button>
+          </div>
+          <div id="se-status" class="se-status">Loading Supabase client...</div>
+        </section>
 
-  function renderCustomerSelect() {
-    const select = document.getElementById("se-customer-select");
-    if (!select) return;
-    if (!customers.length) { select.innerHTML = `<option value="">No customers found</option>`; return; }
-    select.innerHTML = `<option value="">Select customer...</option>` + customers.map((c) => `<option value="${escapeHtml(c.customer_id)}" ${c.customer_id === selectedCustomerId ? "selected" : ""}>${escapeHtml(c.display_name)} (${escapeHtml(c.customer_key)})</option>`).join("");
-  }
+        <section class="se-layout">
+          <aside class="se-sidebar">
+            <section class="se-card">
+              <h2 class="se-section-title">Customer</h2>
+              <label class="se-field"><span class="se-label">Customer</span><select id="se-customer-select" class="se-select"><option value="">Log in and load customers...</option></select></label>
+            </section>
 
-  function renderTemplates() {
-    const list = document.getElementById("se-template-list");
-    if (!list) return;
-    if (!templates.length) { list.innerHTML = `<div class="se-empty">No templates found.</div>`; return; }
-    list.innerHTML = templates.map((t) => {
-      const p = pageForTemplate(t.template_id);
-      const enabled = p && p.status !== "archived";
-      const archived = p && p.status === "archived";
-      return `<div class="se-row"><div class="se-row-top"><div><p class="se-name">${escapeHtml(t.template_name)}</p><div class="se-meta">key: ${escapeHtml(t.template_key)}<br>renderer: ${escapeHtml(t.renderer_key)}</div></div>${enabled ? `<span class="se-pill active">enabled</span>` : archived ? `<span class="se-pill archived">archived</span>` : `<span class="se-pill">available</span>`}</div><div class="se-actions"><button class="se-button" data-enable-template-id="${escapeHtml(t.template_id)}" ${!selectedCustomerId || enabled ? "disabled" : ""}>${archived ? "Recover page" : "Enable page"}</button></div></div>`;
-    }).join("");
-    document.querySelectorAll("[data-enable-template-id]").forEach((button) => button.addEventListener("click", async () => enableTemplate(button.getAttribute("data-enable-template-id"))));
-  }
+            <section class="se-card">
+              <h2 class="se-section-title">Enabled Pages</h2>
+              <div id="se-enabled-pages"><div class="se-empty">No customer selected.</div></div>
+            </section>
 
-  function renderPages() {
-    const list = document.getElementById("se-page-list");
-    if (!list) return;
-    if (!selectedCustomerId) { list.innerHTML = `<div class="se-empty">Select a customer.</div>`; return; }
-    if (!customerPages.length) { list.innerHTML = `<div class="se-empty">No pages have been enabled for this customer yet.</div>`; return; }
-    list.innerHTML = customerPages.map((p) => {
-      const t = p.core_template_registry || {};
-      const statusClass = p.status === "active" ? "active" : p.status === "archived" ? "archived" : "";
-      return `<div class="se-row"><div class="se-row-top"><div><p class="se-name">${escapeHtml(p.nav_label || t.template_name || p.page_key)}</p><div class="se-meta">slug: ${escapeHtml(p.page_slug)}<br>template: ${escapeHtml(t.template_name || p.template_id)}<br>page id: ${escapeHtml(p.customer_page_id)}</div></div><span class="se-pill ${statusClass}">${escapeHtml(p.status)}</span></div><div class="se-actions">${p.status === "archived" ? `<button class="se-button secondary" data-recover-page-id="${escapeHtml(p.customer_page_id)}">Recover</button>` : `<button class="se-button warning" data-archive-page-id="${escapeHtml(p.customer_page_id)}">Archive</button>`}</div></div>`;
-    }).join("");
-    document.querySelectorAll("[data-archive-page-id]").forEach((button) => button.addEventListener("click", async () => archivePage(button.getAttribute("data-archive-page-id"))));
-    document.querySelectorAll("[data-recover-page-id]").forEach((button) => button.addEventListener("click", async () => recoverPage(button.getAttribute("data-recover-page-id"))));
-  }
+            <section class="se-card">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                <h2 class="se-section-title" style="margin:0;">Backend Result</h2>
+                <button id="se-copy-output" class="se-button secondary">Copy result</button>
+              </div>
+              <pre id="se-output" class="se-output">{}</pre>
+            </section>
+          </aside>
 
-  function renderAll() { renderCustomerSelect(); renderTemplates(); renderPages(); }
+          <section>
+            <section id="se-summary" class="se-summary"></section>
 
-  async function loadInitialData() {
-    setStatus("Loading customers and templates...");
-    const cr = await callCoreAdminAction("list_customers");
-    customers = Array.isArray(cr.customers) ? cr.customers : [];
-    const tr = await callCoreAdminAction("list_templates");
-    templates = Array.isArray(tr.templates) ? tr.templates : [];
-    if (!selectedCustomerId && customers.length) selectedCustomerId = customers[0].customer_id;
-    if (selectedCustomerId) await loadCustomerPages(false);
-    renderAll();
-    setStatus("Loaded Page Setup data.");
-  }
-
-  async function loadCustomerPages(shouldRender = true) {
-    if (!selectedCustomerId) { customerPages = []; if (shouldRender) renderAll(); return; }
-    const result = await callCoreAdminAction("list_customer_pages", { customer_id: selectedCustomerId });
-    customerPages = Array.isArray(result.customer_pages) ? result.customer_pages : [];
-    if (shouldRender) renderAll();
-  }
-
-  async function enableTemplate(templateId) {
-    if (!selectedCustomerId || !templateId) return;
-    setStatus("Enabling customer page...");
-    await callCoreAdminAction("enable_customer_page", { customer_id: selectedCustomerId, template_id: templateId });
-    await loadCustomerPages();
-    setStatus("Customer page enabled.");
-  }
-
-  async function archivePage(customerPageId) {
-    if (!customerPageId) return;
-    if (!window.confirm("Archive this customer page?")) return;
-    setStatus("Archiving customer page...");
-    await callCoreAdminAction("archive_customer_page", { customer_page_id: customerPageId });
-    await loadCustomerPages();
-    setStatus("Customer page archived.");
-  }
-
-  async function recoverPage(customerPageId) {
-    if (!customerPageId) return;
-    setStatus("Recovering customer page...");
-    await callCoreAdminAction("recover_customer_page", { customer_page_id: customerPageId });
-    await loadCustomerPages();
-    setStatus("Customer page recovered.");
+            <section class="se-card">
+              <h2 class="se-section-title">Template Inventory</h2>
+              <div class="se-filter-row">
+                <label class="se-field"><span class="se-label">Status</span><select id="se-status-filter" class="se-select">
+                  <option value="usable">Ready + draft</option>
+                  <option value="ready">Ready only</option>
+                  <option value="draft">Draft/future only</option>
+                  <option value="all">All statuses</option>
+                </select></label>
+                <label class="se-field"><span class="se-label">Category</span><select id="se-category-filter" class="se-select"><option value="all">All categories</option></select></label>
+                <label class="se-field"><span class="se-label">Search</span><input id="se-search-filter" class="se-input" type="search" placeholder="Search template, module, category, notes..."></label>
+              </div>
+              <div id="se-template-list" class="se-template-grid"><div class="se-empty">No templates loaded.</div></div>
+            </section>
+          </section>
+        </section>
+      </main>
+    `;
   }
 
   function bindEvents() {
     document.getElementById("se-login")?.addEventListener("click", async () => {
       try {
-        const email = document.getElementById("se-email")?.value || "";
-        const password = document.getElementById("se-password")?.value || "";
+        const email = getValue("se-email", "");
+        const password = getValue("se-password", "");
         setStatus("Logging in...");
         const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (error) throw error;
         setStatus(`Logged in as ${data?.user?.email || email}`);
-        await loadInitialData();
-      } catch (error) { setStatus("Login failed."); setOutput({ ok: false, event: "login_failed", message: error instanceof Error ? error.message : String(error) }); }
+        await loadAll();
+      } catch (error) {
+        setStatus("Login failed.");
+        setOutput({ ok: false, event: "login_failed", message: error instanceof Error ? error.message : String(error) });
+      }
     });
+
     document.getElementById("se-logout")?.addEventListener("click", async () => {
       try {
         const { error } = await supabaseClient.auth.signOut();
         if (error) throw error;
-        customers = []; templates = []; customerPages = []; selectedCustomerId = ""; renderAll(); setStatus("Logged out.");
-      } catch (error) { setOutput({ ok: false, event: "logout_failed", message: error instanceof Error ? error.message : String(error) }); }
+        customers = [];
+        templates = [];
+        customerPages = [];
+        selectedCustomerId = "";
+        renderAll();
+        setStatus("Logged out.");
+      } catch (error) {
+        setOutput({ ok: false, event: "logout_failed", message: error instanceof Error ? error.message : String(error) });
+      }
     });
-    document.getElementById("se-refresh")?.addEventListener("click", async () => { try { await loadInitialData(); } catch (error) { setStatus("Refresh failed."); setOutput({ ok: false, event: "refresh_failed", message: error instanceof Error ? error.message : String(error) }); } });
-    document.getElementById("se-customer-select")?.addEventListener("change", async (event) => { try { selectedCustomerId = event.target.value || ""; await loadCustomerPages(); } catch (error) { setStatus("Customer page load failed."); setOutput({ ok: false, event: "load_customer_pages_failed", message: error instanceof Error ? error.message : String(error) }); } });
+
+    document.getElementById("se-refresh")?.addEventListener("click", async () => {
+      try { await loadAll(); }
+      catch (error) {
+        setStatus("Refresh failed.");
+        setOutput({ ok: false, event: "refresh_failed", message: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    document.getElementById("se-customer-select")?.addEventListener("change", async (event) => {
+      try {
+        selectedCustomerId = event.target.value || "";
+        await loadCustomerPages();
+        renderAll();
+        setStatus("Customer pages loaded.");
+      } catch (error) {
+        setStatus("Customer page load failed.");
+        setOutput({ ok: false, event: "customer_page_load_failed", message: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    document.getElementById("se-status-filter")?.addEventListener("change", (event) => {
+      filterStatus = event.target.value || "usable";
+      renderTemplates();
+    });
+
+    document.getElementById("se-category-filter")?.addEventListener("change", (event) => {
+      filterCategory = event.target.value || "all";
+      renderTemplates();
+    });
+
+    document.getElementById("se-search-filter")?.addEventListener("input", (event) => {
+      filterSearch = event.target.value || "";
+      renderTemplates();
+    });
+
     document.getElementById("se-copy-output")?.addEventListener("click", copyOutput);
   }
 
-  async function initSupabase() {
-    await loadScript(SUPABASE_JS_URL);
-    if (!window.supabase || !window.supabase.createClient) throw new Error("Supabase JS did not load correctly.");
-    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
-    window.syncetcSupabase = supabaseClient;
-    const { data } = await supabaseClient.auth.getSession();
-    if (data?.session?.user?.email) { setStatus(`Logged in as ${data.session.user.email}`); await loadInitialData(); }
-    else setStatus("No active login session. Log in first.");
-  }
-
   async function boot() {
-    renderShell(); bindEvents(); renderAll();
-    try { await initSupabase(); }
-    catch (error) { setStatus("Failed to initialize Supabase client."); setOutput({ ok: false, event: "supabase_init_failed", message: error instanceof Error ? error.message : String(error) }); }
+    renderShell();
+    bindEvents();
+
+    try {
+      await initSupabase();
+    } catch (error) {
+      setStatus("Failed to initialize Supabase client.");
+      setOutput({ ok: false, event: "supabase_init_failed", message: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);

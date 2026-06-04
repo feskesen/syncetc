@@ -1,5 +1,5 @@
 // ADMIN-PAGE-page-setup-current.js
-// Internal Version: 2026-06-03-003
+// Internal Version: 2026-06-04-003
 // Purpose: Page Setup v3 showing registry status separately from honest build status.
 // Uses existing core-admin-action backend actions.
 // Actions used: list_customers, list_templates, list_customer_pages, enable_customer_page, archive_customer_page, recover_customer_page.
@@ -7,7 +7,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-003";
+  const VERSION = "2026-06-04-003";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -15,6 +15,8 @@
   const ROOT_ID = "syncetc-page-setup-root";
 
   let supabaseClient = null;
+  let isAuthenticated = false;
+  let authenticatedEmail = "";
   let customers = [];
   let templates = [];
   let customerPages = [];
@@ -70,6 +72,42 @@
     }
   }
 
+
+  function setAuthGate(authenticated, email = "") {
+    isAuthenticated = !!authenticated;
+    authenticatedEmail = isAuthenticated ? String(email || "") : "";
+
+    const root = ensureRoot();
+    root.dataset.authenticated = isAuthenticated ? "true" : "false";
+
+    root.querySelectorAll("[data-auth-required='true']").forEach((el) => {
+      el.style.display = isAuthenticated ? "" : "none";
+    });
+
+    const notice = document.getElementById("se-auth-gate-notice");
+    if (notice) notice.style.display = isAuthenticated ? "none" : "block";
+
+    const authLabel = document.getElementById("se-auth-label");
+    if (authLabel) {
+      authLabel.textContent = isAuthenticated
+        ? `Authenticated: ${authenticatedEmail || "active session"}`
+        : "Not authenticated";
+      authLabel.className = `se-badge ${isAuthenticated ? "ok" : "warn"}`;
+    }
+
+    if (window.SyncEtcAdminShell && typeof window.SyncEtcAdminShell.setAuthState === "function") {
+      window.SyncEtcAdminShell.setAuthState({
+        required: true,
+        authenticated: isAuthenticated,
+        email: authenticatedEmail
+      });
+    }
+  }
+
+  function showAuthRequiredMessage(pageName = "this admin page") {
+    setStatus(`Log in before using ${pageName}.`);
+  }
+
   function loadScript(src) {
     return new Promise((resolve, reject) => {
       const existing = document.querySelector(`script[src="${src}"]`);
@@ -92,9 +130,11 @@
 
     const { data } = await supabaseClient.auth.getSession();
     if (data?.session?.user?.email) {
+      setAuthGate(true, data.session.user.email);
       setStatus(`Logged in as ${data.session.user.email}`);
       await loadAll();
     } else {
+      setAuthGate(false);
       setStatus("No active login session. Log in first.");
     }
   }
@@ -103,7 +143,10 @@
     const { data, error } = await supabaseClient.auth.getSession();
     if (error) throw error;
     const token = data?.session?.access_token;
-    if (!token) throw new Error("No active Supabase Auth session. Log in first.");
+    if (!token) {
+      setAuthGate(false);
+      throw new Error("No active Supabase Auth session. Log in first.");
+    }
     return token;
   }
 
@@ -521,12 +564,17 @@
         .se-template-actions{margin-top:auto;display:flex;justify-content:flex-end;gap:8px;align-items:center;}
         .se-empty{border:1px dashed #c7d2e2;border-radius:12px;padding:16px;color:#5d6b82;background:#fbfcfe;}
         @media(max-width:1000px){.se-layout{grid-template-columns:1fr;}.se-sidebar{position:relative;top:auto;}.se-controls,.se-filter-row,.se-summary{grid-template-columns:1fr;}.se-template-grid{grid-template-columns:1fr;}}
+
+        .se-badge.warn{background:#fff0d9;color:#8a5200;}
+        .se-badge.ok{background:#edf7ed;color:#265c2b;}
+        .se-auth-gate{display:block;}
       </style>
 
       <main class="se-wrap">
         <section class="se-card">
           <h1 class="se-title">Page Setup</h1>
           <p class="se-subtitle">Enable reusable SyncEtc templates for a customer. Registry status and build status are shown separately so unfinished modules are not mistaken for production-ready pages.</p>
+          <div id="se-auth-label" class="se-badge warn">Not authenticated</div>
           <div class="se-badge">ADMIN-PAGE-page-setup-current.js | ${escapeHtml(VERSION)}</div>
         </section>
 
@@ -541,7 +589,13 @@
           <div id="se-status" class="se-status">Loading Supabase client...</div>
         </section>
 
-        <section class="se-layout">
+
+        <section id="se-auth-gate-notice" class="se-card se-auth-gate">
+          <h2 class="se-section-title">Login required</h2>
+          <p class="se-subtitle">This admin page is hidden until a valid platform-admin session is active. Backend permissions still enforce access; this gate prevents accidental viewing/editing while logged out.</p>
+        </section>
+
+        <section class="se-layout" data-auth-required="true">
           <aside class="se-sidebar">
             <section class="se-card">
               <h2 class="se-section-title">Customer</h2>
@@ -601,6 +655,7 @@
         setStatus("Logging in...");
         const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (error) throw error;
+        setAuthGate(true, data?.user?.email || email);
         setStatus(`Logged in as ${data?.user?.email || email}`);
         await loadAll();
       } catch (error) {
@@ -618,6 +673,7 @@
         customerPages = [];
         selectedCustomerId = "";
         renderAll();
+        setAuthGate(false);
         setStatus("Logged out.");
       } catch (error) {
         setOutput({ ok: false, event: "logout_failed", message: error instanceof Error ? error.message : String(error) });
@@ -669,6 +725,7 @@
 
   async function boot() {
     renderShell();
+    setAuthGate(false);
     bindEvents();
 
     try {

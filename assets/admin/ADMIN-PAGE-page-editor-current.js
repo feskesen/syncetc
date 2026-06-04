@@ -1,5 +1,5 @@
 // ADMIN-PAGE-page-editor-current.js
-// Internal Version: 2026-06-03-005
+// Internal Version: 2026-06-04-005
 // Purpose: Clean Page Editor with page-specific feature toggles, auto-load, save buttons, and unsaved-change protection.
 // Uses existing core-admin-action backend actions.
 // Actions used: list_customers, list_customer_pages, get_customer_page_settings, update_customer_page, update_page_settings.
@@ -7,7 +7,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-005";
+  const VERSION = "2026-06-04-005";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -15,6 +15,8 @@
   const ROOT_ID = "syncetc-page-editor-root";
 
   let supabaseClient = null;
+  let isAuthenticated = false;
+  let authenticatedEmail = "";
   let customers = [];
   let customerPages = [];
   let selectedCustomerId = "";
@@ -111,6 +113,42 @@
     }
   }
 
+
+  function setAuthGate(authenticated, email = "") {
+    isAuthenticated = !!authenticated;
+    authenticatedEmail = isAuthenticated ? String(email || "") : "";
+
+    const root = ensureRoot();
+    root.dataset.authenticated = isAuthenticated ? "true" : "false";
+
+    root.querySelectorAll("[data-auth-required='true']").forEach((el) => {
+      el.style.display = isAuthenticated ? "" : "none";
+    });
+
+    const notice = document.getElementById("se-auth-gate-notice");
+    if (notice) notice.style.display = isAuthenticated ? "none" : "block";
+
+    const authLabel = document.getElementById("se-auth-label");
+    if (authLabel) {
+      authLabel.textContent = isAuthenticated
+        ? `Authenticated: ${authenticatedEmail || "active session"}`
+        : "Not authenticated";
+      authLabel.className = `se-badge ${isAuthenticated ? "ok" : "warn"}`;
+    }
+
+    if (window.SyncEtcAdminShell && typeof window.SyncEtcAdminShell.setAuthState === "function") {
+      window.SyncEtcAdminShell.setAuthState({
+        required: true,
+        authenticated: isAuthenticated,
+        email: authenticatedEmail
+      });
+    }
+  }
+
+  function showAuthRequiredMessage(pageName = "this admin page") {
+    setStatus(`Log in before using ${pageName}.`);
+  }
+
   function loadScript(src) {
     return new Promise((resolve, reject) => {
       const existing = document.querySelector(`script[src="${src}"]`);
@@ -133,9 +171,11 @@
 
     const { data } = await supabaseClient.auth.getSession();
     if (data?.session?.user?.email) {
+      setAuthGate(true, data.session.user.email);
       setStatus(`Logged in as ${data.session.user.email}`);
       await loadCustomers();
     } else {
+      setAuthGate(false);
       setStatus("No active login session. Log in first.");
     }
   }
@@ -144,7 +184,10 @@
     const { data, error } = await supabaseClient.auth.getSession();
     if (error) throw error;
     const token = data?.session?.access_token;
-    if (!token) throw new Error("No active Supabase Auth session. Log in first.");
+    if (!token) {
+      setAuthGate(false);
+      throw new Error("No active Supabase Auth session. Log in first.");
+    }
     return token;
   }
 
@@ -406,12 +449,17 @@
         .se-note{font-size:12px;line-height:1.35;color:#5d6b82;margin-top:8px;}
         .se-empty{border:1px dashed #c7d2e2;border-radius:12px;padding:20px;color:#5d6b82;background:#fbfcfe;}
         @media(max-width:900px){.se-layout{grid-template-columns:1fr;}.se-sidebar{position:relative;top:auto;}.se-controls{grid-template-columns:1fr;}}
+
+        .se-badge.warn{background:#fff0d9;color:#8a5200;}
+        .se-badge.ok{background:#edf7ed;color:#265c2b;}
+        .se-auth-gate{display:block;}
       </style>
 
       <main class="se-wrap">
         <section class="se-header-card">
           <h1 class="se-title">Page Editor</h1>
           <p class="se-subtitle">Edit page-specific text, settings, and feature/component visibility. Customer-wide style remains in Layout Designer.</p>
+          <div id="se-auth-label" class="se-badge warn">Not authenticated</div>
           <div class="se-badge">ADMIN-PAGE-page-editor-current.js | ${escapeHtml(VERSION)}</div>
         </section>
 
@@ -426,7 +474,13 @@
           <div id="se-status" class="se-status">Loading Supabase client...</div>
         </section>
 
-        <section class="se-layout">
+
+        <section id="se-auth-gate-notice" class="se-card se-auth-gate">
+          <h2 class="se-section-title">Login required</h2>
+          <p class="se-subtitle">This admin page is hidden until a valid platform-admin session is active. Backend permissions still enforce access; this gate prevents accidental viewing/editing while logged out.</p>
+        </section>
+
+        <section class="se-layout" data-auth-required="true">
           <aside class="se-sidebar">
             <section class="se-card">
               <h2 class="se-section-title">Select Page</h2>
@@ -608,6 +662,7 @@
         setStatus("Logging in...");
         const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (error) throw error;
+        setAuthGate(true, data?.user?.email || email);
         setStatus(`Logged in as ${data?.user?.email || email}`);
         await loadCustomers();
       } catch (error) {
@@ -628,6 +683,7 @@
         renderCustomers();
         renderPages();
         clearEditor();
+        setAuthGate(false);
         setStatus("Logged out.");
       } catch (error) {
         setOutput({ ok: false, event: "logout_failed", message: error instanceof Error ? error.message : String(error) });
@@ -709,6 +765,7 @@
 
   async function boot() {
     renderShell();
+    setAuthGate(false);
     bindEvents();
 
     try {

@@ -1,12 +1,12 @@
 // ADMIN-PAGE-core-admin-test-current.js
-// Internal Version: 2026-06-03-002
+// Internal Version: 2026-06-04-002
 // Purpose: First frontend test harness for Supabase Auth + core-admin-action Edge Function.
 // Live filename is stable. Track versions internally, in Git history, and in local saved copies.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-002";
+  const VERSION = "2026-06-04-002";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -15,6 +15,8 @@
   const SUPABASE_JS_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
 
   let supabaseClient = null;
+  let isAuthenticated = false;
+  let authenticatedEmail = "";
 
   function ensureRoot() {
     let root = document.getElementById(ROOT_ID);
@@ -184,6 +186,10 @@
             padding: 18px;
           }
         }
+
+        .se-badge.warn{background:#fff0d9;color:#8a5200;}
+        .se-badge.ok{background:#edf7ed;color:#265c2b;}
+        .se-auth-gate{display:block;}
       </style>
 
       <main class="se-wrap">
@@ -192,6 +198,7 @@
           <p class="se-subtitle">
             Tests Supabase Auth, JWT-protected Edge Function access, platform-admin authorization, and basic backend actions.
           </p>
+          <div id="se-auth-label" class="se-badge warn">Not authenticated</div>
           <div class="se-badge">ADMIN-PAGE-core-admin-test-current.js | ${escapeHtml(VERSION)}</div>
         </section>
 
@@ -220,11 +227,17 @@
           <div id="se-status" class="se-status">Loading Supabase client...</div>
         </section>
 
+
+        <section id="se-auth-gate-notice" class="se-card se-auth-gate">
+          <h2 class="se-section-title">Login required</h2>
+          <p class="se-subtitle">This admin page is hidden until a valid platform-admin session is active. Backend permissions still enforce access; this gate prevents accidental viewing/editing while logged out.</p>
+        </section>
+
         <section class="se-card">
           <h2 class="se-title" style="font-size:22px;">Edge Function Tests</h2>
           <p class="se-subtitle">These calls require JWT verification plus an active platform_admin row.</p>
 
-          <div class="se-actions">
+          <div class="se-actions" data-auth-required="true">
             <button id="se-ping" class="se-button">Ping Edge Function</button>
             <button id="se-list-customers" class="se-button secondary">List customers</button>
             <button id="se-list-templates" class="se-button secondary">List templates</button>
@@ -245,6 +258,42 @@
     const el = document.getElementById("se-output");
     if (!el) return;
     el.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  }
+
+
+  function setAuthGate(authenticated, email = "") {
+    isAuthenticated = !!authenticated;
+    authenticatedEmail = isAuthenticated ? String(email || "") : "";
+
+    const root = ensureRoot();
+    root.dataset.authenticated = isAuthenticated ? "true" : "false";
+
+    root.querySelectorAll("[data-auth-required='true']").forEach((el) => {
+      el.style.display = isAuthenticated ? "" : "none";
+    });
+
+    const notice = document.getElementById("se-auth-gate-notice");
+    if (notice) notice.style.display = isAuthenticated ? "none" : "block";
+
+    const authLabel = document.getElementById("se-auth-label");
+    if (authLabel) {
+      authLabel.textContent = isAuthenticated
+        ? `Authenticated: ${authenticatedEmail || "active session"}`
+        : "Not authenticated";
+      authLabel.className = `se-badge ${isAuthenticated ? "ok" : "warn"}`;
+    }
+
+    if (window.SyncEtcAdminShell && typeof window.SyncEtcAdminShell.setAuthState === "function") {
+      window.SyncEtcAdminShell.setAuthState({
+        required: true,
+        authenticated: isAuthenticated,
+        email: authenticatedEmail
+      });
+    }
+  }
+
+  function showAuthRequiredMessage(pageName = "this admin page") {
+    setStatus(`Log in before using ${pageName}.`);
   }
 
   function loadScript(src) {
@@ -277,6 +326,7 @@
     const { data } = await supabaseClient.auth.getSession();
 
     if (data?.session?.user?.email) {
+      setAuthGate(true, data.session.user.email);
       setStatus(`Logged in as ${data.session.user.email}`);
     } else {
       setStatus("No active login session.");
@@ -290,7 +340,10 @@
     if (error) throw error;
 
     const token = data?.session?.access_token;
-    if (!token) throw new Error("No active Supabase Auth session. Log in first.");
+    if (!token) {
+      setAuthGate(false);
+      throw new Error("No active Supabase Auth session. Log in first.");
+    }
 
     return token;
   }
@@ -339,6 +392,7 @@
         const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (error) throw error;
 
+        setAuthGate(true, data?.user?.email || email);
         setStatus(`Logged in as ${data?.user?.email || email}`);
         setOutput({ ok: true, event: "login", user_email: data?.user?.email || email });
       } catch (error) {
@@ -355,6 +409,7 @@
       try {
         const { error } = await supabaseClient.auth.signOut();
         if (error) throw error;
+        setAuthGate(false);
         setStatus("Logged out.");
         setOutput({ ok: true, event: "logout" });
       } catch (error) {
@@ -438,6 +493,7 @@
 
   async function boot() {
     renderShell();
+    setAuthGate(false);
     bindEvents();
 
     try {

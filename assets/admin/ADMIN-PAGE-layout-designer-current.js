@@ -1,5 +1,5 @@
 // ADMIN-PAGE-layout-designer-current.js
-// Internal Version: 2026-06-03-007
+// Internal Version: 2026-06-04-007
 // Purpose: Layout Designer v7 cleanup: corrected visible version, filtered history restore list, reset unsaved changes, and clearer preset/profile help text.
 // Backend contract unchanged from v2. Uses update_active_style_profile and get_active_style_profile.
 // Backend diagnostics include Copy result button.
@@ -7,7 +7,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-03-007";
+  const VERSION = "2026-06-04-007";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -15,6 +15,8 @@
   const ROOT_ID = "syncetc-layout-designer-root";
 
   let supabaseClient = null;
+  let isAuthenticated = false;
+  let authenticatedEmail = "";
   let customers = [];
   let selectedCustomerId = "";
   let activeStyleProfile = null;
@@ -117,6 +119,42 @@
     }
   }
 
+
+  function setAuthGate(authenticated, email = "") {
+    isAuthenticated = !!authenticated;
+    authenticatedEmail = isAuthenticated ? String(email || "") : "";
+
+    const root = ensureRoot();
+    root.dataset.authenticated = isAuthenticated ? "true" : "false";
+
+    root.querySelectorAll("[data-auth-required='true']").forEach((el) => {
+      el.style.display = isAuthenticated ? "" : "none";
+    });
+
+    const notice = document.getElementById("se-auth-gate-notice");
+    if (notice) notice.style.display = isAuthenticated ? "none" : "block";
+
+    const authLabel = document.getElementById("se-auth-label");
+    if (authLabel) {
+      authLabel.textContent = isAuthenticated
+        ? `Authenticated: ${authenticatedEmail || "active session"}`
+        : "Not authenticated";
+      authLabel.className = `se-badge ${isAuthenticated ? "ok" : "warn"}`;
+    }
+
+    if (window.SyncEtcAdminShell && typeof window.SyncEtcAdminShell.setAuthState === "function") {
+      window.SyncEtcAdminShell.setAuthState({
+        required: true,
+        authenticated: isAuthenticated,
+        email: authenticatedEmail
+      });
+    }
+  }
+
+  function showAuthRequiredMessage(pageName = "this admin page") {
+    setStatus(`Log in before using ${pageName}.`);
+  }
+
   function loadScript(src) {
     return new Promise((resolve, reject) => {
       const existing = document.querySelector(`script[src="${src}"]`);
@@ -139,9 +177,11 @@
 
     const { data } = await supabaseClient.auth.getSession();
     if (data?.session?.user?.email) {
+      setAuthGate(true, data.session.user.email);
       setStatus(`Logged in as ${data.session.user.email}`);
       await loadCustomers();
     } else {
+      setAuthGate(false);
       setStatus("No active login session. Log in first.");
     }
   }
@@ -150,7 +190,10 @@
     const { data, error } = await supabaseClient.auth.getSession();
     if (error) throw error;
     const token = data?.session?.access_token;
-    if (!token) throw new Error("No active Supabase Auth session. Log in first.");
+    if (!token) {
+      setAuthGate(false);
+      throw new Error("No active Supabase Auth session. Log in first.");
+    }
     return token;
   }
 
@@ -627,24 +670,36 @@
           .se-main{grid-template-columns:1fr;}
           .se-controls,.se-preview-panel{position:relative;top:auto;max-height:none;}
         }
+
+        .se-badge.warn{background:#fff0d9;color:#8a5200;}
+        .se-badge.ok{background:#edf7ed;color:#265c2b;}
+        .se-auth-gate{display:block;}
       </style>
 
       <main class="se-wrap">
         <section class="se-header-card">
           <h1 class="se-title">Layout Designer</h1>
           <p class="se-subtitle">Customer-wide style profile controls. System presets are starting points; saved design profiles are reusable customer designs.</p>
+          <div id="se-auth-label" class="se-badge warn">Not authenticated</div>
           <div class="se-badge">ADMIN-PAGE-layout-designer-current.js | ${escapeHtml(VERSION)}</div>
+        </section>
+
+        <section id="se-auth-gate-notice" class="se-panel se-auth-gate">
+          <h2 class="se-title" style="font-size:22px;">Login required</h2>
+          <p class="se-subtitle">Layout Designer controls are hidden until a valid platform-admin session is active. Backend permissions still enforce access; this gate prevents accidental viewing/editing while logged out.</p>
         </section>
 
         <section class="se-main">
           <aside class="se-panel se-controls">
             <div class="se-controls-top">
-              <label class="se-field"><span class="se-label">Customer</span><select id="se-customer-select" class="se-select"><option value="">Log in and load customers...</option></select></label>
-              <label class="se-field"><span class="se-label">Apply system preset</span><select id="se-preset" class="se-select"><option value="">Choose preset...</option>${Object.entries(PRESETS).map(([key,preset])=>`<option value="${escapeHtml(key)}">${escapeHtml(preset.label)}</option>`).join("")}</select></label>
-              <div class="se-help">System presets are starting points. They preview immediately but do not save until you click Save to customer.</div>
-              <label class="se-field"><span class="se-label">Apply saved design profile</span><select id="se-saved-profile-select" class="se-select"><option value="">Load saved profiles...</option></select></label>
-              <div class="se-help">Saved design profiles are reusable customer-specific designs created from the current controls.</div>
-              <button id="se-apply-saved-profile" class="se-button secondary full" type="button">Apply Saved Design Profile</button>
+              <div data-auth-required="true">
+                <label class="se-field"><span class="se-label">Customer</span><select id="se-customer-select" class="se-select"><option value="">Log in and load customers...</option></select></label>
+                <label class="se-field"><span class="se-label">Apply system preset</span><select id="se-preset" class="se-select"><option value="">Choose preset...</option>${Object.entries(PRESETS).map(([key,preset])=>`<option value="${escapeHtml(key)}">${escapeHtml(preset.label)}</option>`).join("")}</select></label>
+                <div class="se-help">System presets are starting points. They preview immediately but do not save until you click Save to customer.</div>
+                <label class="se-field"><span class="se-label">Apply saved design profile</span><select id="se-saved-profile-select" class="se-select"><option value="">Load saved profiles...</option></select></label>
+                <div class="se-help">Saved design profiles are reusable customer-specific designs created from the current controls.</div>
+                <button id="se-apply-saved-profile" class="se-button secondary full" type="button">Apply Saved Design Profile</button>
+              </div>
               <div class="se-actions">
                 <button id="se-login" class="se-button">Log in</button>
                 <button id="se-logout" class="se-button secondary">Log out</button>
@@ -653,7 +708,7 @@
               <div id="se-status" class="se-status">Loading Supabase client...</div>
             </div>
 
-            <div class="se-controls-scroll">
+            <div class="se-controls-scroll" data-auth-required="true">
               ${controlSection("Profile", `
                 <div id="se-current-preset" class="se-current-preset">Current profile: loading...</div>
                 <div id="se-dirty-indicator" class="se-dirty">Saved / clean</div>
@@ -733,13 +788,13 @@
 
             </div>
 
-            <div class="se-controls-bottom">
+            <div class="se-controls-bottom" data-auth-required="true">
               <button id="se-save" class="se-button full">Save to customer</button>
               <button id="se-reset-unsaved" class="se-button secondary full" type="button" style="margin-top:8px;">Reset unsaved changes</button>
             </div>
           </aside>
 
-          <section class="se-panel se-preview-panel">
+          <section class="se-panel se-preview-panel" data-auth-required="true">
             <div class="se-preview-title">
               <div>
                 <h2 class="se-title" style="font-size:22px;">Preview</h2>
@@ -986,6 +1041,7 @@
         setStatus("Logging in...");
         const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (error) throw error;
+        setAuthGate(true, data?.user?.email || email);
         setStatus(`Logged in as ${data?.user?.email || email}`);
         await loadCustomers();
       } catch (error) {
@@ -1002,6 +1058,7 @@
         selectedCustomerId = "";
         activeStyleProfile = null;
         renderCustomerSelect();
+        setAuthGate(false);
         setStatus("Logged out.");
       } catch (error) {
         setOutput({ ok: false, event: "logout_failed", message: error instanceof Error ? error.message : String(error) });
@@ -1178,6 +1235,7 @@
 
   async function boot() {
     renderShell();
+    setAuthGate(false);
     bindEvents();
     applyPayloadToForm(PRESETS["clean-blue"]);
 

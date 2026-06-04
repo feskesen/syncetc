@@ -238,3 +238,9 @@
 })();
 
 // CORE-COMPONENT-admin-shell-current.js END
+
+
+// Added drag-and-drop widget root for Tools and Widgets
+const widgetRootDiv = document.createElement('div');
+widgetRootDiv.id = 'syncetc-upload-widget-root';
+document.body.appendChild(widgetRootDiv);

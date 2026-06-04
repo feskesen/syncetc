@@ -5,22 +5,25 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-04-002";
+  const VERSION = "2026-06-04-003";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
   const SUPABASE_JS_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
-  const ROOT_ID = "syncetc-aircraft-admin-root";
   const STORAGE_BUCKET = "core-assets";
-  const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+  const ROOT_ID = "syncetc-aircraft-admin-root";
+  const DIRTY_MESSAGE = "You have unsaved aircraft changes. Leave anyway?";
 
   let supabaseClient = null;
   let customers = [];
   let aircraft = [];
   let selectedCustomerId = "";
   let selectedAircraftId = "";
-  let cleanSnapshot = "";
-  let unregisterDirtyGuard = null;
+  let pendingImportRows = [];
+  let isDirty = false;
+  let debugVisible = localStorage.getItem("syncetc-aircraft-admin-debug") !== "hidden";
+  let isAuthenticated = false;
+  let authenticatedEmail = "";
 
   function ensureRoot() {
     let root = document.getElementById(ROOT_ID);
@@ -51,18 +54,13 @@
   }
 
   function sanitizeFileName(name) {
-    const raw = String(name || "aircraft-image").trim();
-    const base = raw.replace(/\.[^.]+$/, "");
-    return normalizeKey(base) || "aircraft-image";
-  }
-
-  function getExtension(name, fallback) {
-    const raw = String(name || "");
-    const ext = raw.includes(".") ? raw.split(".").pop().toLowerCase().replace(/[^a-z0-9]/g, "") : "";
-    if (ext) return ext;
-    if (fallback === "image/jpeg") return "jpg";
-    if (fallback === "image/webp") return "webp";
-    return "png";
+    const raw = String(name || "upload").split(/[\\/]/).pop() || "upload";
+    return raw
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "") || "upload";
   }
 
   function setStatus(message) {
@@ -74,6 +72,43 @@
     const el = document.getElementById("se-output");
     if (!el) return;
     el.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  }
+
+  function setAuthGate(authenticated, email = "") {
+    isAuthenticated = !!authenticated;
+    authenticatedEmail = isAuthenticated ? String(email || "") : "";
+
+    const root = ensureRoot();
+    root.dataset.authenticated = isAuthenticated ? "true" : "false";
+
+    root.querySelectorAll("[data-auth-required='true']").forEach((el) => {
+      el.style.display = isAuthenticated ? "" : "none";
+    });
+
+    const notice = document.getElementById("se-auth-gate-notice");
+    if (notice) notice.style.display = isAuthenticated ? "none" : "block";
+
+    const authLabel = document.getElementById("se-auth-label");
+    if (authLabel) {
+      authLabel.textContent = isAuthenticated
+        ? `Authenticated: ${authenticatedEmail || "active session"}`
+        : "Not authenticated";
+      authLabel.className = `se-badge ${isAuthenticated ? "ok" : "warn"}`;
+    }
+
+    if (window.SyncEtcAdminShell && typeof window.SyncEtcAdminShell.setAuthState === "function") {
+      window.SyncEtcAdminShell.setAuthState({
+        required: true,
+        authenticated: isAuthenticated,
+        email: authenticatedEmail
+      });
+    }
+  }
+
+  function requireAuth() {
+    if (isAuthenticated) return true;
+    setStatus("Log in before using Aircraft Admin.");
+    return false;
   }
 
   function getValue(id, fallback = "") {
@@ -96,21 +131,52 @@
     if (el) el.checked = !!value;
   }
 
-  function numberOrNull(value) {
-    const raw = String(value ?? "").trim().replace(/[$,]/g, "");
-    if (!raw) return null;
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : null;
+  function setDirty(value) {
+    isDirty = !!value;
+    const badge = document.getElementById("se-dirty-badge");
+    if (badge) {
+      badge.textContent = isDirty ? "Unsaved changes" : "Saved";
+      badge.className = `se-badge ${isDirty ? "warn" : "ok"}`;
+    }
+    if (window.SyncEtcAdminShell && typeof window.SyncEtcAdminShell.setDirty === "function") {
+      window.SyncEtcAdminShell.setDirty(isDirty, DIRTY_MESSAGE);
+    }
   }
 
-  function integerOrNull(value) {
-    const raw = String(value ?? "").trim();
-    if (!raw) return null;
-    if (!/^\d{4}$/.test(raw)) throw new Error("Model year must be four digits, like 2004.");
+  function markDirty() {
+    setDirty(true);
+  }
+
+  function confirmDiscard(message = DIRTY_MESSAGE) {
+    if (!isDirty) return true;
+    return window.confirm(message);
+  }
+
+  function currentYearMax() {
+    return new Date().getFullYear() + 1;
+  }
+
+  function normalizeModelYear(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (!/^\d{4}$/.test(raw)) return raw;
     const year = Number(raw);
-    const max = new Date().getFullYear() + 2;
-    if (year < 1900 || year > max) throw new Error(`Model year must be between 1900 and ${max}.`);
-    return year;
+    if (year < 1900 || year > currentYearMax()) return raw;
+    return String(year);
+  }
+
+  function generatedKeyLabel() {
+    const selected = getSelectedAircraft();
+    if (selected?.asset_key) return selected.asset_key;
+    const tail = getValue("se-tail-number").trim();
+    const type = getValue("se-aircraft-type").trim();
+    const proposed = normalizeKey(tail || type || "");
+    return proposed ? `${proposed} (generated on save)` : "Generated on save";
+  }
+
+  function refreshGeneratedKeyLabel() {
+    const el = document.getElementById("se-generated-key");
+    if (el) el.textContent = generatedKeyLabel();
   }
 
   function loadScript(src) {
@@ -135,9 +201,11 @@
 
     const { data } = await supabaseClient.auth.getSession();
     if (data?.session?.user?.email) {
+      setAuthGate(true, data.session.user.email);
       setStatus(`Logged in as ${data.session.user.email}`);
       await loadCustomers();
     } else {
+      setAuthGate(false);
       setStatus("No active login session. Log in first.");
     }
   }
@@ -146,7 +214,11 @@
     const { data, error } = await supabaseClient.auth.getSession();
     if (error) throw error;
     const token = data?.session?.access_token;
-    if (!token) throw new Error("No active Supabase Auth session. Log in first.");
+    if (!token) {
+      setAuthGate(false);
+      throw new Error("No active Supabase Auth session. Log in first.");
+    }
+    if (!isAuthenticated) setAuthGate(true, data.session?.user?.email || "");
     return token;
   }
 
@@ -191,97 +263,6 @@
     }
   }
 
-  function getSelectedCustomer() {
-    return customers.find((customer) => customer.customer_id === selectedCustomerId) || null;
-  }
-
-  function getSelectedAircraft() {
-    return aircraft.find((item) => item.operational_asset_id === selectedAircraftId) || null;
-  }
-
-  function getOrganizationStorageKey() {
-    const customer = getSelectedCustomer();
-    return normalizeKey(customer?.customer_key || customer?.organization_key || selectedCustomerId || "organization");
-  }
-
-  function getPublicUrlFromStoragePath(storagePath) {
-    if (!storagePath) return "";
-    return `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${storagePath}`;
-  }
-
-  function getGeneratedSlugPreview() {
-    const selected = getSelectedAircraft();
-    if (selected?.asset_key) return selected.asset_key;
-    return normalizeKey(getValue("se-tail-number") || getValue("se-display-name") || getValue("se-aircraft-type") || "aircraft");
-  }
-
-  function updateSlugPreview() {
-    const el = document.getElementById("se-slug-preview");
-    if (el) el.textContent = getGeneratedSlugPreview() || "generated-after-save";
-  }
-
-  function getFormSnapshot() {
-    const ids = [
-      "se-tail-number", "se-display-name", "se-aircraft-type", "se-model-year", "se-status-key",
-      "se-visibility", "se-sort-order", "se-home-base", "se-hourly-rate", "se-annual-due",
-      "se-primary-photo-url", "se-panel-photo-url", "se-summary", "se-description", "se-engine-notes",
-      "se-current-tach", "se-tach-date", "se-current-hobbs", "se-hobbs-date", "se-hobbs-moh",
-      "se-maintenance-notes", "se-oil-change-due-tach"
-    ];
-    const checks = ["se-current", "se-do-not-dispatch"];
-    const data = { selectedAircraftId };
-    ids.forEach((id) => data[id] = getValue(id));
-    checks.forEach((id) => data[id] = getChecked(id));
-    return JSON.stringify(data);
-  }
-
-  function isDirty() {
-    return !!cleanSnapshot && getFormSnapshot() !== cleanSnapshot;
-  }
-
-  function updateDirtyBadge() {
-    const badge = document.getElementById("se-dirty-badge");
-    if (!badge) return;
-    if (isDirty()) {
-      badge.textContent = "Unsaved changes";
-      badge.classList.add("is-dirty");
-    } else {
-      badge.textContent = "Saved / clean";
-      badge.classList.remove("is-dirty");
-    }
-  }
-
-  function markClean() {
-    cleanSnapshot = getFormSnapshot();
-    updateDirtyBadge();
-  }
-
-  function markDirty() {
-    updateSlugPreview();
-    updateDirtyBadge();
-  }
-
-  function confirmDiscard(message) {
-    if (!isDirty()) return true;
-    return window.confirm(message || "You have unsaved aircraft changes. Continue and discard them?");
-  }
-
-  function registerDirtyGuard() {
-    if (unregisterDirtyGuard) unregisterDirtyGuard();
-    if (window.SyncEtcAdminDirtyGuard) {
-      unregisterDirtyGuard = window.SyncEtcAdminDirtyGuard.register({
-        isDirty,
-        message: "You have unsaved aircraft changes. Leave this page and discard them?"
-      });
-    } else {
-      window.addEventListener("beforeunload", (event) => {
-        if (!isDirty()) return;
-        event.preventDefault();
-        event.returnValue = "";
-      });
-    }
-  }
-
   function renderCustomers() {
     const select = document.getElementById("se-customer-select");
     if (!select) return;
@@ -298,23 +279,9 @@
     `).join("");
   }
 
-  function renderPhotoPreview(role) {
-    const url = getValue(role === "primary" ? "se-primary-photo-url" : "se-panel-photo-url");
-    const box = document.getElementById(role === "primary" ? "se-primary-photo-preview" : "se-panel-photo-preview");
-    if (!box) return;
-    box.innerHTML = url
-      ? `<img src="${escapeHtml(url)}" alt="${role === "primary" ? "Primary aircraft" : "Panel"} photo">`
-      : `<span>${role === "primary" ? "Primary photo" : "Panel photo"}</span>`;
-  }
-
   function renderAircraftList() {
     const list = document.getElementById("se-aircraft-list");
     if (!list) return;
-
-    if (!selectedCustomerId) {
-      list.innerHTML = `<div class="se-empty">Select an organization first.</div>`;
-      return;
-    }
 
     if (!aircraft.length) {
       list.innerHTML = `<div class="se-empty">No aircraft found for this organization.</div>`;
@@ -330,10 +297,10 @@
           <div class="se-aircraft-thumb">${photo ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(item.tail_number || "Aircraft")}">` : "✈"}</div>
           <div class="se-aircraft-main">
             <strong>${escapeHtml(item.tail_number || item.display_name || "Aircraft")}</strong>
-            <div class="se-meta">${escapeHtml(item.aircraft_type || "No type")} · ${escapeHtml(item.home_base || "No base")} · ${escapeHtml(item.status_label || item.status_key || "")}</div>
-            <div class="se-meta">slug: ${escapeHtml(item.asset_key || "")}</div>
+            ${archived ? `<span class="se-mini-badge danger">Archived</span>` : ""}
+            <div class="se-meta">${escapeHtml(item.aircraft_type || "")}${item.model_year ? ` · ${escapeHtml(item.model_year)}` : ""} · ${escapeHtml(item.home_base || "No base")} · ${escapeHtml(item.status_label || item.status_key || "")}</div>
+            <div class="se-meta">key: ${escapeHtml(item.asset_key || "")}</div>
             ${item.do_not_dispatch ? `<div class="se-warning">Do Not Dispatch</div>` : ""}
-            ${archived ? `<div class="se-warning muted">Archived</div>` : ""}
           </div>
           <div class="se-row-actions">
             <button class="se-button secondary se-edit-aircraft" data-aircraft-id="${escapeHtml(item.operational_asset_id)}" type="button">Edit</button>
@@ -346,39 +313,53 @@
     }).join("");
   }
 
-  function clearForm(options = {}) {
-    if (!options.force && !confirmDiscard()) return false;
+  function getSelectedAircraft() {
+    return aircraft.find((item) => item.operational_asset_id === selectedAircraftId) || null;
+  }
+
+  function updatePhotoPreview(role, url) {
+    const preview = document.getElementById(`se-${role}-photo-preview`);
+    const label = document.getElementById(`se-${role}-photo-url-label`);
+    if (preview) {
+      preview.innerHTML = url
+        ? `<img src="${escapeHtml(url)}" alt="${role === "primary" ? "Primary aircraft" : "Panel"} photo">`
+        : `<span>${role === "primary" ? "Drop primary aircraft photo" : "Drop panel photo"}</span>`;
+    }
+    if (label) label.textContent = url || "No image uploaded yet.";
+  }
+
+  function resetFormFields() {
     selectedAircraftId = "";
     [
-      "se-tail-number", "se-display-name", "se-aircraft-type", "se-model-year", "se-sort-order", "se-home-base",
+      "se-tail-number", "se-aircraft-type", "se-model-year", "se-sort-order", "se-home-base",
       "se-hourly-rate", "se-annual-due", "se-primary-photo-url", "se-panel-photo-url", "se-summary", "se-description",
       "se-engine-notes", "se-current-tach", "se-tach-date", "se-current-hobbs", "se-hobbs-date",
       "se-hobbs-moh", "se-maintenance-notes", "se-oil-change-due-tach"
     ].forEach((id) => setValue(id, ""));
     setValue("se-status-key", "available");
     setValue("se-visibility", "public");
-    setValue("se-sort-order", "100");
-    setChecked("se-current", true);
     setChecked("se-do-not-dispatch", false);
-    updateSlugPreview();
-    renderPhotoPreview("primary");
-    renderPhotoPreview("panel");
+    updatePhotoPreview("primary", "");
+    updatePhotoPreview("panel", "");
+    refreshGeneratedKeyLabel();
     renderAircraftList();
-    markClean();
-    setStatus("Aircraft form ready.");
-    return true;
+  }
+
+  function clearForm() {
+    resetFormFields();
+    setDirty(false);
+    setStatus("Aircraft form cleared.");
   }
 
   function fillForm(item) {
     selectedAircraftId = item.operational_asset_id || "";
     setValue("se-tail-number", item.tail_number || item.identifier || "");
-    setValue("se-display-name", item.display_name || "");
     setValue("se-aircraft-type", item.aircraft_type || item.aircraft_model || "");
     setValue("se-model-year", item.model_year || item.aircraft_year || "");
-    setValue("se-status-key", item.status_key || "available");
-    if (getValue("se-status-key") === "archived") setValue("se-status-key", "inactive");
-    setValue("se-visibility", item.visibility || "public");
-    setValue("se-sort-order", item.sort_order ?? 100);
+    setValue("se-status-key", item.status_key === "archived" ? "inactive" : (item.status_key || "available"));
+    setValue("se-visibility", ["public", "members", "admins"].includes(item.visibility) ? item.visibility : "admins");
+    setChecked("se-do-not-dispatch", !!item.do_not_dispatch || item.status_key === "do-not-dispatch");
+    setValue("se-sort-order", item.sort_order || "");
     setValue("se-home-base", item.home_base || "");
     setValue("se-hourly-rate", item.hourly_rate ?? "");
     setValue("se-annual-due", item.annual_due ?? "");
@@ -386,8 +367,6 @@
     setValue("se-panel-photo-url", item.panel_photo_url || "");
     setValue("se-summary", item.summary || item.aircraft_description_plain || "");
     setValue("se-description", item.description || "");
-    setChecked("se-current", item.asset_record_status !== "hidden" && item.asset_record_status !== "archived");
-    setChecked("se-do-not-dispatch", !!item.do_not_dispatch || item.status_key === "do-not-dispatch");
     setValue("se-engine-notes", item.engine_notes || "");
     setValue("se-current-tach", item.current_tach ?? "");
     setValue("se-tach-date", item.tach_date || "");
@@ -396,56 +375,54 @@
     setValue("se-hobbs-moh", item.hobbs_at_last_major_overhaul ?? "");
     setValue("se-maintenance-notes", item.maintenance_notes_general || "");
     setValue("se-oil-change-due-tach", item.oil_change_due_tach ?? "");
-    updateSlugPreview();
-    renderPhotoPreview("primary");
-    renderPhotoPreview("panel");
+    updatePhotoPreview("primary", item.primary_photo_url || "");
+    updatePhotoPreview("panel", item.panel_photo_url || "");
+    refreshGeneratedKeyLabel();
     renderAircraftList();
-    markClean();
+    setDirty(false);
     setStatus(`Editing ${item.tail_number || item.display_name || "aircraft"}.`);
   }
 
   function collectAircraftPayload() {
-    const tailNumber = getValue("se-tail-number").trim().toUpperCase().replace(/\s+/g, "");
-    if (!selectedCustomerId) throw new Error("Select an organization first.");
-    if (!tailNumber) throw new Error("Tail number is required for now.");
-
     return {
-      organization_id: selectedCustomerId,
       customer_id: selectedCustomerId,
-      operational_asset_id: selectedAircraftId || null,
-      tail_number: tailNumber,
-      display_name: getValue("se-display-name").trim() || tailNumber,
+      organization_id: selectedCustomerId,
+      operational_asset_id: selectedAircraftId || undefined,
+      tail_number: getValue("se-tail-number").trim(),
       aircraft_type: getValue("se-aircraft-type").trim(),
-      model_year: integerOrNull(getValue("se-model-year")),
+      model_year: normalizeModelYear(getValue("se-model-year").trim()),
       status_key: getValue("se-status-key", "available"),
       visibility: getValue("se-visibility", "public"),
-      sort_order: numberOrNull(getValue("se-sort-order")) ?? 100,
+      do_not_dispatch: getChecked("se-do-not-dispatch", false),
+      sort_order: getValue("se-sort-order", "100").trim() || "100",
       home_base: getValue("se-home-base").trim(),
-      hourly_rate: numberOrNull(getValue("se-hourly-rate")),
-      annual_due: numberOrNull(getValue("se-annual-due")),
+      hourly_rate: getValue("se-hourly-rate").trim(),
+      annual_due: getValue("se-annual-due").trim(),
       primary_photo_url: getValue("se-primary-photo-url").trim(),
       panel_photo_url: getValue("se-panel-photo-url").trim(),
       summary: getValue("se-summary").trim(),
-      aircraft_description_plain: getValue("se-summary").trim(),
       description: getValue("se-description").trim(),
-      current: getChecked("se-current", true),
-      do_not_dispatch: getChecked("se-do-not-dispatch", false),
       engine_notes: getValue("se-engine-notes").trim(),
-      current_tach: numberOrNull(getValue("se-current-tach")),
-      tach_date: getValue("se-tach-date").trim() || null,
-      current_hobbs: numberOrNull(getValue("se-current-hobbs")),
-      hobbs_date: getValue("se-hobbs-date").trim() || null,
-      hobbs_at_last_major_overhaul: numberOrNull(getValue("se-hobbs-moh")),
+      current_tach: getValue("se-current-tach").trim(),
+      tach_date: getValue("se-tach-date").trim(),
+      current_hobbs: getValue("se-current-hobbs").trim(),
+      hobbs_date: getValue("se-hobbs-date").trim(),
+      hobbs_at_last_major_overhaul: getValue("se-hobbs-moh").trim(),
       maintenance_notes_general: getValue("se-maintenance-notes").trim(),
-      oil_change_due_tach: numberOrNull(getValue("se-oil-change-due-tach"))
+      oil_change_due_tach: getValue("se-oil-change-due-tach").trim()
     };
   }
 
   async function loadCustomers() {
+    if (!requireAuth()) return;
+    if (!confirmDiscard()) return;
     setStatus("Loading organizations...");
     const result = await callCoreAdminAction("list_customers");
     customers = Array.isArray(result.customers) ? result.customers : [];
+    if (!selectedCustomerId && customers.length) selectedCustomerId = customers[0].customer_id;
     renderCustomers();
+    if (selectedCustomerId) await loadAircraft();
+    setDirty(false);
     setStatus("Organizations loaded.");
   }
 
@@ -455,306 +432,464 @@
       renderAircraftList();
       return;
     }
-
     setStatus("Loading aircraft...");
     const result = await callCoreAdminAction("list_aircraft", {
+      customer_id: selectedCustomerId,
       organization_id: selectedCustomerId,
       include_archived: getChecked("se-include-archived", false)
     });
     aircraft = Array.isArray(result.aircraft) ? result.aircraft : [];
+    if (selectedAircraftId && !aircraft.some((item) => item.operational_asset_id === selectedAircraftId)) selectedAircraftId = "";
     renderAircraftList();
-    setStatus("Aircraft loaded.");
+    refreshGeneratedKeyLabel();
+    setStatus(`Loaded ${aircraft.length} aircraft.`);
   }
 
-  async function saveAircraft(options = {}) {
-    const payload = collectAircraftPayload();
-    if (!options.silent) setStatus("Saving aircraft...");
-    const result = await callCoreAdminAction("upsert_aircraft", payload);
-    const saved = result.aircraft;
-    if (!saved?.operational_asset_id) throw new Error("Aircraft saved, but no aircraft ID returned.");
-    selectedAircraftId = saved.operational_asset_id;
-    await loadAircraft();
-    fillForm(saved);
-    setStatus(`Aircraft saved: ${saved.tail_number || saved.display_name || selectedAircraftId}`);
-    return saved;
-  }
-
-  async function archiveAircraft(aircraftId) {
-    if (!aircraftId) return;
-    if (!confirmDiscard("You have unsaved aircraft changes. Archive another aircraft and discard those changes?")) return;
-    if (!window.confirm("Archive this aircraft record? You can restore it later.")) return;
-    setStatus("Archiving aircraft...");
-    await callCoreAdminAction("archive_aircraft", { aircraft_id: aircraftId });
-    setChecked("se-include-archived", true);
-    await loadAircraft();
-    if (selectedAircraftId === aircraftId) clearForm({ force: true });
-    setStatus("Aircraft archived. Archived records are now visible so you can restore if needed.");
-  }
-
-  async function restoreAircraft(aircraftId) {
-    if (!aircraftId) return;
-    if (!confirmDiscard("You have unsaved aircraft changes. Restore another aircraft and discard those changes?")) return;
-    setStatus("Restoring aircraft...");
-    const result = await callCoreAdminAction("restore_aircraft", { aircraft_id: aircraftId });
-    await loadAircraft();
-    if (result.aircraft) fillForm(result.aircraft);
-    setStatus("Aircraft restored.");
-  }
-
-  function validateImageFile(file) {
-    if (!file) throw new Error("No image selected.");
-    if (!String(file.type || "").startsWith("image/")) throw new Error("Only image files are allowed.");
-    if (file.size > MAX_IMAGE_BYTES) throw new Error("Image file is too large. Use an image under 8 MB.");
-  }
-
-  async function ensureAircraftSavedForUpload() {
-    if (!selectedCustomerId) throw new Error("Select an organization first.");
-    if (!selectedAircraftId || isDirty()) {
-      setStatus("Saving aircraft before image upload...");
-      await saveAircraft({ silent: true });
+  async function saveAircraft() {
+    if (!selectedCustomerId) {
+      setStatus("Select an organization first.");
+      return null;
     }
-    if (!selectedAircraftId) throw new Error("Save the aircraft before uploading images.");
-    return getSelectedAircraft() || { operational_asset_id: selectedAircraftId, asset_key: getGeneratedSlugPreview(), tail_number: getValue("se-tail-number") };
+    const payload = collectAircraftPayload();
+    if (!payload.tail_number && !payload.aircraft_type) {
+      setStatus("Enter at least a tail number or aircraft type.");
+      return null;
+    }
+    setStatus("Saving aircraft...");
+    const result = await callCoreAdminAction("upsert_aircraft", payload);
+    selectedAircraftId = result.aircraft?.operational_asset_id || selectedAircraftId;
+    await loadAircraft();
+    const saved = aircraft.find((item) => item.operational_asset_id === selectedAircraftId) || result.aircraft;
+    if (saved) fillForm(saved);
+    setDirty(false);
+    setStatus("Aircraft saved.");
+    return saved || null;
+  }
+
+  async function ensureSavedAircraftForUpload() {
+    if (selectedAircraftId && !isDirty) return getSelectedAircraft();
+    const ok = selectedAircraftId
+      ? window.confirm("Save current aircraft changes before uploading this image?")
+      : window.confirm("Save this aircraft first so the image has a permanent storage folder?");
+    if (!ok) return null;
+    return await saveAircraft();
   }
 
   async function uploadAircraftImage(role, file) {
-    validateImageFile(file);
-    const savedAircraft = await ensureAircraftSavedForUpload();
-    const orgKey = getOrganizationStorageKey();
-    const aircraftKey = normalizeKey(savedAircraft.asset_key || savedAircraft.tail_number || selectedAircraftId);
-    const extension = getExtension(file.name, file.type);
-    const cleanName = sanitizeFileName(file.name);
-    const storagePath = `organizations/${orgKey}/operational-assets/${selectedAircraftId}/images/${role}/${Date.now()}-${cleanName}.${extension}`;
+    if (!file) return;
+    if (!selectedCustomerId) {
+      setStatus("Select an organization first.");
+      return;
+    }
+    if (!file.type || !file.type.startsWith("image/")) {
+      setStatus("Choose an image file.");
+      return;
+    }
+    if (file.size > 12 * 1024 * 1024) {
+      setStatus("Image is too large. Maximum is 12 MB.");
+      return;
+    }
+
+    const saved = await ensureSavedAircraftForUpload();
+    if (!saved || !selectedAircraftId) return;
+
+    const safeFile = sanitizeFileName(file.name);
+    const storagePath = [
+      "organizations",
+      selectedCustomerId,
+      "operational-assets",
+      "aircraft",
+      selectedAircraftId,
+      "images",
+      role,
+      `${Date.now()}-${safeFile}`
+    ].join("/");
 
     setStatus(`Uploading ${role} image...`);
     const { error: uploadError } = await supabaseClient.storage
       .from(STORAGE_BUCKET)
-      .upload(storagePath, file, {
-        cacheControl: "3600",
-        upsert: false,
-        contentType: file.type || "image/png"
-      });
-
+      .upload(storagePath, file, { contentType: file.type, upsert: false });
     if (uploadError) throw uploadError;
 
-    const { data: publicData } = supabaseClient.storage
-      .from(STORAGE_BUCKET)
-      .getPublicUrl(storagePath);
-
-    const publicUrl = publicData?.publicUrl || getPublicUrlFromStoragePath(storagePath);
+    const { data: publicData } = supabaseClient.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
+    const publicUrl = publicData?.publicUrl || `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${storagePath}`;
 
     const result = await callCoreAdminAction("attach_aircraft_image_asset", {
+      customer_id: selectedCustomerId,
       organization_id: selectedCustomerId,
       aircraft_id: selectedAircraftId,
       image_role: role,
-      url: publicUrl,
       storage_path: storagePath,
-      alt_text: `${getValue("se-tail-number") || "Aircraft"} ${role === "primary" ? "primary" : "panel"} photo`,
-      mime_type: file.type || "image",
+      url: publicUrl,
+      mime_type: file.type,
       file_size_bytes: file.size,
-      metadata_json: {
-        uploaded_from: "aircraft_admin",
-        original_filename: file.name || null
-      }
+      alt_text: `${getValue("se-tail-number") || "Aircraft"} ${role === "primary" ? "primary photo" : "panel photo"}`
     });
 
-    await loadAircraft();
     if (result.aircraft) fillForm(result.aircraft);
+    await loadAircraft();
+    const reloaded = aircraft.find((item) => item.operational_asset_id === selectedAircraftId);
+    if (reloaded) fillForm(reloaded);
     setStatus(`${role === "primary" ? "Primary" : "Panel"} image uploaded.`);
   }
 
-  function renderPage() {
-    const root = ensureRoot();
-    root.innerHTML = `
+  async function archiveAircraft(aircraftId) {
+    if (!window.confirm("Archive this aircraft? It can be restored later.")) return;
+    setStatus("Archiving aircraft...");
+    await callCoreAdminAction("archive_aircraft", { aircraft_id: aircraftId });
+    if (selectedAircraftId === aircraftId) resetFormFields();
+    setChecked("se-include-archived", true);
+    await loadAircraft();
+    setDirty(false);
+    setStatus("Aircraft archived. Archived records are now shown so you can restore it if needed.");
+  }
+
+  async function restoreAircraft(aircraftId) {
+    setStatus("Restoring aircraft...");
+    const result = await callCoreAdminAction("restore_aircraft", { aircraft_id: aircraftId });
+    await loadAircraft();
+    if (result.aircraft) fillForm(result.aircraft);
+    setDirty(false);
+    setStatus("Aircraft restored.");
+  }
+
+  function parseCsv(text) {
+    const rows = [];
+    let row = [];
+    let field = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < text.length; i += 1) {
+      const char = text[i];
+      const next = text[i + 1];
+
+      if (inQuotes) {
+        if (char === '"' && next === '"') {
+          field += '"';
+          i += 1;
+        } else if (char === '"') {
+          inQuotes = false;
+        } else {
+          field += char;
+        }
+      } else if (char === '"') {
+        inQuotes = true;
+      } else if (char === ',') {
+        row.push(field);
+        field = "";
+      } else if (char === '\n') {
+        row.push(field);
+        rows.push(row);
+        row = [];
+        field = "";
+      } else if (char !== '\r') {
+        field += char;
+      }
+    }
+
+    if (field.length || row.length) {
+      row.push(field);
+      rows.push(row);
+    }
+
+    return rows.filter((r) => r.some((cell) => String(cell || "").trim() !== ""));
+  }
+
+  function csvRowsToObjects(rows) {
+    if (!rows.length) return [];
+    const headers = rows[0].map((header) => String(header || "").trim());
+    return rows.slice(1).map((row) => {
+      const obj = {};
+      headers.forEach((header, index) => {
+        if (header) obj[header] = row[index] ?? "";
+      });
+      return obj;
+    });
+  }
+
+  async function readImportFile(file) {
+    if (!file) return;
+    const text = await file.text();
+    const rows = csvRowsToObjects(parseCsv(text));
+    pendingImportRows = rows;
+    const el = document.getElementById("se-import-summary");
+    if (el) {
+      const headers = rows.length ? Object.keys(rows[0]) : [];
+      el.innerHTML = `
+        <strong>${rows.length} data rows loaded for preview.</strong>
+        <div class="se-meta">Columns: ${escapeHtml(headers.join(", "))}</div>
+      `;
+    }
+    setStatus(`CSV parsed. ${rows.length} rows ready. Do not import real data unless you mean to.`);
+  }
+
+  async function importCsvRows() {
+    if (!selectedCustomerId) {
+      setStatus("Select an organization first.");
+      return;
+    }
+    if (!pendingImportRows.length) {
+      setStatus("Choose a CSV file first.");
+      return;
+    }
+    if (!window.confirm(`Import/update ${pendingImportRows.length} aircraft rows for this organization?`)) return;
+
+    setStatus("Importing aircraft rows...");
+    const result = await callCoreAdminAction("bulk_upsert_aircraft", {
+      customer_id: selectedCustomerId,
+      organization_id: selectedCustomerId,
+      rows: pendingImportRows
+    });
+    await loadAircraft();
+    setStatus(`Import finished. Saved: ${result.saved_count || 0}. Failed: ${result.failed_count || 0}.`);
+  }
+
+  function setDebugVisible(value) {
+    debugVisible = !!value;
+    localStorage.setItem("syncetc-aircraft-admin-debug", debugVisible ? "shown" : "hidden");
+    const card = document.getElementById("se-debug-card");
+    if (card) card.style.display = debugVisible ? "block" : "none";
+    setChecked("se-show-debug", debugVisible);
+  }
+
+  function renderShell() {
+    ensureRoot().innerHTML = `
       <style>
-        #${ROOT_ID} { font-family: Arial, Helvetica, sans-serif; color: #172033; background: #f5f8fc; padding: 20px; }
-        #${ROOT_ID} * { box-sizing: border-box; }
-        #${ROOT_ID} .se-wrap { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 330px 1fr; gap: 18px; }
-        #${ROOT_ID} .se-card { background: #fff; border: 1px solid #d8e1ed; border-radius: 16px; padding: 18px; box-shadow: 0 8px 24px rgba(23,32,51,.06); }
-        #${ROOT_ID} .se-title { margin: 0 0 8px; font-size: 24px; font-weight: 900; }
-        #${ROOT_ID} .se-section-title { margin: 0 0 12px; font-size: 18px; font-weight: 900; }
-        #${ROOT_ID} .se-subtitle, #${ROOT_ID} .se-meta { color: #53647c; font-size: 13px; line-height: 1.35; }
-        #${ROOT_ID} .se-field { display: block; margin: 0 0 12px; }
-        #${ROOT_ID} .se-label { display: block; font-size: 12px; font-weight: 900; margin-bottom: 6px; }
-        #${ROOT_ID} .se-input, #${ROOT_ID} .se-select, #${ROOT_ID} .se-textarea { width: 100%; border: 1px solid #c7d2e2; border-radius: 10px; min-height: 42px; padding: 10px 12px; font: inherit; background: #fff; }
-        #${ROOT_ID} .se-textarea { min-height: 96px; resize: vertical; }
-        #${ROOT_ID} .se-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-        #${ROOT_ID} .se-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
-        #${ROOT_ID} .se-button { appearance: none; border: 1px solid #1f4f82; background: #1f4f82; color: #fff; border-radius: 999px; padding: 10px 14px; font-weight: 900; cursor: pointer; }
-        #${ROOT_ID} .se-button.secondary { background: #fff; color: #1f4f82; }
-        #${ROOT_ID} .se-button.danger { background: #8a2631; border-color: #8a2631; }
-        #${ROOT_ID} .se-button.small { padding: 7px 10px; font-size: 12px; }
-        #${ROOT_ID} .se-output { background: #101827; color: #fff; border-radius: 12px; padding: 14px; min-height: 120px; max-height: 360px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; white-space: pre; }
-        #${ROOT_ID} .se-aircraft-list { display: grid; gap: 10px; margin-top: 12px; max-height: 620px; overflow: auto; }
-        #${ROOT_ID} .se-aircraft-row { border: 1px solid #d8e1ed; border-radius: 14px; padding: 12px; display: grid; grid-template-columns: 56px 1fr; gap: 12px; background: #fff; }
-        #${ROOT_ID} .se-aircraft-row.is-selected { border-color: #1f4f82; background: #f4f8fd; }
-        #${ROOT_ID} .se-aircraft-row.is-archived { opacity: .78; }
-        #${ROOT_ID} .se-aircraft-thumb { width: 56px; height: 56px; border-radius: 12px; background: #edf3fa; display: flex; align-items: center; justify-content: center; overflow: hidden; font-size: 24px; }
-        #${ROOT_ID} .se-aircraft-thumb img, #${ROOT_ID} .se-photo-preview img { width: 100%; height: 100%; object-fit: cover; }
-        #${ROOT_ID} .se-row-actions { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; }
-        #${ROOT_ID} .se-warning { color: #8a2631; font-weight: 900; font-size: 12px; margin-top: 4px; }
-        #${ROOT_ID} .se-warning.muted { color: #5d6b82; }
-        #${ROOT_ID} .se-empty { border: 1px dashed #aebbd0; border-radius: 12px; padding: 14px; color: #53647c; }
-        #${ROOT_ID} .se-generated { border: 1px dashed #aebbd0; border-radius: 10px; background: #f7faff; min-height: 42px; padding: 11px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #1f4f82; }
-        #${ROOT_ID} .se-check { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 800; }
-        #${ROOT_ID} .se-dirty { display: inline-flex; align-items: center; border-radius: 999px; padding: 7px 10px; background: #edf3fa; color: #53647c; font-weight: 900; font-size: 12px; }
-        #${ROOT_ID} .se-dirty.is-dirty { background: #fff1d6; color: #8a5a00; }
-        #${ROOT_ID} .se-photo-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-        #${ROOT_ID} .se-dropzone { border: 2px dashed #aebbd0; border-radius: 14px; padding: 12px; background: #f7faff; cursor: pointer; min-height: 170px; display: flex; flex-direction: column; gap: 10px; }
-        #${ROOT_ID} .se-dropzone.is-dragover { border-color: #1f4f82; background: #edf6ff; }
-        #${ROOT_ID} .se-photo-preview { height: 110px; border-radius: 10px; background: #edf3fa; overflow: hidden; display: flex; align-items: center; justify-content: center; color: #53647c; font-weight: 900; }
-        #${ROOT_ID} .se-hidden { display: none; }
-        #${ROOT_ID} .se-topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-        @media (max-width: 900px) { #${ROOT_ID} .se-wrap { grid-template-columns: 1fr; } #${ROOT_ID} .se-form-grid, #${ROOT_ID} .se-photo-grid { grid-template-columns: 1fr; } }
+        #${ROOT_ID}{font-family:Arial,Helvetica,sans-serif;color:#172033;background:#f5f7fb;min-height:100vh;padding:18px;box-sizing:border-box;}
+        #${ROOT_ID} *{box-sizing:border-box;}
+        .se-wrap{max-width:1220px;margin:0 auto;}
+        .se-card{background:#fff;border:1px solid #d9e0ea;border-radius:14px;box-shadow:0 8px 28px rgba(23,32,51,.08);padding:18px;margin-bottom:14px;}
+        .se-title{margin:0 0 6px 0;font-size:28px;line-height:1.15;letter-spacing:-.02em;}
+        .se-section-title{margin:0 0 14px 0;font-size:20px;line-height:1.2;}
+        .se-card-head{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:14px;}
+        .se-subtitle{margin:0;color:#5d6b82;font-size:14px;line-height:1.45;word-break:break-word;}
+        .se-badge{display:inline-flex;border-radius:999px;background:#e9f1fb;color:#1f4f82;font-size:12px;font-weight:700;padding:6px 10px;margin-top:10px;}
+        .se-badge.warn{background:#fff6dd;color:#8a5b00;}
+        .se-badge.ok{background:#eaf8ef;color:#1f6f3b;}
+        .se-mini-badge{display:inline-flex;margin-left:8px;border-radius:999px;background:#e9f1fb;color:#1f4f82;font-size:11px;font-weight:900;padding:4px 8px;vertical-align:middle;}
+        .se-mini-badge.danger{background:#ffecec;color:#9b1c1c;}
+        .se-controls{display:grid;grid-template-columns:1fr 1fr auto auto auto;gap:10px;align-items:end;}
+        .se-grid{display:grid;grid-template-columns:380px minmax(0,1fr);gap:14px;align-items:start;}
+        .se-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
+        .se-field{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
+        .se-label{font-size:13px;font-weight:800;color:#26344d;}
+        .se-input,.se-select,.se-textarea{width:100%;border:1px solid #c7d2e2;border-radius:10px;padding:10px 11px;font-size:14px;background:#fff;color:#172033;}
+        .se-textarea{min-height:86px;resize:vertical;font-family:Arial,Helvetica,sans-serif;}
+        .se-check{display:flex;align-items:center;gap:8px;font-weight:800;color:#26344d;font-size:13px;margin-bottom:12px;}
+        .se-button{border:1px solid #1f4f82;background:#1f4f82;color:#fff;border-radius:999px;padding:10px 14px;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap;}
+        .se-button.secondary{background:#fff;color:#1f4f82;}
+        .se-button.danger{background:#fff;color:#9b1c1c;border-color:#9b1c1c;}
+        .se-button.full{width:100%;}
+        .se-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:6px;}
+        .se-status{margin-top:12px;padding:12px;border-radius:10px;background:#eef3f8;border:1px solid #d6e0ec;color:#26344d;font-size:14px;white-space:pre-wrap;}
+        .se-output{margin-top:14px;background:#101827;color:#e7edf6;border-radius:12px;padding:14px;overflow:auto;min-height:120px;max-height:300px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.45;}
+        .se-empty{border:1px dashed #c7d2e2;border-radius:12px;padding:16px;color:#5d6b82;background:#fbfcfe;}
+        .se-aircraft-row{display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:12px;align-items:center;border:1px solid #d9e0ea;border-radius:14px;padding:12px;margin-bottom:10px;background:#fbfcfe;}
+        .se-aircraft-row.is-selected{border-color:#1f4f82;background:#f4f8fd;}
+        .se-aircraft-row.is-archived{opacity:.78;background:#f7f2f2;}
+        .se-aircraft-thumb{width:76px;height:56px;border:1px solid #c7d2e2;border-radius:10px;display:grid;place-items:center;overflow:hidden;background:#fff;font-weight:900;color:#1f4f82;font-size:20px;}
+        .se-aircraft-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+        .se-meta{font-size:12px;color:#5d6b82;margin-top:4px;word-break:break-word;}
+        .se-warning{font-size:12px;color:#9b1c1c;font-weight:900;margin-top:6px;}
+        .se-row-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;}
+        .se-import-box{border:1px dashed #9fb2cc;border-radius:14px;background:#f7f9fc;padding:14px;margin-top:10px;}
+        .se-generated{border:1px dashed #c7d2e2;border-radius:10px;background:#fbfcfe;padding:10px 11px;font-size:13px;color:#26344d;min-height:39px;display:flex;align-items:center;}
+        .se-drop{border:2px dashed #9fb2cc;border-radius:14px;background:#f7f9fc;padding:12px;cursor:pointer;transition:border-color 120ms ease,background 120ms ease;}
+        .se-drop.dragover{border-color:#1f4f82;background:#f0f6fd;}
+        .se-auth-gate{border-style:dashed;}
+        .se-drop-preview{height:190px;border-radius:10px;background:#fff;border:1px solid #d9e0ea;display:grid;place-items:center;overflow:hidden;color:#5d6b82;font-weight:800;text-align:center;padding:10px;}
+        .se-drop-preview img{width:auto;height:auto;max-width:100%;max-height:100%;object-fit:contain;display:block;}
+        .se-drop input{display:none;}
+        @media(max-width:960px){.se-grid{grid-template-columns:1fr;}.se-controls,.se-form-grid{grid-template-columns:1fr;}.se-aircraft-row{grid-template-columns:1fr;}.se-row-actions{justify-content:flex-start;}}
       </style>
 
       <main class="se-wrap">
-        <aside class="se-card">
+        <section class="se-card">
           <h1 class="se-title">Aircraft Admin</h1>
-          <p class="se-subtitle">Generic asset backend, aviation-facing admin UI.</p>
-
-          <label class="se-field"><span class="se-label">Admin Email</span><input id="se-email" class="se-input" type="email" autocomplete="username"></label>
-          <label class="se-field"><span class="se-label">Password</span><input id="se-password" class="se-input" type="password" autocomplete="current-password"></label>
+          <p class="se-subtitle">Aviation-facing admin for real-world aircraft records. Internally these are generic operational assets.</p>
           <div class="se-actions">
-            <button id="se-login" class="se-button" type="button">Log in</button>
-            <button id="se-logout" class="se-button secondary" type="button">Log out</button>
-            <button id="se-refresh" class="se-button secondary" type="button">Refresh</button>
+            <div class="se-badge">ADMIN-PAGE-aircraft-admin-current.js | ${escapeHtml(VERSION)}</div>
+            <div id="se-auth-label" class="se-badge warn">Not authenticated</div>
+            <div id="se-dirty-badge" class="se-badge ok">Saved</div>
           </div>
+        </section>
 
-          <label class="se-field"><span class="se-label">Organization</span><select id="se-customer-select" class="se-select"><option value="">Log in first</option></select></label>
-          <label class="se-check"><input id="se-include-archived" type="checkbox"> Show archived aircraft</label>
+        <section class="se-card">
+          <div class="se-controls">
+            <label class="se-field"><span class="se-label">Email</span><input id="se-email" class="se-input" type="email" value="frank@syncetc.com" autocomplete="username"></label>
+            <label class="se-field"><span class="se-label">Password</span><input id="se-password" class="se-input" type="password" autocomplete="current-password"></label>
+            <button id="se-login" class="se-button">Log in</button>
+            <button id="se-logout" class="se-button secondary">Log out</button>
+            <button id="se-refresh" class="se-button secondary">Refresh</button>
+          </div>
+          <div id="se-status" class="se-status">Loading Supabase client...</div>
+        </section>
 
-          <div class="se-aircraft-list" id="se-aircraft-list"></div>
-        </aside>
+        <section id="se-auth-gate-notice" class="se-card se-auth-gate">
+          <h2 class="se-section-title">Login required</h2>
+          <p class="se-subtitle">Aircraft Admin is hidden until a valid platform-admin session is active. Backend permissions still enforce access; this gate prevents accidental viewing/editing while logged out.</p>
+        </section>
 
-        <section>
-          <section class="se-card">
-            <div class="se-topbar">
-              <div>
-                <h2 class="se-section-title">Aircraft Record</h2>
-                <span id="se-dirty-badge" class="se-dirty">Saved / clean</span>
+        <section class="se-grid" data-auth-required="true">
+          <aside>
+            <section class="se-card">
+              <h2 class="se-section-title">Organization</h2>
+              <label class="se-field"><span class="se-label">Organization</span><select id="se-customer-select" class="se-select"><option value="">Log in and load organizations...</option></select></label>
+              <label class="se-check"><input id="se-include-archived" type="checkbox"> Show archived aircraft</label>
+              <label class="se-check"><input id="se-show-debug" type="checkbox"> Show debug panel</label>
+              <button id="se-new-aircraft" class="se-button secondary full" type="button">New aircraft</button>
+            </section>
+
+            <section class="se-card">
+              <h2 class="se-section-title">Aircraft</h2>
+              <div id="se-aircraft-list" class="se-empty">No aircraft loaded yet.</div>
+            </section>
+
+            <section class="se-card">
+              <h2 class="se-section-title">Optional CSV Import</h2>
+              <p class="se-subtitle">Use later for Webflow aircraft CMS exports. Future customer imports need a mapping step.</p>
+              <div class="se-import-box">
+                <input id="se-csv-file" class="se-input" type="file" accept=".csv,text/csv">
+                <div id="se-import-summary" class="se-meta" style="margin-top:10px;">No CSV chosen.</div>
+                <button id="se-import-csv" class="se-button full" style="margin-top:12px;" type="button">Import CSV rows</button>
               </div>
-              <div class="se-actions">
-                <button id="se-new-aircraft" class="se-button secondary" type="button">New aircraft</button>
-                <button id="se-save-aircraft" class="se-button" type="button">Save aircraft</button>
-                <button id="se-clear-form" class="se-button secondary" type="button">Clear form</button>
+            </section>
+
+            <section id="se-debug-card" class="se-card">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                <h2 class="se-section-title" style="margin:0;">Backend Result</h2>
+                <button id="se-copy-output" class="se-button secondary">Copy result</button>
               </div>
-            </div>
+              <pre id="se-output" class="se-output">{}</pre>
+            </section>
+          </aside>
 
-            <div class="se-form-grid">
-              <label class="se-field"><span class="se-label">Tail Number</span><input id="se-tail-number" class="se-input" type="text" placeholder="N12345"></label>
-              <label class="se-field"><span class="se-label">Display Name</span><input id="se-display-name" class="se-input" type="text" placeholder="N12345"></label>
-              <label class="se-field"><span class="se-label">System Slug / Asset Key</span><div id="se-slug-preview" class="se-generated">generated-after-save</div></label>
-              <label class="se-field"><span class="se-label">Aircraft Type</span><input id="se-aircraft-type" class="se-input" type="text" placeholder="Cessna 172SP"></label>
-              <label class="se-field"><span class="se-label">Model Year</span><input id="se-model-year" class="se-input" type="text" inputmode="numeric" maxlength="4" placeholder="2004"></label>
-              <label class="se-field"><span class="se-label">Status</span><select id="se-status-key" class="se-select"><option value="available">Available</option><option value="scheduled-maintenance">Maintenance</option><option value="do-not-dispatch">Do Not Dispatch</option><option value="grounded">Grounded</option><option value="inactive">Inactive</option></select></label>
-              <label class="se-field"><span class="se-label">Visibility</span><select id="se-visibility" class="se-select"><option value="public">Public</option><option value="members">Members</option><option value="admins">Admins</option><option value="hidden">Hidden</option></select></label>
-              <label class="se-field"><span class="se-label">Sort Order</span><input id="se-sort-order" class="se-input" type="number" placeholder="100"></label>
-              <label class="se-field"><span class="se-label">Home Base</span><input id="se-home-base" class="se-input" type="text" placeholder="KSMQ - Somerset, NJ"></label>
-              <label class="se-field"><span class="se-label">Hourly Rate</span><input id="se-hourly-rate" class="se-input" type="number" step="0.01" placeholder="155"></label>
-              <label class="se-field"><span class="se-label">Annual Due</span><input id="se-annual-due" class="se-input" type="number" step="0.01"></label>
-            </div>
+          <section>
+            <section class="se-card">
+              <div class="se-card-head">
+                <h2 class="se-section-title" style="margin:0;">Aircraft Record</h2>
+                <div class="se-actions" style="margin-top:0;">
+                  <button id="se-save-aircraft" class="se-button" type="button">Save aircraft</button>
+                  <button id="se-clear-form" class="se-button secondary" type="button">Clear form</button>
+                </div>
+              </div>
 
-            <div class="se-form-grid">
-              <label class="se-check"><input id="se-current" type="checkbox" checked> Current aircraft</label>
+              <div class="se-form-grid">
+                <label class="se-field"><span class="se-label">Tail Number</span><input id="se-tail-number" class="se-input" type="text" placeholder="N123AB"></label>
+                <label class="se-field"><span class="se-label">System Key / Slug</span><div id="se-generated-key" class="se-generated">Generated on save</div></label>
+                <label class="se-field"><span class="se-label">Aircraft Type</span><input id="se-aircraft-type" class="se-input" type="text" placeholder="Cessna 172SP"></label>
+                <label class="se-field"><span class="se-label">Model Year</span><input id="se-model-year" class="se-input" type="text" inputmode="numeric" maxlength="4" placeholder="1978"></label>
+                <label class="se-field"><span class="se-label">Operational Status</span><select id="se-status-key" class="se-select"><option value="available">Available</option><option value="scheduled-maintenance">Scheduled Maintenance</option><option value="do-not-dispatch">Do Not Dispatch</option><option value="grounded">Grounded</option><option value="inactive">Inactive</option></select></label>
+                <label class="se-field"><span class="se-label">Visibility</span><select id="se-visibility" class="se-select"><option value="public">Public</option><option value="members">Members</option><option value="admins">Admins</option></select></label>
+                <label class="se-field"><span class="se-label">Sort Order</span><input id="se-sort-order" class="se-input" type="number" placeholder="100"></label>
+                <label class="se-field"><span class="se-label">Home Base</span><input id="se-home-base" class="se-input" type="text" placeholder="KSMQ - Somerset, NJ"></label>
+                <label class="se-field"><span class="se-label">Hourly Rate</span><input id="se-hourly-rate" class="se-input" type="number" step="0.01" placeholder="155"></label>
+                <label class="se-field"><span class="se-label">Annual Due</span><input id="se-annual-due" class="se-input" type="number" step="0.01"></label>
+              </div>
+
               <label class="se-check"><input id="se-do-not-dispatch" type="checkbox"> Do Not Dispatch</label>
-            </div>
-          </section>
+              <input id="se-primary-photo-url" type="hidden">
+              <input id="se-panel-photo-url" type="hidden">
 
-          <section class="se-card" style="margin-top:18px;">
-            <h2 class="se-section-title">Aircraft Images</h2>
-            <p class="se-subtitle">Drag/drop uploads to Supabase Storage under an organization/aircraft path. If the aircraft is unsaved, the page saves it first.</p>
-            <input id="se-primary-photo-url" type="hidden" value="">
-            <input id="se-panel-photo-url" type="hidden" value="">
-            <div class="se-photo-grid">
-              <div id="se-primary-drop" class="se-dropzone" data-role="primary">
-                <div id="se-primary-photo-preview" class="se-photo-preview"><span>Primary photo</span></div>
-                <strong>Primary aircraft photo</strong>
-                <span class="se-subtitle">Drop image here or click to browse.</span>
-                <input id="se-primary-file" class="se-hidden" type="file" accept="image/*">
+              <div class="se-form-grid">
+                <div class="se-field">
+                  <span class="se-label">Primary Aircraft Photo</span>
+                  <div class="se-drop" data-image-role="primary">
+                    <input id="se-primary-photo-file" type="file" accept="image/*">
+                    <div id="se-primary-photo-preview" class="se-drop-preview"><span>Drop primary aircraft photo</span></div>
+                    <div id="se-primary-photo-url-label" class="se-meta">No image uploaded yet.</div>
+                  </div>
+                </div>
+                <div class="se-field">
+                  <span class="se-label">Panel Photo</span>
+                  <div class="se-drop" data-image-role="panel">
+                    <input id="se-panel-photo-file" type="file" accept="image/*">
+                    <div id="se-panel-photo-preview" class="se-drop-preview"><span>Drop panel photo</span></div>
+                    <div id="se-panel-photo-url-label" class="se-meta">No image uploaded yet.</div>
+                  </div>
+                </div>
               </div>
-              <div id="se-panel-drop" class="se-dropzone" data-role="panel">
-                <div id="se-panel-photo-preview" class="se-photo-preview"><span>Panel photo</span></div>
-                <strong>Panel photo</strong>
-                <span class="se-subtitle">Drop image here or click to browse.</span>
-                <input id="se-panel-file" class="se-hidden" type="file" accept="image/*">
+
+              <label class="se-field"><span class="se-label">Plain Summary</span><textarea id="se-summary" class="se-textarea" placeholder="Short plain-text aircraft summary."></textarea></label>
+              <label class="se-field"><span class="se-label">HTML Description</span><textarea id="se-description" class="se-textarea" placeholder="Optional HTML description from Webflow CMS."></textarea></label>
+            </section>
+
+            <section class="se-card">
+              <h2 class="se-section-title">Maintenance / Usage Snapshot</h2>
+              <div class="se-form-grid">
+                <label class="se-field"><span class="se-label">Current Tach</span><input id="se-current-tach" class="se-input" type="number" step="0.01"></label>
+                <label class="se-field"><span class="se-label">Tach Date</span><input id="se-tach-date" class="se-input" type="date"></label>
+                <label class="se-field"><span class="se-label">Current Hobbs</span><input id="se-current-hobbs" class="se-input" type="number" step="0.01"></label>
+                <label class="se-field"><span class="se-label">Hobbs Date</span><input id="se-hobbs-date" class="se-input" type="date"></label>
+                <label class="se-field"><span class="se-label">Hobbs at Last MOH</span><input id="se-hobbs-moh" class="se-input" type="number" step="0.01"></label>
+                <label class="se-field"><span class="se-label">Oil Change Due Tach</span><input id="se-oil-change-due-tach" class="se-input" type="number" step="0.01"></label>
               </div>
-            </div>
-          </section>
-
-          <section class="se-card" style="margin-top:18px;">
-            <h2 class="se-section-title">Description</h2>
-            <label class="se-field"><span class="se-label">Plain Summary</span><textarea id="se-summary" class="se-textarea" placeholder="Short plain-text aircraft summary."></textarea></label>
-            <label class="se-field"><span class="se-label">HTML Description</span><textarea id="se-description" class="se-textarea" placeholder="Optional HTML description from Webflow CMS."></textarea></label>
-          </section>
-
-          <section class="se-card" style="margin-top:18px;">
-            <h2 class="se-section-title">Maintenance / Usage Snapshot</h2>
-            <div class="se-form-grid">
-              <label class="se-field"><span class="se-label">Current Tach</span><input id="se-current-tach" class="se-input" type="number" step="0.01"></label>
-              <label class="se-field"><span class="se-label">Tach Date</span><input id="se-tach-date" class="se-input" type="date"></label>
-              <label class="se-field"><span class="se-label">Current Hobbs</span><input id="se-current-hobbs" class="se-input" type="number" step="0.01"></label>
-              <label class="se-field"><span class="se-label">Hobbs Date</span><input id="se-hobbs-date" class="se-input" type="date"></label>
-              <label class="se-field"><span class="se-label">Hobbs at Last MOH</span><input id="se-hobbs-moh" class="se-input" type="number" step="0.01"></label>
-              <label class="se-field"><span class="se-label">Oil Change Due Tach</span><input id="se-oil-change-due-tach" class="se-input" type="number" step="0.01"></label>
-            </div>
-            <label class="se-field"><span class="se-label">Engine Notes</span><textarea id="se-engine-notes" class="se-textarea"></textarea></label>
-            <label class="se-field"><span class="se-label">General Maintenance Notes</span><textarea id="se-maintenance-notes" class="se-textarea"></textarea></label>
-          </section>
-
-          <section class="se-card" style="margin-top:18px;">
-            <div class="se-topbar">
-              <h2 class="se-section-title">Diagnostics</h2>
-              <div class="se-actions">
-                <button id="se-toggle-debug" class="se-button secondary small" type="button">Hide/show debug</button>
-                <button id="se-copy-output" class="se-button secondary small" type="button">Copy result</button>
-              </div>
-            </div>
-            <p id="se-status" class="se-subtitle">Loading...</p>
-            <pre id="se-output" class="se-output">{}</pre>
+              <label class="se-field"><span class="se-label">Engine Notes</span><textarea id="se-engine-notes" class="se-textarea"></textarea></label>
+              <label class="se-field"><span class="se-label">General Maintenance Notes</span><textarea id="se-maintenance-notes" class="se-textarea"></textarea></label>
+            </section>
           </section>
         </section>
       </main>
     `;
   }
 
-  function bindDropzone(dropId, fileId, role) {
-    const drop = document.getElementById(dropId);
-    const input = document.getElementById(fileId);
-    if (!drop || !input) return;
+  function bindDirtyInputs() {
+    const root = ensureRoot();
+    root.querySelectorAll("input, select, textarea").forEach((el) => {
+      if (["se-email", "se-password", "se-show-debug", "se-include-archived", "se-csv-file", "se-primary-photo-file", "se-panel-photo-file"].includes(el.id)) return;
+      el.addEventListener("input", () => {
+        markDirty();
+        refreshGeneratedKeyLabel();
+      });
+      el.addEventListener("change", () => {
+        markDirty();
+        refreshGeneratedKeyLabel();
+      });
+    });
+  }
 
-    drop.addEventListener("click", () => input.click());
-    input.addEventListener("change", async () => {
-      try {
-        const file = input.files && input.files[0];
-        if (file) await uploadAircraftImage(role, file);
-      } catch (error) {
-        setStatus("Image upload failed.");
-        setOutput({ ok: false, event: "aircraft_image_upload_failed", role, message: error instanceof Error ? error.message : String(error) });
-      } finally {
-        input.value = "";
-      }
+  function bindDropZone(role) {
+    const zone = document.querySelector(`.se-drop[data-image-role="${role}"]`);
+    const input = document.getElementById(`se-${role}-photo-file`);
+    if (!zone || !input) return;
+
+    zone.addEventListener("click", (event) => {
+      if (event.target === input) return;
+      input.click();
     });
 
     ["dragenter", "dragover"].forEach((eventName) => {
-      drop.addEventListener(eventName, (event) => {
+      zone.addEventListener(eventName, (event) => {
         event.preventDefault();
-        drop.classList.add("is-dragover");
+        zone.classList.add("dragover");
       });
     });
+
     ["dragleave", "drop"].forEach((eventName) => {
-      drop.addEventListener(eventName, (event) => {
+      zone.addEventListener(eventName, (event) => {
         event.preventDefault();
-        drop.classList.remove("is-dragover");
+        zone.classList.remove("dragover");
       });
     });
-    drop.addEventListener("drop", async (event) => {
+
+    zone.addEventListener("drop", async (event) => {
       try {
         const file = event.dataTransfer?.files?.[0];
-        if (file) await uploadAircraftImage(role, file);
+        await uploadAircraftImage(role, file);
       } catch (error) {
         setStatus("Image upload failed.");
-        setOutput({ ok: false, event: "aircraft_image_upload_failed", role, message: error instanceof Error ? error.message : String(error) });
+        setOutput({ ok: false, event: "image_upload_failed", message: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    input.addEventListener("change", async (event) => {
+      try {
+        const file = event.target.files && event.target.files[0];
+        await uploadAircraftImage(role, file);
+        input.value = "";
+      } catch (error) {
+        setStatus("Image upload failed.");
+        setOutput({ ok: false, event: "image_upload_failed", message: error instanceof Error ? error.message : String(error) });
       }
     });
   }
@@ -767,6 +902,7 @@
         setStatus("Logging in...");
         const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (error) throw error;
+        setAuthGate(true, data?.user?.email || email);
         setStatus(`Logged in as ${data?.user?.email || email}`);
         await loadCustomers();
       } catch (error) {
@@ -777,7 +913,7 @@
 
     document.getElementById("se-logout")?.addEventListener("click", async () => {
       try {
-        if (!confirmDiscard("You have unsaved aircraft changes. Log out and discard them?")) return;
+        if (!confirmDiscard("You have unsaved aircraft changes. Log out anyway?")) return;
         const { error } = await supabaseClient.auth.signOut();
         if (error) throw error;
         customers = [];
@@ -786,7 +922,8 @@
         selectedAircraftId = "";
         renderCustomers();
         renderAircraftList();
-        clearForm({ force: true });
+        clearForm();
+        setAuthGate(false);
         setStatus("Logged out.");
       } catch (error) {
         setOutput({ ok: false, event: "logout_failed", message: error instanceof Error ? error.message : String(error) });
@@ -795,26 +932,29 @@
 
     document.getElementById("se-refresh")?.addEventListener("click", async () => {
       try {
-        if (!confirmDiscard("You have unsaved aircraft changes. Refresh and discard them?")) return;
+        if (!confirmDiscard()) return;
         await loadCustomers();
-        await loadAircraft();
       } catch (error) {
         setStatus("Refresh failed.");
         setOutput({ ok: false, event: "refresh_failed", message: error instanceof Error ? error.message : String(error) });
       }
     });
 
+    document.getElementById("se-customer-select")?.addEventListener("focus", (event) => {
+      event.target.dataset.previousValue = selectedCustomerId;
+    });
+
     document.getElementById("se-customer-select")?.addEventListener("change", async (event) => {
-      const previous = selectedCustomerId;
-      const next = event.target.value || "";
       try {
-        if (!confirmDiscard("You have unsaved aircraft changes. Switch organization and discard them?")) {
+        const previous = event.target.dataset.previousValue || selectedCustomerId;
+        if (!confirmDiscard("Changing organization will discard unsaved aircraft changes. Continue?")) {
           event.target.value = previous;
           return;
         }
-        selectedCustomerId = next;
+        selectedCustomerId = event.target.value || "";
         selectedAircraftId = "";
-        clearForm({ force: true });
+        resetFormFields();
+        setDirty(false);
         await loadAircraft();
       } catch (error) {
         setStatus("Aircraft load failed.");
@@ -823,15 +963,38 @@
     });
 
     document.getElementById("se-include-archived")?.addEventListener("change", async () => {
-      try { await loadAircraft(); }
-      catch (error) {
+      try {
+        if (!confirmDiscard()) {
+          setChecked("se-include-archived", !getChecked("se-include-archived"));
+          return;
+        }
+        await loadAircraft();
+      } catch (error) {
         setStatus("Archived aircraft toggle failed.");
         setOutput({ ok: false, event: "include_archived_failed", message: error instanceof Error ? error.message : String(error) });
       }
     });
 
-    document.getElementById("se-new-aircraft")?.addEventListener("click", () => clearForm());
-    document.getElementById("se-clear-form")?.addEventListener("click", () => clearForm());
+    document.getElementById("se-show-debug")?.addEventListener("change", (event) => setDebugVisible(event.target.checked));
+
+    document.getElementById("se-new-aircraft")?.addEventListener("click", () => {
+      if (!confirmDiscard("Starting a new aircraft will clear unsaved changes. Continue?")) return;
+      clearForm();
+    });
+
+    document.getElementById("se-clear-form")?.addEventListener("click", () => {
+      if (!confirmDiscard("Clear this form and discard unsaved changes?")) return;
+      clearForm();
+    });
+
+    document.getElementById("se-status-key")?.addEventListener("change", () => {
+      if (getValue("se-status-key") === "do-not-dispatch") setChecked("se-do-not-dispatch", true);
+    });
+
+    document.getElementById("se-do-not-dispatch")?.addEventListener("change", () => {
+      if (getChecked("se-do-not-dispatch")) setValue("se-status-key", "do-not-dispatch");
+      else if (getValue("se-status-key") === "do-not-dispatch") setValue("se-status-key", "available");
+    });
 
     document.getElementById("se-save-aircraft")?.addEventListener("click", async () => {
       try { await saveAircraft(); }
@@ -848,7 +1011,7 @@
       if (!aircraftId) return;
       try {
         if (target.classList.contains("se-edit-aircraft")) {
-          if (!confirmDiscard("You have unsaved aircraft changes. Load another aircraft and discard them?")) return;
+          if (!confirmDiscard("Switching aircraft will discard unsaved changes. Continue?")) return;
           const item = aircraft.find((row) => row.operational_asset_id === aircraftId);
           if (item) fillForm(item);
         } else if (target.classList.contains("se-archive-aircraft")) {
@@ -862,40 +1025,37 @@
       }
     });
 
-    document.getElementById("se-status-key")?.addEventListener("change", () => {
-      if (getValue("se-status-key") === "do-not-dispatch") setChecked("se-do-not-dispatch", true);
+    document.getElementById("se-csv-file")?.addEventListener("change", async (event) => {
+      try {
+        const file = event.target.files && event.target.files[0];
+        await readImportFile(file);
+      } catch (error) {
+        setStatus("CSV parse failed.");
+        setOutput({ ok: false, event: "csv_parse_failed", message: error instanceof Error ? error.message : String(error) });
+      }
     });
 
-    document.getElementById("se-do-not-dispatch")?.addEventListener("change", () => {
-      if (getChecked("se-do-not-dispatch")) setValue("se-status-key", "do-not-dispatch");
+    document.getElementById("se-import-csv")?.addEventListener("click", async () => {
+      try { await importCsvRows(); }
+      catch (error) {
+        setStatus("CSV import failed.");
+        setOutput({ ok: false, event: "csv_import_failed", message: error instanceof Error ? error.message : String(error) });
+      }
     });
 
     document.getElementById("se-copy-output")?.addEventListener("click", copyOutput);
-    document.getElementById("se-toggle-debug")?.addEventListener("click", () => {
-      const out = document.getElementById("se-output");
-      if (out) out.classList.toggle("se-hidden");
-    });
 
-    document.getElementById(ROOT_ID)?.addEventListener("input", (event) => {
-      const target = event.target;
-      if (!target || !target.id || ["se-email", "se-password"].includes(target.id)) return;
-      markDirty();
-    });
-    document.getElementById(ROOT_ID)?.addEventListener("change", (event) => {
-      const target = event.target;
-      if (!target || !target.id || ["se-customer-select", "se-include-archived", "se-primary-file", "se-panel-file"].includes(target.id)) return;
-      markDirty();
-    });
-
-    bindDropzone("se-primary-drop", "se-primary-file", "primary");
-    bindDropzone("se-panel-drop", "se-panel-file", "panel");
+    bindDirtyInputs();
+    bindDropZone("primary");
+    bindDropZone("panel");
+    setDebugVisible(debugVisible);
   }
 
   async function boot() {
-    renderPage();
+    renderShell();
+    setAuthGate(false);
     bindEvents();
-    clearForm({ force: true });
-    registerDirtyGuard();
+    clearForm();
     try {
       await initSupabase();
     } catch (error) {

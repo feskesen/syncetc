@@ -1,5 +1,5 @@
 // ADMIN-PAGE-layout-designer-current.js
-// Internal Version: 2026-06-04-007
+// Internal Version: 2026-06-04-008
 // Purpose: Layout Designer v7 cleanup: corrected visible version, filtered history restore list, reset unsaved changes, and clearer preset/profile help text.
 // Backend contract unchanged from v2. Uses update_active_style_profile and get_active_style_profile.
 // Backend diagnostics include Copy result button.
@@ -7,7 +7,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-04-007";
+  const VERSION = "2026-06-04-008";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -633,15 +633,17 @@
   function renderShell() {
     ensureRoot().innerHTML = `
       <style>
-        #${ROOT_ID}{font-family:Arial,Helvetica,sans-serif;color:#172033;background:#f5f7fb;min-height:100vh;padding:18px;box-sizing:border-box;}
+        #${ROOT_ID}{font-family:Arial,Helvetica,sans-serif;color:#172033;background:#f5f7fb;min-height:100vh;padding:18px 18px 26px;box-sizing:border-box;}
         #${ROOT_ID} *{box-sizing:border-box;}
-        .se-wrap{max-width:1380px;margin:0 auto;}
+        .se-wrap{max-width:1220px;margin:0 auto;}
         .se-header-card{background:#fff;border:1px solid #d9e0ea;border-radius:14px;box-shadow:0 8px 28px rgba(23,32,51,.08);padding:18px;margin-bottom:14px;}
         .se-title{margin:0 0 6px 0;font-size:28px;line-height:1.15;letter-spacing:-.02em;}
         .se-subtitle{margin:0;color:#5d6b82;font-size:15px;line-height:1.45;}
         .se-badge{display:inline-flex;border-radius:999px;background:#e9f1fb;color:#1f4f82;font-size:12px;font-weight:700;padding:6px 10px;margin-top:10px;}
-        .se-main{display:grid;grid-template-columns:400px minmax(0,1fr);gap:16px;align-items:start;}
-        .se-panel{background:#fff;border:1px solid #d9e0ea;border-radius:14px;box-shadow:0 8px 28px rgba(23,32,51,.08);}
+        .se-main{display:grid;grid-template-columns:380px minmax(0,1fr);gap:14px;align-items:start;}
+        .se-panel{background:#fff;border:1px solid #d9e0ea;border-radius:14px;box-shadow:0 8px 28px rgba(23,32,51,.08);} 
+        .se-login-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr)) auto auto auto;gap:10px;align-items:end;}
+        .se-auth-card{padding:18px;}
         .se-controls{position:sticky;top:74px;max-height:calc(100vh - 92px);display:flex;flex-direction:column;overflow:hidden;}
         .se-controls-top{padding:16px;border-bottom:1px solid #e3e9f2;}
         .se-controls-scroll{padding:12px 16px;overflow:auto;}
@@ -667,13 +669,13 @@
         .se-section-body{border-top:1px solid #e3e9f2;padding:12px 13px;}
         .se-preview-title{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;}
         @media(max-width:980px){
-          .se-main{grid-template-columns:1fr;}
+          .se-main,.se-login-grid{grid-template-columns:1fr;}
           .se-controls,.se-preview-panel{position:relative;top:auto;max-height:none;}
         }
 
         .se-badge.warn{background:#fff0d9;color:#8a5200;}
         .se-badge.ok{background:#edf7ed;color:#265c2b;}
-        .se-auth-gate{display:block;}
+        .se-auth-gate{display:block;border-style:dashed;padding:18px;margin-bottom:14px;}
       </style>
 
       <main class="se-wrap">
@@ -684,15 +686,26 @@
           <div class="se-badge">ADMIN-PAGE-layout-designer-current.js | ${escapeHtml(VERSION)}</div>
         </section>
 
-        <section id="se-auth-gate-notice" class="se-panel se-auth-gate">
+        <section class="se-card se-auth-card">
+          <div class="se-login-grid">
+            <label class="se-field"><span class="se-label">Email</span><input id="se-email" class="se-input" type="email" value="frank@syncetc.com" autocomplete="username"></label>
+            <label class="se-field"><span class="se-label">Password</span><input id="se-password" class="se-input" type="password" autocomplete="current-password"></label>
+            <button id="se-login" class="se-button" type="button">Log in</button>
+            <button id="se-logout" class="se-button secondary" type="button">Log out</button>
+            <button id="se-refresh" class="se-button secondary" type="button">Refresh</button>
+          </div>
+          <div id="se-status" class="se-status">Loading Supabase client...</div>
+        </section>
+
+        <section id="se-auth-gate-notice" class="se-card se-auth-gate">
           <h2 class="se-title" style="font-size:22px;">Login required</h2>
           <p class="se-subtitle">Layout Designer controls are hidden until a valid platform-admin session is active. Backend permissions still enforce access; this gate prevents accidental viewing/editing while logged out.</p>
         </section>
 
-        <section class="se-main">
+        <section class="se-main" data-auth-required="true">
           <aside class="se-panel se-controls">
             <div class="se-controls-top">
-              <div data-auth-required="true">
+              <div>
                 <label class="se-field"><span class="se-label">Customer</span><select id="se-customer-select" class="se-select"><option value="">Log in and load customers...</option></select></label>
                 <label class="se-field"><span class="se-label">Apply system preset</span><select id="se-preset" class="se-select"><option value="">Choose preset...</option>${Object.entries(PRESETS).map(([key,preset])=>`<option value="${escapeHtml(key)}">${escapeHtml(preset.label)}</option>`).join("")}</select></label>
                 <div class="se-help">System presets are starting points. They preview immediately but do not save until you click Save to customer.</div>
@@ -700,15 +713,9 @@
                 <div class="se-help">Saved design profiles are reusable customer-specific designs created from the current controls.</div>
                 <button id="se-apply-saved-profile" class="se-button secondary full" type="button">Apply Saved Design Profile</button>
               </div>
-              <div class="se-actions">
-                <button id="se-login" class="se-button">Log in</button>
-                <button id="se-logout" class="se-button secondary">Log out</button>
-                <button id="se-refresh" class="se-button secondary">Refresh</button>
-              </div>
-              <div id="se-status" class="se-status">Loading Supabase client...</div>
             </div>
 
-            <div class="se-controls-scroll" data-auth-required="true">
+            <div class="se-controls-scroll">
               ${controlSection("Profile", `
                 <div id="se-current-preset" class="se-current-preset">Current profile: loading...</div>
                 <div id="se-dirty-indicator" class="se-dirty">Saved / clean</div>
@@ -1122,6 +1129,7 @@
     });
 
     document.querySelectorAll("input, select").forEach((el) => {
+      if (el.closest(".se-auth-card")) return;
       el.addEventListener("input", () => { markDirty(); renderRealPagePreview(); });
       el.addEventListener("change", () => { markDirty(); renderRealPagePreview(); });
     });

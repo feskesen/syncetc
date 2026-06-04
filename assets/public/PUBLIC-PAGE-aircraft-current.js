@@ -119,7 +119,8 @@
       heroPadding: heroStyle === "dashboard" || heroStyle === "compact" ? "24px" : heroStyle === "bold" ? "38px" : "32px",
       cardPadding: cardPadding === "generous" ? "28px" : cardPadding === "compact" ? "16px" : "22px",
       sectionGap: sectionSpacing === "generous" ? "26px" : sectionSpacing === "compact" ? "14px" : "20px",
-      imageFit: imageTreatment === "none" || imageTreatment === "framed" ? "contain" : "cover",
+      // Aircraft photos should default to no-crop display. A future template/style option can opt into "cover" deliberately.
+      imageFit: imageTreatment === "cover" ? "cover" : "contain",
       headingSize: headingScale === "compact" ? "clamp(28px, 4vw, 42px)" : "clamp(32px, 4vw, 50px)",
     };
   }
@@ -155,7 +156,7 @@
       .syncetc-aircraft-copy li{margin-bottom:4px;}
       .syncetc-aircraft-media{display:grid;gap:14px;}
       .syncetc-aircraft-photo-card{overflow:hidden;border-radius:${config.radius};background:${config.surface};border:1px solid ${config.border};box-shadow:${config.shadow === "none" ? "none" : "0 8px 20px rgba(12,38,64,.08)"};}
-      .syncetc-aircraft-photo-card img{display:block;width:100%;height:230px;object-fit:${config.imageFit};background:${config.secondary};}
+      .syncetc-aircraft-photo-card img{display:block;width:100%;height:230px;object-fit:${config.imageFit};object-position:center center;background:${config.secondary};}
       .syncetc-aircraft-photo-label{padding:9px 12px;color:${config.muted};font-size:12px;line-height:1.25;font-weight:800;letter-spacing:.08em;text-transform:uppercase;background:${rgba(config.secondary, 0.72)};border-top:1px solid ${config.border};}
       .syncetc-aircraft-note,.syncetc-aircraft-empty{padding:16px 18px;color:${config.muted};font-size:14px;line-height:1.55;}
       .syncetc-aircraft-note strong{color:${config.primary};}

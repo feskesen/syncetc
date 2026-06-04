@@ -1,13 +1,13 @@
 // CORE-COMPONENT-admin-shell-current.js
-// Internal Version: 2026-06-03-005
-// Purpose: Shared SyncEtc admin shell header with logo and admin navigation bubbles.
+// Internal Version: 2026-06-04-002
+// Purpose: Shared SyncEtc admin shell header, navigation, and dirty-form guard.
 // Logo source: Supabase Storage public core-assets bucket.
 // Live filename is stable. Track versions internally, in Git history, and in local saved copies.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-04-001";
+  const VERSION = "2026-06-04-002";
   const SHELL_ID = "syncetc-admin-shell";
   const LOGO_URL = "https://bxywokidhgppmlzyqvem.supabase.co/storage/v1/object/public/core-assets/SyncEtc-logo-compact.png";
 
@@ -92,6 +92,74 @@
         ${escapeHtml(item.label)}
       </a>
     `;
+  }
+
+
+  function installDirtyGuard() {
+    if (window.SyncEtcAdminDirtyGuard) return;
+
+    const guards = new Map();
+    let nextId = 1;
+    const defaultMessage = "You have unsaved changes. Leave this page and discard them?";
+
+    function hasDirtyGuard() {
+      for (const guard of guards.values()) {
+        try {
+          if (typeof guard.isDirty === "function" && guard.isDirty()) return true;
+        } catch {
+          // Ignore broken guard callbacks so navigation does not become permanently blocked.
+        }
+      }
+      return false;
+    }
+
+    function getMessage() {
+      for (const guard of guards.values()) {
+        try {
+          if (typeof guard.isDirty === "function" && guard.isDirty() && guard.message) return guard.message;
+        } catch {
+          // Ignore.
+        }
+      }
+      return defaultMessage;
+    }
+
+    function confirmLeave(message) {
+      if (!hasDirtyGuard()) return true;
+      return window.confirm(message || getMessage());
+    }
+
+    window.addEventListener("beforeunload", (event) => {
+      if (!hasDirtyGuard()) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
+
+    document.addEventListener("click", (event) => {
+      const anchor = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+      if (!anchor) return;
+      if (anchor.target && anchor.target !== "_self") return;
+      const href = anchor.getAttribute("href") || "";
+      if (!href || href.startsWith("#") || href.startsWith("javascript:")) return;
+      if (!confirmLeave()) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }, true);
+
+    window.SyncEtcAdminDirtyGuard = {
+      version: VERSION,
+      register(options) {
+        const id = `guard-${nextId++}`;
+        guards.set(id, options || {});
+        return () => guards.delete(id);
+      },
+      hasDirtyGuard,
+      confirmLeave,
+      clearAll() {
+        guards.clear();
+      }
+    };
   }
 
   function renderShell() {
@@ -227,6 +295,7 @@
   }
 
   function boot() {
+    installDirtyGuard();
     renderShell();
   }
 
@@ -238,7 +307,8 @@
 
   window.SyncEtcAdminShell = {
     version: VERSION,
-    render: renderShell
+    render: renderShell,
+    installDirtyGuard: installDirtyGuard
   };
 })();
 

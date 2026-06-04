@@ -223,10 +223,16 @@
     return `${intro ? paragraphHtml(intro) : ""}${bullets ? `<ul>${bullets}</ul>` : ""}`;
   }
 
-  function photoCard(url, label, alt) {
+  function photoCard(url, srcset, label, alt) {
     if (!hasText(url)) return "";
     return `<div class="syncetc-aircraft-photo-card">
-      <img src="${escapeHtml(url)}" alt="${escapeHtml(alt || label || "Aircraft photo")}" loading="lazy">
+      <img
+        src="${escapeHtml(url)}"
+        ${hasText(srcset) ? `srcset="${escapeHtml(srcset)}"` : ""}
+        sizes="(max-width: 720px) calc(100vw - 60px), (max-width: 980px) 45vw, 420px"
+        alt="${escapeHtml(alt || label || "Aircraft photo")}"
+        loading="lazy"
+        decoding="async">
       ${hasText(label) ? `<div class="syncetc-aircraft-photo-label">${escapeHtml(label)}</div>` : ""}
     </div>`;
   }
@@ -254,8 +260,8 @@
     const primaryLabel = getText(labels, "primary_photo_label", "Exterior");
     const panelLabel = getText(labels, "panel_photo_label", "Panel");
     const media = [
-      getBool(options, "show_primary_photo", true) ? photoCard(aircraft.primary_photo_url, primaryLabel, `${title} ${primaryLabel}`) : "",
-      getBool(options, "show_panel_photo", true) ? photoCard(aircraft.panel_photo_url, panelLabel, `${title} ${panelLabel}`) : "",
+      getBool(options, "show_primary_photo", true) ? photoCard(aircraft.primary_photo_url, aircraft.primary_photo_srcset, primaryLabel, `${title} ${primaryLabel}`) : "",
+      getBool(options, "show_panel_photo", true) ? photoCard(aircraft.panel_photo_url, aircraft.panel_photo_srcset, panelLabel, `${title} ${panelLabel}`) : "",
     ].filter(Boolean).join("");
 
     return `<article class="syncetc-aircraft-card">

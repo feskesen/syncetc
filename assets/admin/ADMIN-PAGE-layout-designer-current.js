@@ -1,13 +1,13 @@
 // ADMIN-PAGE-layout-designer-current.js
-// Internal Version: 2026-06-04-010
-// Purpose: Layout Designer v9: adds reset-to-system-default, keeps history/restore, and preserves corrected dirty-state tracking.
+// Internal Version: 2026-06-04-011
+// Purpose: Layout Designer v10: adds paginated/collapsed filtered history, restore-safe audit behavior, reset-to-system-default, and corrected dirty-state tracking.
 // Backend actions include update_active_style_profile, get_active_style_profile, list_style_profile_history, restore_style_profile_snapshot, and reset_active_style_profile_to_default.
 // Backend diagnostics include Copy result button.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-04-010";
+  const VERSION = "2026-06-04-011";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -29,6 +29,9 @@
   const DIRTY_MESSAGE = "You have unsaved Layout Designer changes. Leave anyway?";
   let savedProfiles = [];
   let styleHistory = [];
+  let styleHistoryLimit = 10;
+  let styleHistoryTotalCount = 0;
+  let styleHistoryFilter = "all";
 
   const PRESETS = {
     "clean-blue": {
@@ -708,7 +711,7 @@
         .se-button.secondary{background:#fff;color:#1f4f82;}
         .se-button.full{width:100%;justify-content:center;}
         .se-status{margin-top:12px;padding:12px;border-radius:10px;background:#eef3f8;border:1px solid #d6e0ec;color:#26344d;font-size:14px;white-space:pre-wrap;}
-        .se-output{margin-top:14px;background:#101827;color:#e7edf6;border-radius:12px;padding:14px;overflow:auto;min-height:120px;max-height:300px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.45;}.se-color-row{display:grid;grid-template-columns:48px minmax(0,1fr) 30px;gap:8px;align-items:center;}.se-color-picker{width:48px;height:42px;border:1px solid #c7d2e2;border-radius:10px;padding:2px;background:#fff;cursor:pointer;}.se-color-hex{font-family:Consolas,Monaco,monospace;}.se-color-swatch{display:block;width:30px;height:30px;border-radius:999px;border:1px solid #c7d2e2;box-shadow:inset 0 0 0 2px rgba(255,255,255,.7);}.se-diagnostics{margin-top:16px;background:#fff;border:1px solid #d9e0ea;border-radius:14px;padding:16px;}.se-dirty{display:inline-flex;border-radius:999px;padding:6px 10px;background:#edf7ed;color:#265c2b;font-size:12px;font-weight:900;margin:0 0 12px 0;}.se-dirty.is-dirty{background:#fff0d9;color:#8a5200;}.se-current-preset{padding:10px 12px;border:1px solid #d9e0ea;background:#f7f9fc;border-radius:10px;font-size:13px;font-weight:800;margin-bottom:10px;color:#26344d;}.se-help{font-size:12px;line-height:1.35;color:#5d6b82;background:#f7f9fc;border:1px solid #e3e9f2;border-radius:10px;padding:9px 10px;margin:-4px 0 12px 0;}.se-history-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;border:1px solid #d9e0ea;border-radius:10px;padding:10px;margin-bottom:8px;background:#fbfcfe;}.se-history-meta{font-size:12px;color:#5d6b82;line-height:1.35;}
+        .se-output{margin-top:14px;background:#101827;color:#e7edf6;border-radius:12px;padding:14px;overflow:auto;min-height:120px;max-height:300px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.45;}.se-color-row{display:grid;grid-template-columns:48px minmax(0,1fr) 30px;gap:8px;align-items:center;}.se-color-picker{width:48px;height:42px;border:1px solid #c7d2e2;border-radius:10px;padding:2px;background:#fff;cursor:pointer;}.se-color-hex{font-family:Consolas,Monaco,monospace;}.se-color-swatch{display:block;width:30px;height:30px;border-radius:999px;border:1px solid #c7d2e2;box-shadow:inset 0 0 0 2px rgba(255,255,255,.7);}.se-diagnostics{margin-top:16px;background:#fff;border:1px solid #d9e0ea;border-radius:14px;padding:16px;}.se-dirty{display:inline-flex;border-radius:999px;padding:6px 10px;background:#edf7ed;color:#265c2b;font-size:12px;font-weight:900;margin:0 0 12px 0;}.se-dirty.is-dirty{background:#fff0d9;color:#8a5200;}.se-current-preset{padding:10px 12px;border:1px solid #d9e0ea;background:#f7f9fc;border-radius:10px;font-size:13px;font-weight:800;margin-bottom:10px;color:#26344d;}.se-help{font-size:12px;line-height:1.35;color:#5d6b82;background:#f7f9fc;border:1px solid #e3e9f2;border-radius:10px;padding:9px 10px;margin:-4px 0 12px 0;}.se-history-tools{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end;margin-top:12px;}.se-history-count{font-size:12px;color:#5d6b82;font-weight:800;}.se-history-list{max-height:430px;overflow:auto;padding-right:4px;}.se-history-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:start;border:1px solid #d9e0ea;border-radius:10px;padding:10px;margin-bottom:8px;background:#fbfcfe;}.se-history-title{display:block;font-size:13px;font-weight:900;color:#172033;margin-bottom:3px;}.se-history-meta{display:block;font-size:12px;color:#5d6b82;line-height:1.35;margin-top:2px;}.se-history-details summary{cursor:pointer;list-style:none;}.se-history-details summary::-webkit-details-marker{display:none;}.se-history-details summary::after{content:"Show details";display:inline-flex;margin-top:6px;font-size:11px;font-weight:900;color:#1f4f82;}.se-history-details[open] summary::after{content:"Hide details";}.se-history-json{margin:8px 0 0 0;max-height:180px;overflow:auto;background:#101827;color:#e7edf6;border-radius:10px;padding:10px;font-family:Consolas,Monaco,monospace;font-size:11px;line-height:1.45;}
         .se-control-section{border:1px solid #d8e1ed;border-radius:12px;margin-bottom:10px;background:#fbfcfe;overflow:hidden;}
         .se-control-section summary{cursor:pointer;font-weight:900;color:#1f2a44;padding:12px 13px;list-style:none;}
         .se-control-section summary::-webkit-details-marker{display:none;}
@@ -875,11 +878,16 @@
               <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
                 <div>
                   <h3 style="margin:0 0 4px 0;font-size:18px;">History / Restore</h3>
-                  <p class="se-subtitle">Shows useful recent restore points for this customer.</p>
+                  <p class="se-subtitle">Scoped to the selected customer style profile. Restores create new history entries.</p>
                 </div>
                 <button id="se-refresh-history" class="se-button secondary">Refresh history</button>
               </div>
-              <div id="se-history-list" style="margin-top:12px;">No history loaded yet.</div>
+              <div class="se-history-tools">
+                <label class="se-field" style="margin:0;"><span class="se-label">Filter history</span><select id="se-history-filter" class="se-select"><option value="all">All events</option><option value="saves">Saves</option><option value="restores">Restores</option><option value="defaults">Default resets</option><option value="profiles">Saved profile actions</option><option value="checkpoints">Manual checkpoints</option></select></label>
+                <div id="se-history-count" class="se-history-count"></div>
+              </div>
+              <div id="se-history-list" class="se-history-list" style="margin-top:12px;">No history loaded yet.</div>
+              <button id="se-load-more-history" class="se-button secondary full" type="button" style="margin-top:10px;display:none;">Load 10 more</button>
             </section>
           </section>
         </section>
@@ -934,38 +942,99 @@
     }).join("");
   }
 
+  const STYLE_HISTORY_EVENT_LABELS = {
+    before_save: "Before save",
+    after_save: "Saved style",
+    before_restore: "Before restore",
+    after_restore: "Restored style",
+    before_apply_saved_profile: "Before applying saved profile",
+    after_apply_saved_profile: "Applied saved profile",
+    saved_profile_created: "Saved design profile",
+    before_reset_to_default: "Before default reset",
+    after_reset_to_default: "After default reset",
+    manual_checkpoint: "Manual checkpoint"
+  };
+
+  function styleHistoryEventLabel(eventType) {
+    return STYLE_HISTORY_EVENT_LABELS[String(eventType || "")] || String(eventType || "History");
+  }
+
+  function styleHistorySnapshotTitle(row) {
+    const snapshot = row.snapshot_json || {};
+    return snapshot.profile_name || snapshot.preset_key || "Style Snapshot";
+  }
+
+  function styleHistorySnapshotSummary(row) {
+    const snapshot = row.snapshot_json || {};
+    return {
+      event_type: row.event_type || null,
+      created_at: row.created_at || null,
+      saved_by_email: row.saved_by_email || null,
+      note: row.note || null,
+      profile_name: snapshot.profile_name || null,
+      preset_key: snapshot.preset_key || null,
+      preset_source: snapshot.preset_source || null,
+      density: snapshot.density || null,
+      card_style: snapshot.card_style || null,
+      hero_style: snapshot.hero_style || null,
+      color_fields: Object.keys(snapshot.colors_json || {}).sort(),
+      typography_fields: Object.keys(snapshot.typography_json || {}).sort(),
+      spacing_fields: Object.keys(snapshot.spacing_json || {}).sort(),
+      layout_fields: Object.keys(snapshot.layout_json || {}).sort(),
+      effect_fields: Object.keys(snapshot.effects_json || {}).sort()
+    };
+  }
+
   function renderHistory() {
     const list = document.getElementById("se-history-list");
+    const countEl = document.getElementById("se-history-count");
+    const loadMore = document.getElementById("se-load-more-history");
     if (!list) return;
 
-    const usefulHistory = styleHistory.filter((row) => {
-      const eventType = String(row.event_type || "");
-      return ["before_reset_to_default", "after_reset_to_default", "after_save", "after_restore", "after_apply_saved_profile", "saved_profile_created"].includes(eventType);
-    });
-
-    if (!usefulHistory.length) {
-      list.innerHTML = "No useful restore points yet. Save a customer style to create one.";
+    if (!selectedCustomerId) {
+      list.innerHTML = "Select a customer to view style history.";
+      if (countEl) countEl.textContent = "";
+      if (loadMore) loadMore.style.display = "none";
       return;
     }
 
-    list.innerHTML = usefulHistory.map((row) => {
-      const snapshot = row.snapshot_json || {};
+    if (!styleHistory.length) {
+      list.innerHTML = "No matching restore points yet. Save a customer style to create one.";
+      if (countEl) countEl.textContent = styleHistoryTotalCount ? `Showing 0 of ${styleHistoryTotalCount}` : "";
+      if (loadMore) loadMore.style.display = "none";
+      return;
+    }
+
+    if (countEl) {
+      const shown = styleHistory.length;
+      const total = styleHistoryTotalCount || shown;
+      countEl.textContent = `Showing ${shown} of ${total}`;
+    }
+
+    if (loadMore) {
+      const total = styleHistoryTotalCount || styleHistory.length;
+      loadMore.style.display = styleHistory.length < total ? "block" : "none";
+    }
+
+    list.innerHTML = styleHistory.map((row) => {
       const date = row.created_at ? new Date(row.created_at).toLocaleString() : "";
-      const eventLabel = String(row.event_type || "")
-        .replace("after_save", "Saved style")
-        .replace("after_restore", "Restored style")
-        .replace("after_apply_saved_profile", "Applied saved profile")
-        .replace("saved_profile_created", "Saved design profile")
-        .replace("before_reset_to_default", "Before default reset")
-        .replace("after_reset_to_default", "After default reset");
+      const eventLabel = styleHistoryEventLabel(row.event_type);
+      const title = styleHistorySnapshotTitle(row);
+      const summary = styleHistorySnapshotSummary(row);
       return `
         <div class="se-history-row">
-          <div>
-            <strong>${escapeHtml(snapshot.profile_name || "Style Snapshot")}</strong>
-            <div class="se-history-meta">${escapeHtml(eventLabel)} | ${escapeHtml(date)}</div>
-            ${row.note ? `<div class="se-history-meta">${escapeHtml(row.note)}</div>` : ""}
+          <div class="se-history-main">
+            <details class="se-history-details">
+              <summary>
+                <span class="se-history-title">${escapeHtml(title)}</span>
+                <span class="se-history-meta">${escapeHtml(eventLabel)} | ${escapeHtml(date)}</span>
+                ${row.saved_by_email ? `<span class="se-history-meta">${escapeHtml(row.saved_by_email)}</span>` : ""}
+                ${row.note ? `<span class="se-history-meta">${escapeHtml(row.note)}</span>` : ""}
+              </summary>
+              <pre class="se-history-json">${escapeHtml(JSON.stringify(summary, null, 2))}</pre>
+            </details>
           </div>
-          <button class="se-button secondary se-restore-history" data-history-id="${escapeHtml(row.history_id)}" type="button">Restore</button>
+          <button class="se-button secondary se-restore-history" data-history-id="${escapeHtml(row.history_id)}" data-history-title="${escapeHtml(title)}" type="button">Restore</button>
         </div>
       `;
     }).join("");
@@ -973,9 +1042,10 @@
     list.querySelectorAll(".se-restore-history").forEach((button) => {
       button.addEventListener("click", async () => {
         const historyId = button.getAttribute("data-history-id");
+        const historyTitle = button.getAttribute("data-history-title") || "this style snapshot";
         if (!historyId) return;
         if (!confirmDiscardChanges("You have unsaved changes. Restore this history snapshot and discard them?")) return;
-        if (!window.confirm("Restore this style snapshot to the active customer style profile?")) return;
+        if (!window.confirm(`Restore ${historyTitle} to the active customer style profile? This creates a new restore point.`)) return;
 
         try {
           isSaving = true;
@@ -986,6 +1056,7 @@
           });
           activeStyleProfile = result.style_profile;
           applyPayloadToForm(activeStyleProfile);
+          styleHistoryLimit = 10;
           await loadSavedProfiles();
           await loadStyleHistory();
           markClean();
@@ -1014,11 +1085,22 @@
   async function loadStyleHistory() {
     if (!selectedCustomerId) {
       styleHistory = [];
+      styleHistoryTotalCount = 0;
       renderHistory();
       return;
     }
-    const result = await callCoreAdminAction("list_style_profile_history", { customer_id: selectedCustomerId, limit: 10 });
+
+    const filterEl = document.getElementById("se-history-filter");
+    styleHistoryFilter = filterEl ? filterEl.value || "all" : styleHistoryFilter || "all";
+
+    const result = await callCoreAdminAction("list_style_profile_history", {
+      customer_id: selectedCustomerId,
+      limit: styleHistoryLimit,
+      offset: 0,
+      event_group: styleHistoryFilter
+    });
     styleHistory = Array.isArray(result.history) ? result.history : [];
+    styleHistoryTotalCount = Number.isFinite(Number(result.total_count)) ? Number(result.total_count) : styleHistory.length;
     renderHistory();
   }
 
@@ -1079,6 +1161,7 @@
     const result = await callCoreAdminAction("update_active_style_profile", { customer_id: selectedCustomerId, note: "Layout Designer save", ...payload });
     activeStyleProfile = result.style_profile;
     applyPayloadToForm(activeStyleProfile);
+    styleHistoryLimit = 10;
     await loadSavedProfiles();
     await loadStyleHistory();
     markClean();
@@ -1140,6 +1223,7 @@
         }
         selectedCustomerId = event.target.value || "";
         selectedPreviewPageId = "";
+        styleHistoryLimit = 10;
         markClean();
         if (selectedCustomerId) {
           await loadActiveStyleProfile();
@@ -1187,7 +1271,8 @@
       "se-preview-mode",
       "se-preview-page-key",
       "se-preview-customer-page-id",
-      "se-use-real-page-data"
+      "se-use-real-page-data",
+      "se-history-filter"
     ]);
 
     document.querySelectorAll("input, select").forEach((el) => {
@@ -1221,6 +1306,7 @@
           note: "Saved from Layout Designer",
           ...payload
         });
+        styleHistoryLimit = 10;
         await loadSavedProfiles();
         await loadStyleHistory();
         setStatus(`Saved new design profile: ${result.saved_profile?.profile_name || profileName.trim()}`);
@@ -1250,6 +1336,7 @@
 
         activeStyleProfile = result.style_profile;
         applyPayloadToForm(activeStyleProfile);
+        styleHistoryLimit = 10;
         await loadSavedProfiles();
         await loadStyleHistory();
         markClean();
@@ -1263,10 +1350,30 @@
     });
 
     document.getElementById("se-refresh-history")?.addEventListener("click", async () => {
-      try { await loadStyleHistory(); }
+      try { styleHistoryLimit = 10; await loadStyleHistory(); }
       catch (error) {
         setStatus("History refresh failed.");
         setOutput({ ok: false, event: "history_refresh_failed", message: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    document.getElementById("se-history-filter")?.addEventListener("change", async () => {
+      try {
+        styleHistoryLimit = 10;
+        await loadStyleHistory();
+      } catch (error) {
+        setStatus("History filter failed.");
+        setOutput({ ok: false, event: "history_filter_failed", message: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    document.getElementById("se-load-more-history")?.addEventListener("click", async () => {
+      try {
+        styleHistoryLimit += 10;
+        await loadStyleHistory();
+      } catch (error) {
+        setStatus("Load more history failed.");
+        setOutput({ ok: false, event: "history_load_more_failed", message: error instanceof Error ? error.message : String(error) });
       }
     });
 
@@ -1311,6 +1418,7 @@
         });
         activeStyleProfile = result.style_profile;
         applyPayloadToForm(activeStyleProfile);
+        styleHistoryLimit = 10;
         await loadSavedProfiles();
         await loadStyleHistory();
         markClean();

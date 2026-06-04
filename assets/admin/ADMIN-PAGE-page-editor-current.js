@@ -1,13 +1,13 @@
 // ADMIN-PAGE-page-editor-current.js
-// Internal Version: 2026-06-04-007
-// Purpose: Page Editor with history/restore, reset-to-template-defaults, corrected dirty-state tracking, and Aircraft page contract fields.
+// Internal Version: 2026-06-04-008
+// Purpose: Page Editor with paginated/collapsed history, restore filters, reset-to-template-defaults, corrected dirty-state tracking, and Aircraft page contract fields.
 // Uses existing core-admin-action backend actions.
 // Actions used: list_customers, list_customer_pages, get_customer_page_settings, update_customer_page, update_page_settings, list_page_settings_history, restore_page_settings_snapshot, reset_page_settings_to_template_defaults.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-04-007";
+  const VERSION = "2026-06-04-008";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -29,6 +29,9 @@
   let isHydrating = false;
   let cleanSignature = "";
   let pageHistory = [];
+  let pageHistoryLimit = 10;
+  let pageHistoryTotalCount = 0;
+  let pageHistoryFilter = "all";
   const DIRTY_MESSAGE = "You have unsaved Page Editor changes. Leave anyway?";
 
   const FEATURE_DEFAULTS = {
@@ -452,48 +455,98 @@
     }).join("");
   }
 
+  const PAGE_HISTORY_EVENT_LABELS = {
+    before_save: "Before save",
+    after_save: "After save",
+    before_restore: "Before restore",
+    after_restore: "After restore",
+    before_reset_to_default: "Before default reset",
+    after_reset_to_default: "After default reset",
+    manual_checkpoint: "Manual checkpoint"
+  };
+
+  function pageHistoryEventLabel(eventType) {
+    return PAGE_HISTORY_EVENT_LABELS[String(eventType || "")] || String(eventType || "History");
+  }
+
+  function pageHistorySnapshotTitle(row) {
+    const snapshot = row.snapshot_json || {};
+    const pageSettings = snapshot.page_settings || {};
+    const content = pageSettings.content_json || {};
+    const page = snapshot.customer_page || {};
+    return pageSettings.title || content.hero_title || page.nav_label || page.page_key || "Page snapshot";
+  }
+
+  function pageHistorySnapshotSummary(row) {
+    const snapshot = row.snapshot_json || {};
+    const pageSettings = snapshot.page_settings || {};
+    const labels = pageSettings.labels_json || {};
+    const content = pageSettings.content_json || {};
+    const options = pageSettings.options_json || {};
+    const visibility = pageSettings.visibility_json || {};
+    return {
+      event_type: row.event_type || null,
+      created_at: row.created_at || null,
+      saved_by_email: row.saved_by_email || null,
+      note: row.note || null,
+      title: pageSettings.title || null,
+      content_fields: Object.keys(content).sort(),
+      label_fields: Object.keys(labels).sort(),
+      option_fields: Object.keys(options).sort(),
+      visibility_fields: Object.keys(visibility).sort()
+    };
+  }
+
   function renderPageHistory() {
     const list = getEl("se-page-history-list");
+    const countEl = getEl("se-page-history-count");
+    const loadMore = getEl("se-load-more-page-history");
     if (!list) return;
 
     if (!selectedCustomerPageId) {
       list.innerHTML = "Select a page to view restore points.";
+      if (countEl) countEl.textContent = "";
+      if (loadMore) loadMore.style.display = "none";
       return;
     }
 
-    const usefulHistory = pageHistory.filter((row) => {
-      const eventType = String(row.event_type || "");
-      return ["before_save", "after_save", "before_restore", "after_restore", "before_reset_to_default", "after_reset_to_default", "manual_checkpoint"].includes(eventType);
-    });
-
-    if (!usefulHistory.length) {
-      list.innerHTML = "No page history yet. Save this page to create restore points.";
+    if (!pageHistory.length) {
+      list.innerHTML = "No matching page history yet. Save this page to create restore points.";
+      if (countEl) countEl.textContent = pageHistoryTotalCount ? `Showing 0 of ${pageHistoryTotalCount}` : "";
+      if (loadMore) loadMore.style.display = "none";
       return;
     }
 
-    list.innerHTML = usefulHistory.map((row) => {
-      const snapshot = row.snapshot_json || {};
-      const pageSettings = snapshot.page_settings || {};
-      const content = pageSettings.content_json || {};
-      const page = snapshot.customer_page || {};
+    if (countEl) {
+      const shown = pageHistory.length;
+      const total = pageHistoryTotalCount || shown;
+      countEl.textContent = `Showing ${shown} of ${total}`;
+    }
+
+    if (loadMore) {
+      const total = pageHistoryTotalCount || pageHistory.length;
+      loadMore.style.display = pageHistory.length < total ? "block" : "none";
+    }
+
+    list.innerHTML = pageHistory.map((row) => {
       const date = row.created_at ? new Date(row.created_at).toLocaleString() : "";
-      const eventLabel = String(row.event_type || "")
-        .replace("before_save", "Before save")
-        .replace("after_save", "After save")
-        .replace("before_restore", "Before restore")
-        .replace("after_restore", "After restore")
-        .replace("before_reset_to_default", "Before default reset")
-        .replace("after_reset_to_default", "After default reset")
-        .replace("manual_checkpoint", "Manual checkpoint");
-      const title = pageSettings.title || content.hero_title || page.nav_label || page.page_key || "Page snapshot";
+      const title = pageHistorySnapshotTitle(row);
+      const eventLabel = pageHistoryEventLabel(row.event_type);
+      const summary = pageHistorySnapshotSummary(row);
       return `
         <div class="se-history-row">
-          <div>
-            <strong>${escapeHtml(title)}</strong>
-            <div class="se-history-meta">${escapeHtml(eventLabel)} | ${escapeHtml(date)}</div>
-            ${row.note ? `<div class="se-history-meta">${escapeHtml(row.note)}</div>` : ""}
+          <div class="se-history-main">
+            <details class="se-history-details">
+              <summary>
+                <span class="se-history-title">${escapeHtml(title)}</span>
+                <span class="se-history-meta">${escapeHtml(eventLabel)} | ${escapeHtml(date)}</span>
+                ${row.saved_by_email ? `<span class="se-history-meta">${escapeHtml(row.saved_by_email)}</span>` : ""}
+                ${row.note ? `<span class="se-history-meta">${escapeHtml(row.note)}</span>` : ""}
+              </summary>
+              <pre class="se-history-json">${escapeHtml(JSON.stringify(summary, null, 2))}</pre>
+            </details>
           </div>
-          <button class="se-button secondary se-restore-page-history" data-history-id="${escapeHtml(row.history_id)}" type="button">Restore</button>
+          <button class="se-button secondary se-restore-page-history" data-history-id="${escapeHtml(row.history_id)}" data-history-title="${escapeHtml(title)}" type="button">Restore</button>
         </div>
       `;
     }).join("");
@@ -501,9 +554,10 @@
     list.querySelectorAll(".se-restore-page-history").forEach((button) => {
       button.addEventListener("click", async () => {
         const historyId = button.getAttribute("data-history-id");
+        const historyTitle = button.getAttribute("data-history-title") || "this snapshot";
         if (!historyId || !selectedCustomerPageId) return;
         if (!confirmDiscardChanges("You have unsaved page changes. Restore this history snapshot and discard them?")) return;
-        if (!window.confirm("Restore this page settings snapshot?")) return;
+        if (!window.confirm(`Restore ${historyTitle}? This overwrites the current Page Editor fields and creates a new restore point.`)) return;
 
         try {
           isSaving = true;
@@ -513,6 +567,7 @@
             history_id: historyId
           });
           currentPageSettings = result.page_settings || currentPageSettings;
+          pageHistoryLimit = 10;
           await loadSelectedPageEditor();
           markClean();
           setStatus("Page history snapshot restored.");
@@ -529,15 +584,22 @@
   async function loadPageHistory() {
     if (!selectedCustomerPageId) {
       pageHistory = [];
+      pageHistoryTotalCount = 0;
       renderPageHistory();
       return;
     }
 
+    const filterEl = getEl("se-page-history-filter");
+    pageHistoryFilter = filterEl ? filterEl.value || "all" : pageHistoryFilter || "all";
+
     const result = await callCoreAdminAction("list_page_settings_history", {
       customer_page_id: selectedCustomerPageId,
-      limit: 25
+      limit: pageHistoryLimit,
+      offset: 0,
+      event_group: pageHistoryFilter
     });
     pageHistory = Array.isArray(result.history) ? result.history : [];
+    pageHistoryTotalCount = Number.isFinite(Number(result.total_count)) ? Number(result.total_count) : pageHistory.length;
     renderPageHistory();
   }
 
@@ -701,8 +763,17 @@
         .se-dirty.is-dirty{background:#fff0d9;color:#8a5200;}
         .se-note{font-size:12px;line-height:1.35;color:#5d6b82;margin-top:8px;}
         .se-empty{border:1px dashed #c7d2e2;border-radius:12px;padding:20px;color:#5d6b82;background:#fbfcfe;}
-        .se-history-row{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #e1e7f0;border-radius:12px;padding:10px;margin-top:10px;background:#fbfcfe;}
-        .se-history-meta{font-size:12px;line-height:1.35;color:#5d6b82;margin-top:3px;}
+        .se-history-tools{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;margin-top:12px;}
+        .se-history-list{max-height:430px;overflow:auto;padding-right:4px;}
+        .se-history-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:10px;border:1px solid #e1e7f0;border-radius:12px;padding:10px;margin-top:10px;background:#fbfcfe;}
+        .se-history-title{display:block;font-size:13px;font-weight:900;color:#172033;margin-bottom:3px;}
+        .se-history-meta{display:block;font-size:12px;line-height:1.35;color:#5d6b82;margin-top:2px;}
+        .se-history-details summary{cursor:pointer;list-style:none;}
+        .se-history-details summary::-webkit-details-marker{display:none;}
+        .se-history-details summary::after{content:"Show details";display:inline-flex;margin-top:6px;font-size:11px;font-weight:900;color:#1f4f82;}
+        .se-history-details[open] summary::after{content:"Hide details";}
+        .se-history-json{margin:8px 0 0 0;max-height:180px;overflow:auto;background:#101827;color:#e7edf6;border-radius:10px;padding:10px;font-family:Consolas,Monaco,monospace;font-size:11px;line-height:1.45;}
+        .se-history-count{font-size:12px;color:#5d6b82;font-weight:800;}
         .se-danger-zone{border-color:#ffd0d0;background:#fffafa;}
         .se-button.danger{border-color:#9f1d1d;background:#9f1d1d;color:#fff;}
         @media(max-width:900px){.se-layout{grid-template-columns:1fr;}.se-sidebar{position:relative;top:auto;}.se-controls{grid-template-columns:1fr;}.se-two-col{grid-template-columns:1fr;}}
@@ -766,13 +837,18 @@
               <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
                 <div>
                   <h2 class="se-section-title" style="margin:0;">History / Restore</h2>
-                  <p class="se-subtitle">Recent restore points for the selected page.</p>
+                  <p class="se-subtitle">Scoped to the selected customer page. Restores create new history entries.</p>
                 </div>
                 <button id="se-refresh-page-history" class="se-button secondary" type="button">Refresh</button>
               </div>
+              <div class="se-history-tools">
+                <label class="se-field"><span class="se-label">Filter history</span><select id="se-page-history-filter" class="se-select"><option value="all">All events</option><option value="saves">Saves</option><option value="restores">Restores</option><option value="defaults">Default resets</option><option value="checkpoints">Manual checkpoints</option></select></label>
+                <div id="se-page-history-count" class="se-history-count"></div>
+              </div>
               <button id="se-revert-page-default" class="se-button danger full" type="button" style="margin-top:12px;">Revert page to template default</button>
-              <div class="se-note">This resets page copy/options only. It does not change page slug, status, or nav visibility.</div>
-              <div id="se-page-history-list" style="margin-top:12px;">No history loaded yet.</div>
+              <div class="se-note">This resets page copy/options only. It does not change page slug, status, or nav visibility. A restore point is saved before and after the reset.</div>
+              <div id="se-page-history-list" class="se-history-list" style="margin-top:12px;">No history loaded yet.</div>
+              <button id="se-load-more-page-history" class="se-button secondary full" type="button" style="margin-top:10px;display:none;">Load 10 more</button>
             </section>
 
             <section class="se-card">
@@ -918,6 +994,8 @@
     currentCustomerPage = { ...currentCustomerPage, nav_label: navLabel, status, show_in_nav: showInNav };
 
     markClean();
+    pageHistoryLimit = 10;
+    await loadPageHistory();
     isSaving = false;
     setStatus("Page saved.");
   }
@@ -983,6 +1061,7 @@
         }
         selectedCustomerId = event.target.value || "";
         selectedCustomerPageId = "";
+        pageHistoryLimit = 10;
         markClean();
         await loadCustomerPages();
       } catch (error) {
@@ -998,6 +1077,7 @@
           return;
         }
         selectedCustomerPageId = event.target.value || "";
+        pageHistoryLimit = 10;
         markClean();
         await loadSelectedPageEditor();
       } catch (error) {
@@ -1030,10 +1110,30 @@
     });
 
     document.getElementById("se-refresh-page-history")?.addEventListener("click", async () => {
-      try { await loadPageHistory(); }
+      try { pageHistoryLimit = 10; await loadPageHistory(); }
       catch (error) {
         setStatus("Page history refresh failed.");
         setOutput({ ok: false, event: "page_history_refresh_failed", message: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    document.getElementById("se-page-history-filter")?.addEventListener("change", async () => {
+      try {
+        pageHistoryLimit = 10;
+        await loadPageHistory();
+      } catch (error) {
+        setStatus("Page history filter failed.");
+        setOutput({ ok: false, event: "page_history_filter_failed", message: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    document.getElementById("se-load-more-page-history")?.addEventListener("click", async () => {
+      try {
+        pageHistoryLimit += 10;
+        await loadPageHistory();
+      } catch (error) {
+        setStatus("Load more page history failed.");
+        setOutput({ ok: false, event: "page_history_load_more_failed", message: error instanceof Error ? error.message : String(error) });
       }
     });
 
@@ -1052,6 +1152,7 @@
           customer_page_id: selectedCustomerPageId
         });
         currentPageSettings = result.page_settings || currentPageSettings;
+        pageHistoryLimit = 10;
         await loadSelectedPageEditor();
         markClean();
         setStatus("Page reverted to template defaults.");

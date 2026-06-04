@@ -1,13 +1,13 @@
 // ADMIN-PAGE-layout-designer-current.js
-// Internal Version: 2026-06-04-009
-// Purpose: Layout Designer v8: corrected admin gating layout and tightened dirty-state tracking so navigation/preview selectors do not create false unsaved-change warnings.
-// Backend contract unchanged from v2. Uses update_active_style_profile and get_active_style_profile.
+// Internal Version: 2026-06-04-010
+// Purpose: Layout Designer v9: adds reset-to-system-default, keeps history/restore, and preserves corrected dirty-state tracking.
+// Backend actions include update_active_style_profile, get_active_style_profile, list_style_profile_history, restore_style_profile_snapshot, and reset_active_style_profile_to_default.
 // Backend diagnostics include Copy result button.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-04-009";
+  const VERSION = "2026-06-04-010";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -846,6 +846,7 @@
             <div class="se-controls-bottom" data-auth-required="true">
               <button id="se-save" class="se-button full">Save to customer</button>
               <button id="se-reset-unsaved" class="se-button secondary full" type="button" style="margin-top:8px;">Reset unsaved changes</button>
+              <button id="se-revert-style-default" class="se-button danger full" type="button" style="margin-top:8px;">Revert style to system default</button>
             </div>
           </aside>
 
@@ -939,7 +940,7 @@
 
     const usefulHistory = styleHistory.filter((row) => {
       const eventType = String(row.event_type || "");
-      return ["after_save", "after_restore", "after_apply_saved_profile", "saved_profile_created"].includes(eventType);
+      return ["before_reset_to_default", "after_reset_to_default", "after_save", "after_restore", "after_apply_saved_profile", "saved_profile_created"].includes(eventType);
     });
 
     if (!usefulHistory.length) {
@@ -954,7 +955,9 @@
         .replace("after_save", "Saved style")
         .replace("after_restore", "Restored style")
         .replace("after_apply_saved_profile", "Applied saved profile")
-        .replace("saved_profile_created", "Saved design profile");
+        .replace("saved_profile_created", "Saved design profile")
+        .replace("before_reset_to_default", "Before default reset")
+        .replace("after_reset_to_default", "After default reset");
       return `
         <div class="se-history-row">
           <div>
@@ -1287,6 +1290,34 @@
       } catch (error) {
         setStatus("Reset failed.");
         setOutput({ ok: false, event: "reset_unsaved_failed", message: error instanceof Error ? error.message : String(error) });
+      } finally {
+        isSaving = false;
+      }
+    });
+
+    document.getElementById("se-revert-style-default")?.addEventListener("click", async () => {
+      try {
+        if (!selectedCustomerId) {
+          setStatus("Select a customer first.");
+          return;
+        }
+        if (!confirmDiscardChanges("You have unsaved Layout Designer changes. Revert this customer style to the system default and discard them?")) return;
+        if (!window.confirm("Revert this customer style to the system default? A restore point will be saved first.")) return;
+
+        isSaving = true;
+        setStatus("Reverting style to system default...");
+        const result = await callCoreAdminAction("reset_active_style_profile_to_default", {
+          customer_id: selectedCustomerId
+        });
+        activeStyleProfile = result.style_profile;
+        applyPayloadToForm(activeStyleProfile);
+        await loadSavedProfiles();
+        await loadStyleHistory();
+        markClean();
+        setStatus("Style reverted to system default.");
+      } catch (error) {
+        setStatus("Revert to default failed.");
+        setOutput({ ok: false, event: "style_revert_default_failed", message: error instanceof Error ? error.message : String(error) });
       } finally {
         isSaving = false;
       }

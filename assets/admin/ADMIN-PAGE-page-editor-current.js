@@ -1,13 +1,13 @@
 // ADMIN-PAGE-page-editor-current.js
-// Internal Version: 2026-06-04-006
-// Purpose: Page Editor with corrected shared dirty-state tracking and Aircraft page contract fields.
+// Internal Version: 2026-06-04-007
+// Purpose: Page Editor with history/restore, reset-to-template-defaults, corrected dirty-state tracking, and Aircraft page contract fields.
 // Uses existing core-admin-action backend actions.
-// Actions used: list_customers, list_customer_pages, get_customer_page_settings, update_customer_page, update_page_settings.
+// Actions used: list_customers, list_customer_pages, get_customer_page_settings, update_customer_page, update_page_settings, list_page_settings_history, restore_page_settings_snapshot, reset_page_settings_to_template_defaults.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-04-006";
+  const VERSION = "2026-06-04-007";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -28,6 +28,7 @@
   let isSaving = false;
   let isHydrating = false;
   let cleanSignature = "";
+  let pageHistory = [];
   const DIRTY_MESSAGE = "You have unsaved Page Editor changes. Leave anyway?";
 
   const FEATURE_DEFAULTS = {
@@ -451,10 +452,100 @@
     }).join("");
   }
 
+  function renderPageHistory() {
+    const list = getEl("se-page-history-list");
+    if (!list) return;
+
+    if (!selectedCustomerPageId) {
+      list.innerHTML = "Select a page to view restore points.";
+      return;
+    }
+
+    const usefulHistory = pageHistory.filter((row) => {
+      const eventType = String(row.event_type || "");
+      return ["before_save", "after_save", "before_restore", "after_restore", "before_reset_to_default", "after_reset_to_default", "manual_checkpoint"].includes(eventType);
+    });
+
+    if (!usefulHistory.length) {
+      list.innerHTML = "No page history yet. Save this page to create restore points.";
+      return;
+    }
+
+    list.innerHTML = usefulHistory.map((row) => {
+      const snapshot = row.snapshot_json || {};
+      const pageSettings = snapshot.page_settings || {};
+      const content = pageSettings.content_json || {};
+      const page = snapshot.customer_page || {};
+      const date = row.created_at ? new Date(row.created_at).toLocaleString() : "";
+      const eventLabel = String(row.event_type || "")
+        .replace("before_save", "Before save")
+        .replace("after_save", "After save")
+        .replace("before_restore", "Before restore")
+        .replace("after_restore", "After restore")
+        .replace("before_reset_to_default", "Before default reset")
+        .replace("after_reset_to_default", "After default reset")
+        .replace("manual_checkpoint", "Manual checkpoint");
+      const title = pageSettings.title || content.hero_title || page.nav_label || page.page_key || "Page snapshot";
+      return `
+        <div class="se-history-row">
+          <div>
+            <strong>${escapeHtml(title)}</strong>
+            <div class="se-history-meta">${escapeHtml(eventLabel)} | ${escapeHtml(date)}</div>
+            ${row.note ? `<div class="se-history-meta">${escapeHtml(row.note)}</div>` : ""}
+          </div>
+          <button class="se-button secondary se-restore-page-history" data-history-id="${escapeHtml(row.history_id)}" type="button">Restore</button>
+        </div>
+      `;
+    }).join("");
+
+    list.querySelectorAll(".se-restore-page-history").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const historyId = button.getAttribute("data-history-id");
+        if (!historyId || !selectedCustomerPageId) return;
+        if (!confirmDiscardChanges("You have unsaved page changes. Restore this history snapshot and discard them?")) return;
+        if (!window.confirm("Restore this page settings snapshot?")) return;
+
+        try {
+          isSaving = true;
+          setStatus("Restoring page history snapshot...");
+          const result = await callCoreAdminAction("restore_page_settings_snapshot", {
+            customer_page_id: selectedCustomerPageId,
+            history_id: historyId
+          });
+          currentPageSettings = result.page_settings || currentPageSettings;
+          await loadSelectedPageEditor();
+          markClean();
+          setStatus("Page history snapshot restored.");
+        } catch (error) {
+          setStatus("Page history restore failed.");
+          setOutput({ ok: false, event: "page_history_restore_failed", message: error instanceof Error ? error.message : String(error) });
+        } finally {
+          isSaving = false;
+        }
+      });
+    });
+  }
+
+  async function loadPageHistory() {
+    if (!selectedCustomerPageId) {
+      pageHistory = [];
+      renderPageHistory();
+      return;
+    }
+
+    const result = await callCoreAdminAction("list_page_settings_history", {
+      customer_page_id: selectedCustomerPageId,
+      limit: 25
+    });
+    pageHistory = Array.isArray(result.history) ? result.history : [];
+    renderPageHistory();
+  }
+
   function clearEditor() {
     currentCustomerPage = null;
     currentPageSettings = null;
     currentEditableSchema = null;
+    pageHistory = [];
     clearFeatureToggles();
 
     const editor = getEl("se-editor-fields");
@@ -462,6 +553,7 @@
       editor.innerHTML = `<div class="se-empty">No editable page loaded.</div>`;
     }
 
+    renderPageHistory();
     markClean();
   }
 
@@ -609,6 +701,10 @@
         .se-dirty.is-dirty{background:#fff0d9;color:#8a5200;}
         .se-note{font-size:12px;line-height:1.35;color:#5d6b82;margin-top:8px;}
         .se-empty{border:1px dashed #c7d2e2;border-radius:12px;padding:20px;color:#5d6b82;background:#fbfcfe;}
+        .se-history-row{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #e1e7f0;border-radius:12px;padding:10px;margin-top:10px;background:#fbfcfe;}
+        .se-history-meta{font-size:12px;line-height:1.35;color:#5d6b82;margin-top:3px;}
+        .se-danger-zone{border-color:#ffd0d0;background:#fffafa;}
+        .se-button.danger{border-color:#9f1d1d;background:#9f1d1d;color:#fff;}
         @media(max-width:900px){.se-layout{grid-template-columns:1fr;}.se-sidebar{position:relative;top:auto;}.se-controls{grid-template-columns:1fr;}.se-two-col{grid-template-columns:1fr;}}
 
         .se-badge.warn{background:#fff0d9;color:#8a5200;}
@@ -664,6 +760,19 @@
               <label class="se-toggle"><input id="se-feature-filter-controls" type="checkbox"><span><strong>Filter controls</strong><br>Page-level filters for module content.</span></label>
               <label class="se-toggle"><input id="se-feature-dashboard-cards" type="checkbox"><span><strong>Dashboard cards</strong><br>Summary/stat cards where applicable.</span></label>
               <label class="se-toggle"><input id="se-feature-empty-state-panel" type="checkbox"><span><strong>Empty-state panel</strong><br>Helpful placeholder when no module data exists.</span></label>
+            </section>
+
+            <section class="se-card">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                <div>
+                  <h2 class="se-section-title" style="margin:0;">History / Restore</h2>
+                  <p class="se-subtitle">Recent restore points for the selected page.</p>
+                </div>
+                <button id="se-refresh-page-history" class="se-button secondary" type="button">Refresh</button>
+              </div>
+              <button id="se-revert-page-default" class="se-button danger full" type="button" style="margin-top:12px;">Revert page to template default</button>
+              <div class="se-note">This resets page copy/options only. It does not change page slug, status, or nav visibility.</div>
+              <div id="se-page-history-list" style="margin-top:12px;">No history loaded yet.</div>
             </section>
 
             <section class="se-card">
@@ -761,6 +870,7 @@
     });
     isHydrating = false;
 
+    await loadPageHistory();
     markClean();
     setStatus("Page editor loaded.");
   }
@@ -800,7 +910,8 @@
       content_json: contentJson,
       labels_json: labelsJson,
       options_json: optionsJson,
-      visibility_json: visibilityJson
+      visibility_json: visibilityJson,
+      note: "Page Editor save"
     });
 
     currentPageSettings = updateResult.page_settings || currentPageSettings;
@@ -916,6 +1027,40 @@
           setOutput({ ok: false, event: "save_failed", message: error instanceof Error ? error.message : String(error) });
         }
       });
+    });
+
+    document.getElementById("se-refresh-page-history")?.addEventListener("click", async () => {
+      try { await loadPageHistory(); }
+      catch (error) {
+        setStatus("Page history refresh failed.");
+        setOutput({ ok: false, event: "page_history_refresh_failed", message: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    document.getElementById("se-revert-page-default")?.addEventListener("click", async () => {
+      try {
+        if (!selectedCustomerPageId) {
+          setStatus("Select a page first.");
+          return;
+        }
+        if (!confirmDiscardChanges("You have unsaved page changes. Revert this page to template defaults and discard them?")) return;
+        if (!window.confirm("Revert this page copy/options to template defaults? This will not change page slug, status, or nav visibility.")) return;
+
+        isSaving = true;
+        setStatus("Reverting page to template defaults...");
+        const result = await callCoreAdminAction("reset_page_settings_to_template_defaults", {
+          customer_page_id: selectedCustomerPageId
+        });
+        currentPageSettings = result.page_settings || currentPageSettings;
+        await loadSelectedPageEditor();
+        markClean();
+        setStatus("Page reverted to template defaults.");
+      } catch (error) {
+        setStatus("Revert to default failed.");
+        setOutput({ ok: false, event: "page_revert_default_failed", message: error instanceof Error ? error.message : String(error) });
+      } finally {
+        isSaving = false;
+      }
     });
 
     document.getElementById("se-copy-output")?.addEventListener("click", copyOutput);

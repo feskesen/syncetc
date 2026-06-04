@@ -1,13 +1,13 @@
 // ADMIN-PAGE-page-editor-current.js
-// Internal Version: 2026-06-04-005
-// Purpose: Clean Page Editor with page-specific feature toggles, auto-load, save buttons, and unsaved-change protection.
+// Internal Version: 2026-06-04-006
+// Purpose: Page Editor with corrected shared dirty-state tracking and Aircraft page contract fields.
 // Uses existing core-admin-action backend actions.
 // Actions used: list_customers, list_customer_pages, get_customer_page_settings, update_customer_page, update_page_settings.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-04-005";
+  const VERSION = "2026-06-04-006";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -26,6 +26,9 @@
   let currentEditableSchema = null;
   let isDirty = false;
   let isSaving = false;
+  let isHydrating = false;
+  let cleanSignature = "";
+  const DIRTY_MESSAGE = "You have unsaved Page Editor changes. Leave anyway?";
 
   const FEATURE_DEFAULTS = {
     show_announcement_strip: false,
@@ -79,15 +82,21 @@
     el.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   }
 
-  function markDirty() {
-    if (isSaving) return;
-    isDirty = true;
+  function setDirtyState(value) {
+    isDirty = !!value;
     updateDirtyIndicator();
+    syncShellDirtyState();
+  }
+
+  function markDirty() {
+    if (isSaving || isHydrating) return;
+    const currentSignature = getDirtySignature();
+    setDirtyState(Boolean(cleanSignature && currentSignature && currentSignature !== cleanSignature));
   }
 
   function markClean() {
-    isDirty = false;
-    updateDirtyIndicator();
+    cleanSignature = getDirtySignature();
+    setDirtyState(false);
   }
 
   function updateDirtyIndicator() {
@@ -110,6 +119,48 @@
       setStatus("Backend result copied to clipboard.");
     } catch {
       setStatus("Copy failed. Select the backend result manually.");
+    }
+  }
+
+  function stableStringify(value) {
+    const seen = new WeakSet();
+    function normalize(input) {
+      if (input === null || typeof input !== "object") return input;
+      if (seen.has(input)) return null;
+      seen.add(input);
+      if (Array.isArray(input)) return input.map(normalize);
+      return Object.keys(input).sort().reduce((acc, key) => {
+        acc[key] = normalize(input[key]);
+        return acc;
+      }, {});
+    }
+    return JSON.stringify(normalize(value));
+  }
+
+  function syncShellDirtyState() {
+    if (window.SyncEtcAdminShell && typeof window.SyncEtcAdminShell.setDirty === "function") {
+      window.SyncEtcAdminShell.setDirty(isDirty, DIRTY_MESSAGE);
+    }
+  }
+
+  function getDirtySignature() {
+    try {
+      if (!currentCustomerPage || !currentPageSettings) return "";
+      return stableStringify({
+        customer_page_id: selectedCustomerPageId || "",
+        nav_label: getValue("se-nav-label", ""),
+        status: getValue("se-page-status", "draft"),
+        show_in_nav: getChecked("se-show-in-nav"),
+        content_json: getContentJson(),
+        labels_json: getLabelsJson(),
+        options_json: getOptionsJson(),
+        visibility_json: {
+          ...(currentPageSettings.visibility_json || {}),
+          features: getFeatureTogglesPayload()
+        }
+      });
+    } catch {
+      return "";
     }
   }
 
@@ -245,6 +296,22 @@
     if (el) el.checked = Boolean(value);
   }
 
+  function addIfElement(target, key, id) {
+    if (getEl(id)) target[key] = getValue(id, "");
+  }
+
+  function addCheckedIfElement(target, key, id) {
+    if (getEl(id)) target[key] = getChecked(id);
+  }
+
+  function checkAttr(value) {
+    return value ? "checked" : "";
+  }
+
+  function selectedAttr(value, expected) {
+    return String(value || "") === String(expected || "") ? "selected" : "";
+  }
+
   function clearFeatureToggles() {
     FEATURE_FIELDS.forEach(([, id]) => setChecked(id, false));
   }
@@ -274,7 +341,7 @@
   }
 
   function getContentJson() {
-    return {
+    const content = {
       hero_eyebrow: getValue("se-hero-eyebrow", ""),
       hero_title: getValue("se-hero-title", ""),
       hero_intro: getValue("se-hero-intro", ""),
@@ -286,20 +353,53 @@
       secondary_heading: getValue("se-secondary-heading", ""),
       secondary_body: getValue("se-secondary-body", "")
     };
+
+    addIfElement(content, "stat_1_label", "se-stat-1-label");
+    addIfElement(content, "stat_1_text", "se-stat-1-text");
+    addIfElement(content, "stat_2_label", "se-stat-2-label");
+    addIfElement(content, "stat_2_text", "se-stat-2-text");
+    addIfElement(content, "stat_3_label", "se-stat-3-label");
+    addIfElement(content, "stat_3_text", "se-stat-3-text");
+    addIfElement(content, "intro_label", "se-intro-label");
+    addIfElement(content, "intro_title", "se-intro-title");
+    addIfElement(content, "intro_body", "se-intro-body");
+    addIfElement(content, "empty_state_message", "se-empty-state-message");
+    addIfElement(content, "note_body", "se-note-body");
+
+    return content;
   }
 
   function getLabelsJson() {
-    return {
+    const labels = {
       primary_cta_label: getValue("se-primary-cta-label", ""),
       secondary_cta_label: getValue("se-secondary-cta-label", "")
     };
+
+    addIfElement(labels, "primary_photo_label", "se-primary-photo-label");
+    addIfElement(labels, "panel_photo_label", "se-panel-photo-label");
+    addIfElement(labels, "rate_label", "se-rate-label");
+    addIfElement(labels, "annual_due_label", "se-annual-due-label");
+    addIfElement(labels, "home_base_label", "se-home-base-label");
+
+    return labels;
   }
 
   function getOptionsJson() {
-    return {
+    const options = {
       primary_cta_url: getValue("se-primary-cta-url", ""),
       secondary_cta_url: getValue("se-secondary-cta-url", "")
     };
+
+    addCheckedIfElement(options, "show_hero_stats", "se-show-hero-stats");
+    addCheckedIfElement(options, "show_intro_card", "se-show-intro-card");
+    addCheckedIfElement(options, "show_primary_photo", "se-show-primary-photo");
+    addCheckedIfElement(options, "show_panel_photo", "se-show-panel-photo");
+    addCheckedIfElement(options, "show_home_base", "se-show-home-base");
+    addCheckedIfElement(options, "show_public_rates", "se-show-public-rates");
+    addCheckedIfElement(options, "show_public_annual_due", "se-show-public-annual-due");
+    addCheckedIfElement(options, "show_note_strip", "se-show-note-strip");
+
+    return options;
   }
 
   function bindDirtyWithin(root) {
@@ -371,6 +471,8 @@
     const labels = settings.labels_json || {};
     const options = settings.options_json || {};
     const page = currentCustomerPage || {};
+    const templateKey = String(page.template_key || page.page_key || "").toLowerCase();
+    const isAircraftPage = templateKey === "aircraft";
 
     const editor = getEl("se-editor-fields");
     if (!editor) return;
@@ -380,25 +482,29 @@
       return;
     }
 
-    editor.innerHTML = `
+    const pageIdentityHtml = `
       <section class="se-card se-inner-card">
         <h2 class="se-section-title">Page Identity</h2>
         <label class="se-field"><span class="se-label">Navigation Label</span><input id="se-nav-label" class="se-input" type="text" value="${escapeHtml(page.nav_label || "")}"></label>
         <label class="se-field"><span class="se-label">Status</span><select id="se-page-status" class="se-select">
-          <option value="draft" ${page.status === "draft" ? "selected" : ""}>draft</option>
-          <option value="published" ${page.status === "published" ? "selected" : ""}>published</option>
-          <option value="hidden" ${page.status === "hidden" ? "selected" : ""}>hidden</option>
+          <option value="draft" ${selectedAttr(page.status, "draft")}>draft</option>
+          <option value="published" ${selectedAttr(page.status, "published")}>published</option>
+          <option value="hidden" ${selectedAttr(page.status, "hidden")}>hidden</option>
         </select></label>
         <label class="se-check"><input id="se-show-in-nav" type="checkbox" ${page.show_in_nav === false ? "" : "checked"}><span>Show in Navigation</span></label>
       </section>
+    `;
 
+    const heroHtml = `
       <section class="se-card se-inner-card">
         <h2 class="se-section-title">Hero</h2>
         <label class="se-field"><span class="se-label">Hero Eyebrow</span><input id="se-hero-eyebrow" class="se-input" type="text" value="${escapeHtml(content.hero_eyebrow || "")}"><small>Optional. If blank, renderer should omit the eyebrow.</small></label>
         <label class="se-field"><span class="se-label">Hero Title</span><input id="se-hero-title" class="se-input" type="text" value="${escapeHtml(content.hero_title || settings.title || "")}"></label>
         <label class="se-field"><span class="se-label">Hero Intro</span><textarea id="se-hero-intro" class="se-input se-textarea">${escapeHtml(content.hero_intro || settings.intro_text || "")}</textarea></label>
       </section>
+    `;
 
+    const genericHtml = `
       <section class="se-card se-inner-card">
         <h2 class="se-section-title">Calls to Action</h2>
         <label class="se-field"><span class="se-label">Primary CTA Label</span><input id="se-primary-cta-label" class="se-input" type="text" value="${escapeHtml(labels.primary_cta_label || content.primary_cta_label || "")}"></label>
@@ -415,7 +521,61 @@
       </section>
     `;
 
+    const aircraftHtml = `
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Aircraft Hero Stats</h2>
+        <p class="se-subtitle">Optional manual stat cards. Blank fields are omitted by the renderer.</p>
+        <div class="se-two-col">
+          <label class="se-field"><span class="se-label">Stat 1 Label</span><input id="se-stat-1-label" class="se-input" type="text" value="${escapeHtml(content.stat_1_label || "")}"></label>
+          <label class="se-field"><span class="se-label">Stat 1 Text</span><input id="se-stat-1-text" class="se-input" type="text" value="${escapeHtml(content.stat_1_text || "")}"></label>
+          <label class="se-field"><span class="se-label">Stat 2 Label</span><input id="se-stat-2-label" class="se-input" type="text" value="${escapeHtml(content.stat_2_label || "")}"></label>
+          <label class="se-field"><span class="se-label">Stat 2 Text</span><input id="se-stat-2-text" class="se-input" type="text" value="${escapeHtml(content.stat_2_text || "")}"></label>
+          <label class="se-field"><span class="se-label">Stat 3 Label</span><input id="se-stat-3-label" class="se-input" type="text" value="${escapeHtml(content.stat_3_label || "")}"></label>
+          <label class="se-field"><span class="se-label">Stat 3 Text</span><input id="se-stat-3-text" class="se-input" type="text" value="${escapeHtml(content.stat_3_text || "")}"></label>
+        </div>
+      </section>
+
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Aircraft Intro / Note</h2>
+        <label class="se-field"><span class="se-label">Intro Label</span><input id="se-intro-label" class="se-input" type="text" value="${escapeHtml(content.intro_label || "")}"></label>
+        <label class="se-field"><span class="se-label">Intro Title</span><input id="se-intro-title" class="se-input" type="text" value="${escapeHtml(content.intro_title || "")}"></label>
+        <label class="se-field"><span class="se-label">Intro Body</span><textarea id="se-intro-body" class="se-input se-textarea">${escapeHtml(content.intro_body || "")}</textarea></label>
+        <label class="se-field"><span class="se-label">Empty State Message</span><textarea id="se-empty-state-message" class="se-input se-textarea">${escapeHtml(content.empty_state_message || "")}</textarea></label>
+        <label class="se-field"><span class="se-label">Note Strip Text</span><textarea id="se-note-body" class="se-input se-textarea">${escapeHtml(content.note_body || "")}</textarea></label>
+      </section>
+
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Aircraft Public Display Options</h2>
+        <p class="se-subtitle">Controls what public visitors may see. Member/admin-only details stay out of the public renderer unless explicitly enabled.</p>
+        <div class="se-two-col">
+          <label class="se-check"><input id="se-show-hero-stats" type="checkbox" ${checkAttr(options.show_hero_stats !== false)}><span>Show hero stat cards when fields are filled</span></label>
+          <label class="se-check"><input id="se-show-intro-card" type="checkbox" ${checkAttr(options.show_intro_card !== false)}><span>Show intro card when fields are filled</span></label>
+          <label class="se-check"><input id="se-show-primary-photo" type="checkbox" ${checkAttr(options.show_primary_photo !== false)}><span>Show primary aircraft photo</span></label>
+          <label class="se-check"><input id="se-show-panel-photo" type="checkbox" ${checkAttr(options.show_panel_photo !== false)}><span>Show panel photo</span></label>
+          <label class="se-check"><input id="se-show-home-base" type="checkbox" ${checkAttr(options.show_home_base !== false)}><span>Show home base</span></label>
+          <label class="se-check"><input id="se-show-public-rates" type="checkbox" ${checkAttr(options.show_public_rates === true)}><span>Show hourly rates publicly</span></label>
+          <label class="se-check"><input id="se-show-public-annual-due" type="checkbox" ${checkAttr(options.show_public_annual_due === true)}><span>Show annual dues publicly</span></label>
+          <label class="se-check"><input id="se-show-note-strip" type="checkbox" ${checkAttr(options.show_note_strip !== false)}><span>Show note strip when filled</span></label>
+        </div>
+      </section>
+
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Aircraft Labels</h2>
+        <div class="se-two-col">
+          <label class="se-field"><span class="se-label">Primary Photo Label</span><input id="se-primary-photo-label" class="se-input" type="text" value="${escapeHtml(labels.primary_photo_label || "Exterior")}"></label>
+          <label class="se-field"><span class="se-label">Panel Photo Label</span><input id="se-panel-photo-label" class="se-input" type="text" value="${escapeHtml(labels.panel_photo_label || "Panel")}"></label>
+          <label class="se-field"><span class="se-label">Rate Label</span><input id="se-rate-label" class="se-input" type="text" value="${escapeHtml(labels.rate_label || "Hourly Rate")}"></label>
+          <label class="se-field"><span class="se-label">Annual Due Label</span><input id="se-annual-due-label" class="se-input" type="text" value="${escapeHtml(labels.annual_due_label || "Annual Due")}"></label>
+          <label class="se-field"><span class="se-label">Home Base Label</span><input id="se-home-base-label" class="se-input" type="text" value="${escapeHtml(labels.home_base_label || "Home Base")}"></label>
+        </div>
+      </section>
+    `;
+
+    editor.innerHTML = pageIdentityHtml + heroHtml + (isAircraftPage ? aircraftHtml : genericHtml);
+
+    isHydrating = true;
     bindDirtyWithin(editor);
+    isHydrating = false;
   }
 
   function renderShell() {
@@ -433,6 +593,7 @@
         .se-layout{display:grid;grid-template-columns:340px minmax(0,1fr);gap:16px;align-items:start;}
         .se-sidebar{position:sticky;top:76px;}
         .se-controls{display:grid;grid-template-columns:1fr 1fr auto auto auto;gap:10px;align-items:end;}
+        .se-two-col{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
         .se-field{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
         .se-label{font-size:13px;font-weight:800;color:#26344d;}
         .se-input,.se-select{width:100%;border:1px solid #c7d2e2;border-radius:10px;padding:10px 11px;font-size:14px;background:#fff;color:#172033;}
@@ -448,7 +609,7 @@
         .se-dirty.is-dirty{background:#fff0d9;color:#8a5200;}
         .se-note{font-size:12px;line-height:1.35;color:#5d6b82;margin-top:8px;}
         .se-empty{border:1px dashed #c7d2e2;border-radius:12px;padding:20px;color:#5d6b82;background:#fbfcfe;}
-        @media(max-width:900px){.se-layout{grid-template-columns:1fr;}.se-sidebar{position:relative;top:auto;}.se-controls{grid-template-columns:1fr;}}
+        @media(max-width:900px){.se-layout{grid-template-columns:1fr;}.se-sidebar{position:relative;top:auto;}.se-controls{grid-template-columns:1fr;}.se-two-col{grid-template-columns:1fr;}}
 
         .se-badge.warn{background:#fff0d9;color:#8a5200;}
         .se-badge.ok{background:#edf7ed;color:#265c2b;}
@@ -587,6 +748,7 @@
     currentPageSettings = result.page_settings || null;
     currentEditableSchema = result.editable_schema_json || {};
 
+    isHydrating = true;
     renderEditorFields();
     applyFeatureTogglesToForm(currentPageSettings);
     bindDirtyWithin(getEl("se-editor-fields"));
@@ -597,6 +759,7 @@
         el.addEventListener("change", markDirty);
       }
     });
+    isHydrating = false;
 
     markClean();
     setStatus("Page editor loaded.");
@@ -652,7 +815,7 @@
     window.addEventListener("beforeunload", (event) => {
       if (!isDirty) return;
       event.preventDefault();
-      event.returnValue = "";
+      event.returnValue = DIRTY_MESSAGE;
     });
 
     document.getElementById("se-login")?.addEventListener("click", async () => {

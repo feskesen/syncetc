@@ -1,13 +1,13 @@
 // ADMIN-PAGE-layout-designer-current.js
-// Internal Version: 2026-06-04-008
-// Purpose: Layout Designer v7 cleanup: corrected visible version, filtered history restore list, reset unsaved changes, and clearer preset/profile help text.
+// Internal Version: 2026-06-04-009
+// Purpose: Layout Designer v8: corrected admin gating layout and tightened dirty-state tracking so navigation/preview selectors do not create false unsaved-change warnings.
 // Backend contract unchanged from v2. Uses update_active_style_profile and get_active_style_profile.
 // Backend diagnostics include Copy result button.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-04-008";
+  const VERSION = "2026-06-04-009";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -24,6 +24,9 @@
   let selectedPreviewPageId = "";
   let isDirty = false;
   let isSaving = false;
+  let isHydrating = false;
+  let cleanSignature = "";
+  const DIRTY_MESSAGE = "You have unsaved Layout Designer changes. Leave anyway?";
   let savedProfiles = [];
   let styleHistory = [];
 
@@ -116,6 +119,43 @@
       setStatus("Backend result copied to clipboard.");
     } catch {
       setStatus("Copy failed. Select the backend result manually.");
+    }
+  }
+
+  function stableStringify(value) {
+    const seen = new WeakSet();
+    function normalize(input) {
+      if (input === null || typeof input !== "object") return input;
+      if (seen.has(input)) return null;
+      seen.add(input);
+      if (Array.isArray(input)) return input.map(normalize);
+      return Object.keys(input).sort().reduce((acc, key) => {
+        acc[key] = normalize(input[key]);
+        return acc;
+      }, {});
+    }
+    return JSON.stringify(normalize(value));
+  }
+
+  function getDirtyPayload() {
+    const payload = getFormPayload();
+    // Preview controls are working controls, not customer-facing style commitments.
+    // They should not create false nav-away warnings.
+    delete payload.preview_json;
+    return payload;
+  }
+
+  function getDirtySignature() {
+    try {
+      return stableStringify(getDirtyPayload());
+    } catch {
+      return "";
+    }
+  }
+
+  function syncShellDirtyState() {
+    if (window.SyncEtcAdminShell && typeof window.SyncEtcAdminShell.setDirty === "function") {
+      window.SyncEtcAdminShell.setDirty(isDirty, DIRTY_MESSAGE);
     }
   }
 
@@ -250,15 +290,21 @@
     if (el) el.checked = Boolean(value);
   }
 
-  function markDirty() {
-    if (isSaving) return;
-    isDirty = true;
+  function setDirtyState(value) {
+    isDirty = !!value;
     updateDirtyIndicator();
+    syncShellDirtyState();
+  }
+
+  function markDirty() {
+    if (isSaving || isHydrating) return;
+    const currentSignature = getDirtySignature();
+    setDirtyState(Boolean(cleanSignature && currentSignature && currentSignature !== cleanSignature));
   }
 
   function markClean() {
-    isDirty = false;
-    updateDirtyIndicator();
+    cleanSignature = getDirtySignature();
+    setDirtyState(false);
   }
 
   function updateDirtyIndicator() {
@@ -368,6 +414,7 @@
   }
 
   function applyPayloadToForm(profile) {
+    isHydrating = true;
     const colors = profile?.colors_json || {};
     const typography = profile?.typography_json || {};
     const spacing = profile?.spacing_json || {};
@@ -436,6 +483,7 @@
     setValue("se-hero-style", profile?.hero_style || "standard");
 
     renderPreview();
+    isHydrating = false;
   }
 
   function renderPreview() {
@@ -1013,6 +1061,7 @@
     const result = await callCoreAdminAction("get_active_style_profile", { customer_id: selectedCustomerId });
     activeStyleProfile = result.style_profile;
     applyPayloadToForm(activeStyleProfile);
+    markClean();
     setStatus("Active style profile loaded.");
   }
 
@@ -1038,7 +1087,7 @@
     window.addEventListener("beforeunload", (event) => {
       if (!isDirty) return;
       event.preventDefault();
-      event.returnValue = "";
+      event.returnValue = DIRTY_MESSAGE;
     });
 
     document.getElementById("se-login")?.addEventListener("click", async () => {
@@ -1128,8 +1177,23 @@
       renderRealPagePreview();
     });
 
+    const nonDirtyControlIds = new Set([
+      "se-customer-select",
+      "se-preset",
+      "se-saved-profile-select",
+      "se-preview-mode",
+      "se-preview-page-key",
+      "se-preview-customer-page-id",
+      "se-use-real-page-data"
+    ]);
+
     document.querySelectorAll("input, select").forEach((el) => {
       if (el.closest(".se-auth-card")) return;
+      if (nonDirtyControlIds.has(el.id)) {
+        el.addEventListener("input", renderRealPagePreview);
+        el.addEventListener("change", renderRealPagePreview);
+        return;
+      }
       el.addEventListener("input", () => { markDirty(); renderRealPagePreview(); });
       el.addEventListener("change", () => { markDirty(); renderRealPagePreview(); });
     });

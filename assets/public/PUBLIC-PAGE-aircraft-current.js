@@ -156,13 +156,22 @@
       .syncetc-aircraft-copy li{margin-bottom:4px;}
       .syncetc-aircraft-media{display:grid;gap:14px;}
       .syncetc-aircraft-photo-card{overflow:hidden;border-radius:${config.radius};background:${config.surface};border:1px solid ${config.border};box-shadow:${config.shadow === "none" ? "none" : "0 8px 20px rgba(12,38,64,.08)"};}
-      .syncetc-aircraft-photo-card img{display:block;width:100%;height:230px;object-fit:${config.imageFit};object-position:center center;background:${config.secondary};}
-      .syncetc-aircraft-photo-label{padding:9px 12px;color:${config.muted};font-size:12px;line-height:1.25;font-weight:800;letter-spacing:.08em;text-transform:uppercase;background:${rgba(config.secondary, 0.72)};border-top:1px solid ${config.border};}
+      .syncetc-aircraft-photo-button{display:block;width:100%;padding:0;border:0;background:${config.secondary};cursor:zoom-in;text-align:inherit;}
+      .syncetc-aircraft-photo-button:focus-visible{outline:3px solid ${rgba(config.primary, 0.48)};outline-offset:-3px;}
+      .syncetc-aircraft-photo-card img{display:block;width:100%;height:clamp(250px,24vw,320px);object-fit:${config.imageFit};object-position:center center;background:${config.secondary};}
+      .syncetc-aircraft-photo-label{display:flex;justify-content:space-between;gap:10px;padding:9px 12px;color:${config.muted};font-size:12px;line-height:1.25;font-weight:800;letter-spacing:.08em;text-transform:uppercase;background:${rgba(config.secondary, 0.72)};border-top:1px solid ${config.border};}
+      .syncetc-aircraft-photo-hint{font-weight:700;letter-spacing:.02em;text-transform:none;opacity:.78;}
+      .syncetc-aircraft-lightbox{position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center;padding:28px;background:rgba(5,16,28,.82);}
+      .syncetc-aircraft-lightbox[hidden]{display:none!important;}
+      .syncetc-aircraft-lightbox-inner{position:relative;max-width:min(96vw,1600px);max-height:92vh;background:#0b1622;border-radius:18px;box-shadow:0 24px 80px rgba(0,0,0,.48);overflow:hidden;}
+      .syncetc-aircraft-lightbox img{display:block;max-width:96vw;max-height:86vh;width:auto;height:auto;object-fit:contain;background:#0b1622;}
+      .syncetc-aircraft-lightbox-close{position:absolute;top:10px;right:10px;width:38px;height:38px;border:0;border-radius:999px;background:rgba(255,255,255,.92);color:#0b1622;font-size:24px;line-height:1;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.24);}
+      .syncetc-aircraft-lightbox-caption{padding:10px 14px;color:#fff;font-size:13px;line-height:1.35;background:rgba(0,0,0,.32);}
       .syncetc-aircraft-note,.syncetc-aircraft-empty{padding:16px 18px;color:${config.muted};font-size:14px;line-height:1.55;}
       .syncetc-aircraft-note strong{color:${config.primary};}
       .syncetc-aircraft-error{padding:18px;border-radius:${config.radius};background:#fff4f4;border:1px solid #ffb4b4;color:#8a1f1f;font-size:14px;line-height:1.5;}
       @media(max-width:980px){.syncetc-aircraft-card{grid-template-columns:1fr}.syncetc-aircraft-media{grid-template-columns:repeat(2,minmax(0,1fr));}}
-      @media(max-width:720px){.syncetc-aircraft-page{margin-top:20px;padding:0 12px}.syncetc-aircraft-hero{padding:24px 20px}.syncetc-aircraft-main{padding:18px}.syncetc-aircraft-stats{grid-template-columns:1fr}.syncetc-aircraft-card{padding:18px}.syncetc-aircraft-media{grid-template-columns:1fr}.syncetc-aircraft-photo-card img{height:210px}.syncetc-aircraft-title{font-size:25px}}
+      @media(max-width:720px){.syncetc-aircraft-page{margin-top:20px;padding:0 12px}.syncetc-aircraft-hero{padding:24px 20px}.syncetc-aircraft-main{padding:18px}.syncetc-aircraft-stats{grid-template-columns:1fr}.syncetc-aircraft-card{padding:18px}.syncetc-aircraft-media{grid-template-columns:1fr}.syncetc-aircraft-photo-card img{height:230px}.syncetc-aircraft-lightbox{padding:14px}.syncetc-aircraft-title{font-size:25px}}
     `;
   }
 
@@ -224,17 +233,26 @@
     return `${intro ? paragraphHtml(intro) : ""}${bullets ? `<ul>${bullets}</ul>` : ""}`;
   }
 
-  function photoCard(url, srcset, label, alt) {
+  function photoCard(url, srcset, largeUrl, label, alt) {
     if (!hasText(url)) return "";
+    const fullUrl = hasText(largeUrl) ? largeUrl : url;
+    const safeAlt = alt || label || "Aircraft photo";
     return `<div class="syncetc-aircraft-photo-card">
-      <img
-        src="${escapeHtml(url)}"
-        ${hasText(srcset) ? `srcset="${escapeHtml(srcset)}"` : ""}
-        sizes="(max-width: 720px) calc(100vw - 60px), (max-width: 980px) 45vw, 420px"
-        alt="${escapeHtml(alt || label || "Aircraft photo")}"
-        loading="lazy"
-        decoding="async">
-      ${hasText(label) ? `<div class="syncetc-aircraft-photo-label">${escapeHtml(label)}</div>` : ""}
+      <button
+        type="button"
+        class="syncetc-aircraft-photo-button"
+        data-syncetc-lightbox-src="${escapeHtml(fullUrl)}"
+        data-syncetc-lightbox-alt="${escapeHtml(safeAlt)}"
+        aria-label="Open larger image: ${escapeHtml(safeAlt)}">
+        <img
+          src="${escapeHtml(url)}"
+          ${hasText(srcset) ? `srcset="${escapeHtml(srcset)}"` : ""}
+          sizes="(max-width: 720px) calc(100vw - 60px), (max-width: 980px) 48vw, 520px"
+          alt="${escapeHtml(safeAlt)}"
+          loading="lazy"
+          decoding="async">
+      </button>
+      ${hasText(label) ? `<div class="syncetc-aircraft-photo-label"><span>${escapeHtml(label)}</span><span class="syncetc-aircraft-photo-hint">Click to enlarge</span></div>` : ""}
     </div>`;
   }
 
@@ -261,8 +279,8 @@
     const primaryLabel = getText(labels, "primary_photo_label", "Exterior");
     const panelLabel = getText(labels, "panel_photo_label", "Panel");
     const media = [
-      getBool(options, "show_primary_photo", true) ? photoCard(aircraft.primary_photo_url, aircraft.primary_photo_srcset, primaryLabel, `${title} ${primaryLabel}`) : "",
-      getBool(options, "show_panel_photo", true) ? photoCard(aircraft.panel_photo_url, aircraft.panel_photo_srcset, panelLabel, `${title} ${panelLabel}`) : "",
+      getBool(options, "show_primary_photo", true) ? photoCard(aircraft.primary_photo_url, aircraft.primary_photo_srcset, aircraft.primary_photo_large_url, primaryLabel, `${title} ${primaryLabel}`) : "",
+      getBool(options, "show_panel_photo", true) ? photoCard(aircraft.panel_photo_url, aircraft.panel_photo_srcset, aircraft.panel_photo_large_url, panelLabel, `${title} ${panelLabel}`) : "",
     ].filter(Boolean).join("");
 
     return `<article class="syncetc-aircraft-card">
@@ -276,6 +294,56 @@
       </div>
       ${media ? `<div class="syncetc-aircraft-media">${media}</div>` : ""}
     </article>`;
+  }
+
+  function closeAircraftLightbox(root) {
+    const lightbox = root.querySelector(".syncetc-aircraft-lightbox");
+    if (!lightbox) return;
+    lightbox.setAttribute("hidden", "hidden");
+    lightbox.querySelector("img")?.removeAttribute("src");
+  }
+
+  function openAircraftLightbox(root, src, alt) {
+    if (!hasText(src)) return;
+    const lightbox = root.querySelector(".syncetc-aircraft-lightbox");
+    if (!lightbox) return;
+    const img = lightbox.querySelector("img");
+    const caption = lightbox.querySelector(".syncetc-aircraft-lightbox-caption");
+    if (img) {
+      img.src = src;
+      img.alt = alt || "Aircraft image";
+    }
+    if (caption) caption.textContent = alt || "Aircraft image";
+    lightbox.removeAttribute("hidden");
+    const closeButton = lightbox.querySelector(".syncetc-aircraft-lightbox-close");
+    if (closeButton && typeof closeButton.focus === "function") closeButton.focus();
+  }
+
+  function attachAircraftLightbox(root) {
+    if (root.__syncetcAircraftLightboxBound) return;
+    root.__syncetcAircraftLightboxBound = true;
+
+    root.addEventListener("click", (event) => {
+      const button = event.target?.closest?.("[data-syncetc-lightbox-src]");
+      if (button && root.contains(button)) {
+        openAircraftLightbox(root, button.getAttribute("data-syncetc-lightbox-src"), button.getAttribute("data-syncetc-lightbox-alt"));
+        return;
+      }
+
+      const closeTarget = event.target?.closest?.("[data-syncetc-lightbox-close]");
+      if (closeTarget && root.contains(closeTarget)) {
+        closeAircraftLightbox(root);
+        return;
+      }
+
+      if (event.target?.classList?.contains("syncetc-aircraft-lightbox")) {
+        closeAircraftLightbox(root);
+      }
+    }, { once: false });
+
+    root.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeAircraftLightbox(root);
+    }, { once: false });
   }
 
   function renderPayload(root, payload) {
@@ -305,7 +373,15 @@
           </main>
         </div>
       </div>
+      <div class="syncetc-aircraft-lightbox" hidden aria-modal="true" role="dialog" aria-label="Aircraft image viewer">
+        <div class="syncetc-aircraft-lightbox-inner">
+          <button type="button" class="syncetc-aircraft-lightbox-close" data-syncetc-lightbox-close aria-label="Close image viewer">×</button>
+          <img alt="Aircraft image">
+          <div class="syncetc-aircraft-lightbox-caption"></div>
+        </div>
+      </div>
     `;
+    attachAircraftLightbox(root);
   }
 
   function renderLoading(root) {

@@ -1,5 +1,5 @@
 // ADMIN-PAGE-page-editor-current.js
-// Internal Version: 2026-06-05-004-B
+// Internal Version: 2026-06-05-004-C
 // Purpose: Page Editor with restore history, corrected dirty-state tracking, Aircraft fields, Home public page fields, and Gallery public page fields.
 // Uses existing core-admin-action backend actions.
 // Actions used: list_customers, list_customer_pages, get_customer_page_settings, update_customer_page, update_page_settings, list_page_settings_history, restore_page_settings_snapshot, reset_page_settings_to_template_defaults.
@@ -7,7 +7,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-004-B";
+  const VERSION = "2026-06-05-004-C";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -1252,6 +1252,47 @@
         renderInfoFaqManager();
       });
     });
+    wrap.querySelectorAll("[data-faq-row-restore]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        if (!confirmDiscardInfoFaqChanges("You have unsaved FAQ item changes. Restore this FAQ and discard them?")) return;
+        selectedInfoFaqItemId = button.getAttribute("data-faq-row-restore") || "";
+        await setInfoFaqArchived(false);
+      });
+    });
+
+    let draggedFaqId = "";
+    wrap.querySelectorAll(".se-faq-record[draggable='true'], .se-faq-drag-handle[draggable='true']").forEach((el) => {
+      el.addEventListener("dragstart", (event) => {
+        const record = el.closest(".se-faq-record");
+        draggedFaqId = record?.getAttribute("data-faq-record-id") || el.getAttribute("data-faq-drag-id") || "";
+        if (!draggedFaqId) return;
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", draggedFaqId);
+        record?.classList.add("is-dragging");
+      });
+      el.addEventListener("dragend", () => {
+        wrap.querySelectorAll(".se-faq-record").forEach((record) => record.classList.remove("is-dragging", "is-drop-target"));
+        draggedFaqId = "";
+      });
+    });
+
+    wrap.querySelectorAll(".se-faq-record[data-faq-record-id]").forEach((record) => {
+      record.addEventListener("dragover", (event) => {
+        if (!draggedFaqId || record.classList.contains("is-archived")) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        record.classList.add("is-drop-target");
+      });
+      record.addEventListener("dragleave", () => record.classList.remove("is-drop-target"));
+      record.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        record.classList.remove("is-drop-target");
+        const sourceId = event.dataTransfer.getData("text/plain") || draggedFaqId;
+        const targetId = record.getAttribute("data-faq-record-id") || "";
+        await dropInfoFaqItemOnTarget(sourceId, targetId);
+      });
+    });
+
 
     wrap.querySelectorAll("[data-faq-move]").forEach((button) => {
       button.addEventListener("click", async () => {
@@ -1304,6 +1345,8 @@
     if (!wrap) return;
 
     const current = currentInfoFaqItem();
+    const currentArchived = isFaqArchived(current);
+    const fieldDisabledAttr = currentArchived ? "disabled" : "";
     const activeCount = infoFaqItems.filter((item) => !item.archived_at && item.status !== "archived").length;
     const archivedCount = infoFaqItems.filter((item) => item.archived_at || item.status === "archived").length;
 
@@ -1324,13 +1367,17 @@
         const statusLabel = archived ? "Archived" : "Active";
         const visibilityLabel = display.visibility || "public";
         const answerText = faqAnswerPreview(display.answer || infoFaqItems.find((row) => String(row.faq_item_id) === String(display.faq_item_id))?.answer || "");
-        return `<article class="se-faq-record ${isSelected ? "is-selected" : ""} ${archived ? "is-archived" : ""}">
+        const activeReorderControls = archived ? `<div class="se-faq-archived-lock">Archived</div>` : `
+              <button class="se-faq-drag-handle" type="button" draggable="true" data-faq-drag-id="${escapeHtml(display.faq_item_id)}" title="Drag to reorder within ${escapeHtml(category)}">↕ Drag</button>
+              <button class="se-button secondary small" type="button" data-faq-move="up" data-faq-id="${escapeHtml(display.faq_item_id)}">Move Up</button>
+              <button class="se-button secondary small" type="button" data-faq-move="down" data-faq-id="${escapeHtml(display.faq_item_id)}">Move Down</button>`;
+        const recordActions = archived
+          ? `<button class="se-button secondary small" type="button" data-faq-row-restore="${escapeHtml(display.faq_item_id)}">Restore FAQ</button>`
+          : `<button class="se-button secondary small" type="button" data-faq-edit="${escapeHtml(display.faq_item_id)}">Edit FAQ</button>`;
+        return `<article class="se-faq-record ${isSelected ? "is-selected" : ""} ${archived ? "is-archived" : ""}" data-faq-record-id="${escapeHtml(display.faq_item_id)}" data-faq-category="${escapeHtml(category)}" ${archived ? "" : `draggable="true"`}>
           <div class="se-faq-record-order">
             <div class="se-faq-order-number">${String(index + 1).padStart(2, "0")}</div>
-            <div class="se-faq-order-buttons" aria-label="Reorder FAQ item">
-              <button class="se-button secondary small" type="button" data-faq-move="up" data-faq-id="${escapeHtml(display.faq_item_id)}" ${archived ? "disabled" : ""}>Move Up</button>
-              <button class="se-button secondary small" type="button" data-faq-move="down" data-faq-id="${escapeHtml(display.faq_item_id)}" ${archived ? "disabled" : ""}>Move Down</button>
-            </div>
+            <div class="se-faq-order-buttons" aria-label="Reorder FAQ item">${activeReorderControls}</div>
           </div>
           <details class="se-faq-record-details" ${isSelected ? "open" : ""}>
             <summary>
@@ -1343,9 +1390,7 @@
             </summary>
             <div class="se-faq-answer-preview">${escapeHtml(answerText)}</div>
           </details>
-          <div class="se-faq-record-actions">
-            <button class="se-button secondary small" type="button" data-faq-edit="${escapeHtml(display.faq_item_id)}">Edit FAQ</button>
-          </div>
+          <div class="se-faq-record-actions">${recordActions}</div>
         </article>`;
       }).join("");
       return `<details class="se-faq-category-panel" open>
@@ -1373,20 +1418,21 @@
       <section class="se-faq-editor-panel">
         <h3 class="se-faq-subtitle">${current ? "Edit FAQ Item" : "New FAQ Item"}</h3>
         <p class="se-subtitle" style="margin-bottom:12px;">Use this form to create or edit one FAQ. After saving, the form resets so the next Save creates a new FAQ.</p>
+        ${currentArchived ? `<div class="se-note se-archived-note">This FAQ is archived and locked. Restore it before editing.</div>` : ""}
         <div class="se-two-col">
-          <label class="se-field"><span class="se-label">Category</span><input id="se-faq-item-category" class="se-input" type="text" data-skip-page-dirty="true" value="${escapeHtml(current?.category || "General")}" placeholder="General, Membership, Operations"></label>
-          <label class="se-field"><span class="se-label">Sort Order</span><input id="se-faq-item-sort" class="se-input" type="number" data-skip-page-dirty="true" value="${escapeHtml(current?.sort_order ?? 100)}"><span class="se-help">Usually set by Move Up / Move Down below. Lower numbers show first within a category.</span></label>
+          <label class="se-field"><span class="se-label">Category</span><input id="se-faq-item-category" class="se-input" type="text" data-skip-page-dirty="true" ${fieldDisabledAttr} value="${escapeHtml(current?.category || "General")}" placeholder="General, Membership, Operations"></label>
+          <label class="se-field"><span class="se-label">Sort Order</span><input id="se-faq-item-sort" class="se-input" type="number" data-skip-page-dirty="true" ${fieldDisabledAttr} value="${escapeHtml(current?.sort_order ?? 100)}"><span class="se-help">Usually set by Move Up / Move Down below. Lower numbers show first within a category.</span></label>
         </div>
-        <label class="se-field"><span class="se-label">Question</span><input id="se-faq-item-question" class="se-input" type="text" data-skip-page-dirty="true" value="${escapeHtml(current?.question || "")}"></label>
-        <label class="se-field"><span class="se-label">Answer</span><textarea id="se-faq-item-answer" class="se-input se-textarea" data-skip-page-dirty="true">${escapeHtml(current?.answer || "")}</textarea></label>
+        <label class="se-field"><span class="se-label">Question</span><input id="se-faq-item-question" class="se-input" type="text" data-skip-page-dirty="true" ${fieldDisabledAttr} value="${escapeHtml(current?.question || "")}"></label>
+        <label class="se-field"><span class="se-label">Answer</span><textarea id="se-faq-item-answer" class="se-input se-textarea" data-skip-page-dirty="true" ${fieldDisabledAttr}>${escapeHtml(current?.answer || "")}</textarea></label>
         <div class="se-two-col">
-          <label class="se-field"><span class="se-label">Visibility</span><select id="se-faq-item-visibility" class="se-select" data-skip-page-dirty="true">
+          <label class="se-field"><span class="se-label">Visibility</span><select id="se-faq-item-visibility" class="se-select" data-skip-page-dirty="true" ${fieldDisabledAttr}>
             <option value="public" ${selectedAttr(current?.visibility || "public", "public")}>public</option>
             <option value="members" ${selectedAttr(current?.visibility, "members")}>members</option>
             <option value="admins" ${selectedAttr(current?.visibility, "admins")}>admins</option>
             <option value="hidden" ${selectedAttr(current?.visibility, "hidden")}>hidden</option>
           </select></label>
-          <label class="se-field"><span class="se-label">Status</span><select id="se-faq-item-status" class="se-select" data-skip-page-dirty="true">
+          <label class="se-field"><span class="se-label">Status</span><select id="se-faq-item-status" class="se-select" data-skip-page-dirty="true" ${fieldDisabledAttr}>
             <option value="active" ${selectedAttr(current?.status || "active", "active")}>active</option>
             <option value="draft" ${selectedAttr(current?.status, "draft")}>draft</option>
             <option value="hidden" ${selectedAttr(current?.status, "hidden")}>hidden</option>
@@ -1394,10 +1440,11 @@
           </select></label>
         </div>
         <div class="se-faq-actions">
-          <button id="se-faq-item-save" class="se-button" type="button">Save FAQ</button>
-          <button id="se-faq-item-new" class="se-button secondary" type="button">New FAQ</button>
-          ${current && !isFaqArchived(current) ? `<button id="se-faq-item-archive" class="se-button danger" type="button">Archive FAQ</button>` : ""}
-          ${current && isFaqArchived(current) ? `<button id="se-faq-item-restore" class="se-button secondary" type="button">Restore FAQ</button>` : ""}
+          ${currentArchived
+            ? `<button id="se-faq-item-restore" class="se-button secondary" type="button">Restore FAQ</button>`
+            : `<button id="se-faq-item-save" class="se-button" type="button">Save FAQ</button>
+               <button id="se-faq-item-new" class="se-button secondary" type="button">New FAQ</button>
+               ${current ? `<button id="se-faq-item-archive" class="se-button danger" type="button">Archive FAQ</button>` : ""}`}
         </div>
       </section>
 
@@ -1405,7 +1452,7 @@
         <div class="se-faq-records-head">
           <div>
             <h3 class="se-faq-subtitle">FAQ Order & Records</h3>
-            <p class="se-subtitle">Use Move Up / Move Down to reorder items within a category. To move an FAQ to a different category, edit the item and change its Category field.</p>
+            <p class="se-subtitle">Drag active FAQs or use Move Up / Move Down to reorder within a category. Archived FAQs are locked until restored. To move an FAQ to a different category, edit the item and change its Category field.</p>
           </div>
         </div>
         <div class="se-faq-list">${categorySections || `<div class="se-empty">No FAQ rows yet. Create the first FAQ or import CSV rows below.</div>`}</div>
@@ -1426,7 +1473,7 @@
 What is your application process?,Submit an application and wait for review.,Membership,100</pre>
         </div>
         <label class="se-field"><span class="se-label">CSV File</span><input id="se-faq-csv-file" class="se-input" type="file" accept=".csv,text/csv,text/plain" data-skip-page-dirty="true"></label>
-        <label class="se-field"><span class="se-label">CSV Text</span><textarea id="se-faq-csv-text" class="se-input se-textarea" data-skip-page-dirty="true" placeholder="question,answer,category,sort_order\nWhat is your application process?,Submit an application and wait for review.,Membership,100"></textarea></label>
+        <label class="se-field"><span class="se-label">CSV Text</span><textarea id="se-faq-csv-text" class="se-input se-textarea" data-skip-page-dirty="true" ${fieldDisabledAttr} placeholder="question,answer,category,sort_order\nWhat is your application process?,Submit an application and wait for review.,Membership,100"></textarea></label>
         <div class="se-faq-actions">
           <button id="se-faq-csv-preview-button" class="se-button secondary" type="button">Preview CSV</button>
           <button id="se-faq-csv-import-button" class="se-button" type="button">Import Previewed FAQs</button>
@@ -1599,6 +1646,13 @@ What is your application process?,Submit an application and wait for review.,Mem
         .se-faq-record-order{display:grid;gap:8px;align-items:start;}
         .se-faq-order-number{display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:999px;background:#e9f1fb;color:#1f4f82;font-size:14px;font-weight:900;}
         .se-faq-order-buttons{display:grid;grid-template-columns:1fr;gap:6px;}
+        .se-faq-drag-handle{border:1px dashed #9ab2ce;background:#f8fbff;color:#1f4f82;border-radius:999px;padding:7px 10px;font-size:12px;font-weight:900;cursor:grab;}
+        .se-faq-drag-handle:active{cursor:grabbing;}
+        .se-faq-archived-lock{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:7px 10px;background:#fff3cd;color:#8a5200;border:1px solid #e8c56f;font-size:12px;font-weight:900;}
+        .se-faq-record.is-dragging{opacity:.45;}
+        .se-faq-record.is-drop-target{outline:3px solid rgba(31,79,130,.25);border-color:#1f4f82;}
+        .se-archived-note{margin:0 0 12px 0;background:#fff8e6;border:1px solid #e8c56f;color:#744a00;border-radius:10px;padding:10px 12px;}
+        
         .se-faq-record-details{min-width:0;}
         .se-faq-record-details>summary{display:grid;gap:8px;cursor:pointer;list-style:none;}
         .se-faq-record-details>summary::-webkit-details-marker{display:none;}

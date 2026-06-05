@@ -1331,10 +1331,10 @@
       status: getValue("se-faq-item-status", "active"),
       metadata_json: { saved_from: "page_editor_inline_faq_manager" }
     });
-    selectedInfoFaqItemId = result.faq_item?.faq_item_id || selectedInfoFaqItemId;
-    await loadInfoFaqItems(true);
+    selectedInfoFaqItemId = "";
+    await loadInfoFaqItems(false);
     setInfoFaqDirty(false);
-    setStatus("FAQ item saved.");
+    setStatus("FAQ item saved. Ready for new FAQ.");
   }
 
   async function setInfoFaqArchived(archive) {

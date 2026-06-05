@@ -346,21 +346,8 @@
     }, { once: false });
   }
 
-  function renderPayload(root, payload) {
-    const content = getJson(payload?.page_settings || {}, "content_json");
-    const options = getJson(payload?.page_settings || {}, "options_json");
-    const labels = getJson(payload?.page_settings || {}, "labels_json");
-    const config = styleConfig(payload);
-    const aircraft = Array.isArray(payload.aircraft) ? payload.aircraft : [];
-    const emptyMessage = getText(content, "empty_state_message", "Aircraft information is not available at this time.");
-    const noteBody = getText(content, "note_body");
-    const noteEnabled = getBool(options, "show_note_strip", true) && hasText(noteBody);
-
-    const cssId = `syncetc-aircraft-css-${Math.random().toString(36).slice(2)}`;
-    const cards = aircraft.map((item) => aircraftCardHtml(item, options, labels)).filter(Boolean).join("");
-
-    root.innerHTML = `
-      <style id="${cssId}">${buildCss(config)}</style>
+  function aircraftBodyHtml(content, options, cards, emptyMessage, noteEnabled, noteBody) {
+    return `
       <div class="syncetc-aircraft-page">
         <div class="syncetc-aircraft-shell">
           ${heroHtml(content, options)}
@@ -381,6 +368,32 @@
         </div>
       </div>
     `;
+  }
+
+  function renderPayload(root, payload) {
+    const content = getJson(payload?.page_settings || {}, "content_json");
+    const options = getJson(payload?.page_settings || {}, "options_json");
+    const labels = getJson(payload?.page_settings || {}, "labels_json");
+    const config = styleConfig(payload);
+    const aircraft = Array.isArray(payload.aircraft) ? payload.aircraft : [];
+    const emptyMessage = getText(content, "empty_state_message", "Aircraft information is not available at this time.");
+    const noteBody = getText(content, "note_body");
+    const noteEnabled = getBool(options, "show_note_strip", true) && hasText(noteBody);
+    const cards = aircraft.map((item) => aircraftCardHtml(item, options, labels)).filter(Boolean).join("");
+    const bodyHtml = aircraftBodyHtml(content, options, cards, emptyMessage, noteEnabled, noteBody);
+
+    if (window.SyncEtcPublicShell && typeof window.SyncEtcPublicShell.render === "function") {
+      window.SyncEtcPublicShell.render({
+        root,
+        payload,
+        activePageKey: payload?.page?.page_key || "aircraft",
+        extraCss: buildCss(config),
+        bodyHtml,
+      });
+    } else {
+      root.innerHTML = `<style>${buildCss(config)}</style>${bodyHtml}`;
+    }
+
     attachAircraftLightbox(root);
   }
 

@@ -7,7 +7,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-002";
+  const VERSION = "2026-06-05-003";
   const SHELL_ID = "syncetc-admin-shell";
   const LOGO_URL = "https://bxywokidhgppmlzyqvem.supabase.co/storage/v1/object/public/core-assets/SyncEtc-logo-compact.png";
 
@@ -51,6 +51,11 @@
       label: "Documents",
       href: "/documents-admin",
       match: "/documents-admin"
+    },
+    {
+      label: "Events",
+      href: "/events-admin",
+      match: "/events-admin"
     },
     {
       label: "Layout Designer",

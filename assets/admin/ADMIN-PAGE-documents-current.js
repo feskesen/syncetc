@@ -1,12 +1,12 @@
 // ADMIN-PAGE-documents-current.js
-// Internal Version: 2026-06-05-003-B
+// Internal Version: 2026-06-05-003-D
 // Purpose: Platform-admin Documents / Resources manager with paired PDF/source uploads, version history, protected storage, PDF previews, and clearer record selection.
 // Actions used: list_customers, list_documents, upsert_document, archive_document, restore_document, list_document_versions, create_document_version, approve_document_version, publish_document_version, reject_document_version, get_document_download_url.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-003-C";
+  const VERSION = "2026-06-05-003-D";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -519,8 +519,14 @@
     if (isCurrentDocumentArchived()) throw new Error("Archived documents must be restored before they can be edited.");
     validatePendingVersionFiles();
 
+    const existingDoc = currentDocument();
+    const hasAnyExistingVersion = Boolean(existingDoc?.published_version_number) || versions.length > 0;
+    if (!hasAnyExistingVersion && !pendingPdfFile) {
+      throw validationError("A viewable PDF is required before saving a new document. Upload a PDF in the Viewable PDF / Live File box before saving.", "pdf");
+    }
+
     const willCreateVersion = Boolean(pendingPdfFile || pendingSourceFile);
-    const hasExistingLiveVersion = Boolean(currentDocument()?.published_version_number);
+    const hasExistingLiveVersion = Boolean(existingDoc?.published_version_number);
     const publishNow = willCreateVersion && pendingPdfFile
       ? await promptPublishDisposition(hasExistingLiveVersion)
       : false;

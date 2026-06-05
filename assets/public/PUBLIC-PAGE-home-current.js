@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-001";
+  const VERSION = "2026-06-05-002";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const DEFAULT_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-public-render`;
@@ -150,13 +150,13 @@
       .syncetc-announcement-strip{margin-bottom:14px;padding:12px 16px;border-radius:${config.radius};background:${config.secondary};border:1px solid ${config.border};color:${config.primary};font-size:13px;font-weight:850;box-shadow:${config.shadow === "none" ? "none" : "0 8px 20px rgba(12,38,64,.08)"};}
       .syncetc-marquee-alert{width:100%;max-width:100%;overflow:hidden;margin-bottom:18px;}
       .syncetc-marquee-viewpoint{width:100%;max-width:100%;overflow:hidden;position:relative;}
-      .syncetc-marquee-track{display:inline-flex;align-items:center;width:max-content;min-width:max-content;white-space:nowrap;animation:syncetcHomeMarqueeMovePause 34s linear infinite;will-change:transform;}
+      .syncetc-marquee-track{display:inline-flex;align-items:center;width:max-content;min-width:max-content;white-space:nowrap;transform:translateX(var(--syncetc-marquee-start-x, 24px));animation:syncetcHomeMarqueeMovePause var(--syncetc-marquee-duration, 28s) linear infinite;animation-delay:0s;will-change:transform;}
       .syncetc-marquee-alert:hover .syncetc-marquee-track{animation-play-state:paused;}
       .syncetc-marquee-image{flex:0 0 auto;max-height:54px;width:auto;margin-right:10px;object-fit:contain;}
       .syncetc-marquee-text{flex:0 0 auto;display:inline-flex;align-items:center;padding:3px 8px;border:1px solid ${config.border};background:rgba(255,255,255,.72);color:${config.text};font-size:13px;font-weight:850;}
-      @keyframes syncetcHomeMarqueeMovePause{0%{transform:translateX(100vw)}18%{transform:translateX(calc(50vw - 50%))}77%{transform:translateX(calc(50vw - 50%))}100%{transform:translateX(-120%)}}
+      @keyframes syncetcHomeMarqueeMovePause{0%{transform:translateX(var(--syncetc-marquee-start-x, 24px))}16%{transform:translateX(var(--syncetc-marquee-center-x, 24px))}64%{transform:translateX(var(--syncetc-marquee-center-x, 24px))}82%{transform:translateX(var(--syncetc-marquee-end-x, -120%))}100%{transform:translateX(var(--syncetc-marquee-end-x, -120%))}}
       @media(max-width:980px){.syncetc-featured-header{grid-template-columns:1fr}.syncetc-home-grid{grid-template-columns:1fr}.syncetc-home-button.secondary{justify-self:start}}
-      @media(max-width:720px){.syncetc-home-hero{padding:26px 20px 22px}.syncetc-home-hero h1{font-size:36px}.syncetc-home-main{padding:18px}.syncetc-home-stats{grid-template-columns:1fr}.syncetc-featured-card,.syncetc-home-card{padding:18px}.syncetc-featured-slot{min-height:260px;max-height:52vh;padding:10px}.syncetc-featured-image-link,.syncetc-featured-image{max-height:48vh}.syncetc-contact-row{flex-direction:column}.syncetc-home-button,.syncetc-home-button.secondary{width:100%}.syncetc-marquee-track{animation-duration:32s}}
+      @media(max-width:720px){.syncetc-home-hero{padding:26px 20px 22px}.syncetc-home-hero h1{font-size:36px}.syncetc-home-main{padding:18px}.syncetc-home-stats{grid-template-columns:1fr}.syncetc-featured-card,.syncetc-home-card{padding:18px}.syncetc-featured-slot{min-height:260px;max-height:52vh;padding:10px}.syncetc-featured-image-link,.syncetc-featured-image{max-height:48vh}.syncetc-contact-row{flex-direction:column}.syncetc-home-button,.syncetc-home-button.secondary{width:100%}.syncetc-marquee-track{--syncetc-marquee-duration:26s}}
       @media(max-width:520px){.syncetc-home-hero h1{font-size:32px}.syncetc-home-card h2,.syncetc-featured-header h2{font-size:25px}.syncetc-featured-slot{min-height:220px}}
     `;
   }
@@ -421,6 +421,64 @@
     });
   }
 
+  let marqueeResizeTimer = null;
+
+  function setMarqueePositions(marquee) {
+    const viewport = marquee.querySelector(".syncetc-marquee-viewpoint");
+    const track = marquee.querySelector(".syncetc-marquee-track");
+    if (!viewport || !track) return;
+
+    const viewportWidth = viewport.clientWidth || rootWidthFallback(viewport) || window.innerWidth || 800;
+    const trackWidth = track.scrollWidth || track.offsetWidth || 0;
+    if (!viewportWidth || !trackWidth) return;
+
+    // Start with the banner already visible near the right side, not waiting fully offscreen.
+    const startX = Math.max(12, Math.min(viewportWidth - 40, Math.round(viewportWidth * 0.72)));
+
+    // Center if it fits. If it is wider than the viewport, keep its left edge visible while paused.
+    const centerX = trackWidth < viewportWidth
+      ? Math.round((viewportWidth - trackWidth) / 2)
+      : 12;
+
+    // Move far enough left that the full banner clears the viewport, then pause there.
+    const endX = Math.round(-trackWidth - 32);
+
+    track.style.setProperty("--syncetc-marquee-start-x", `${startX}px`);
+    track.style.setProperty("--syncetc-marquee-center-x", `${centerX}px`);
+    track.style.setProperty("--syncetc-marquee-end-x", `${endX}px`);
+  }
+
+  function rootWidthFallback(el) {
+    const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+    return rect && rect.width ? rect.width : 0;
+  }
+
+  function initializeMarquees(root) {
+    const marquees = Array.from(root.querySelectorAll(".syncetc-marquee-alert"));
+    if (!marquees.length) return;
+
+    const refresh = () => marquees.forEach(setMarqueePositions);
+
+    window.requestAnimationFrame(refresh);
+    window.setTimeout(refresh, 150);
+
+    root.querySelectorAll(".syncetc-marquee-image").forEach((img) => {
+      if (!img.complete) img.addEventListener("load", refresh, { once: true });
+    });
+
+    if (window.__syncetcHomeMarqueeResizeBound !== true) {
+      window.__syncetcHomeMarqueeResizeBound = true;
+      window.addEventListener("resize", () => {
+        window.clearTimeout(marqueeResizeTimer);
+        marqueeResizeTimer = window.setTimeout(() => {
+          document.querySelectorAll(ROOT_SELECTOR).forEach((pageRoot) => {
+            pageRoot.querySelectorAll(".syncetc-marquee-alert").forEach(setMarqueePositions);
+          });
+        }, 120);
+      });
+    }
+  }
+
   function render(root, payload) {
     const config = styleConfig(payload);
     const parts = getPageParts(payload);
@@ -441,6 +499,7 @@
     }
 
     bindContactForms(root, payload);
+    initializeMarquees(root);
   }
 
   async function initOne(root) {

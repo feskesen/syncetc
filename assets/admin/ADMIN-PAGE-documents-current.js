@@ -1,12 +1,12 @@
 // ADMIN-PAGE-documents-current.js
-// Internal Version: 2026-06-05-002
-// Purpose: Platform-admin Documents / Resources manager with explicit create/edit states, readonly slugs, version history, protected storage uploads, previews, and clearer record selection.
+// Internal Version: 2026-06-05-003
+// Purpose: Platform-admin Documents / Resources manager with paired PDF/source uploads, version history, protected storage, PDF previews, and clearer record selection.
 // Actions used: list_customers, list_documents, upsert_document, archive_document, restore_document, list_document_versions, create_document_version, approve_document_version, publish_document_version, reject_document_version, get_document_download_url.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-002";
+  const VERSION = "2026-06-05-003";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -24,7 +24,10 @@
   let versions = [];
   let selectedDocumentId = "";
   let editorMode = "idle"; // idle | new | edit
-  let pendingFile = null;
+  let pendingPdfFile = null;
+  let pendingSourceFile = null;
+  let pendingPdfPreviewUrl = "";
+  let pendingSourcePreviewUrl = "";
   let isDirty = false;
   let isHydrating = false;
   let includeArchived = true;
@@ -74,6 +77,43 @@
     const safeName = normalizeKey(rawName) || "document";
     const safeExt = rawExt.replace(/[^a-z0-9]/gi, "").slice(0, 12).toLowerCase();
     return safeExt ? `${safeName}.${safeExt}` : safeName;
+  }
+
+
+  function fileExt(name) {
+    const cleaned = String(name || "").split(/[\\/]/).pop() || "";
+    const dot = cleaned.lastIndexOf(".");
+    return dot > -1 ? cleaned.slice(dot + 1).toLowerCase() : "";
+  }
+
+  function isPdfFile(file) {
+    if (!file) return false;
+    return String(file.type || "").toLowerCase() === "application/pdf" || fileExt(file.name) === "pdf";
+  }
+
+  function isPdfVersion(version) {
+    if (!version) return false;
+    return String(version.mime_type || "").toLowerCase() === "application/pdf" || fileExt(version.original_file_name) === "pdf";
+  }
+
+  function isPreviewablePdfFile(file) {
+    return isPdfFile(file);
+  }
+
+  function getVersionSourceFile(version) {
+    const meta = version && typeof version.metadata_json === "object" && version.metadata_json ? version.metadata_json : {};
+    const source = meta && typeof meta.source_file === "object" && meta.source_file ? meta.source_file : null;
+    return source && source.storage_path ? source : null;
+  }
+
+  function resetPendingFiles(renderNow = true) {
+    if (pendingPdfPreviewUrl) URL.revokeObjectURL(pendingPdfPreviewUrl);
+    if (pendingSourcePreviewUrl) URL.revokeObjectURL(pendingSourcePreviewUrl);
+    pendingPdfFile = null;
+    pendingSourceFile = null;
+    pendingPdfPreviewUrl = "";
+    pendingSourcePreviewUrl = "";
+    if (renderNow) renderPendingFiles();
   }
 
   function formatBytes(bytes) {
@@ -222,7 +262,7 @@
     versions = [];
     selectedDocumentId = "";
     editorMode = "idle";
-    pendingFile = null;
+    resetPendingFiles(false);
     markClean();
     if (window.SyncEtcAdminShell) window.SyncEtcAdminShell.setAuthState({ required: true, authenticated: false, email: "" });
     render();
@@ -244,7 +284,7 @@
       selectedDocumentId = "";
       versions = [];
       editorMode = "idle";
-      pendingFile = null;
+      resetPendingFiles(false);
       markClean();
     }
     renderDocumentList();
@@ -264,7 +304,7 @@
     if (!confirmDiscard("Discard unsaved document changes and start a new document?")) return;
     selectedDocumentId = "";
     versions = [];
-    pendingFile = null;
+    resetPendingFiles(false);
     editorMode = "new";
     markClean();
     render();
@@ -275,7 +315,7 @@
   function closeEditor(message) {
     selectedDocumentId = "";
     versions = [];
-    pendingFile = null;
+    resetPendingFiles(false);
     editorMode = "idle";
     markClean();
     render();
@@ -292,7 +332,7 @@
     if (!confirmDiscard("Discard unsaved document changes and switch records?")) return;
     selectedDocumentId = String(id || "");
     editorMode = "edit";
-    pendingFile = null;
+    resetPendingFiles(false);
     markClean();
     render();
     hydrateDocument(currentDocument());
@@ -318,8 +358,8 @@
     setValue("sd-version-status", "draft");
     setValue("sd-publish-now", "false");
     setValue("sd-version-notes", "");
-    pendingFile = null;
-    renderPendingFile();
+    resetPendingFiles(false);
+    renderPendingFiles();
     updateSlugPreview();
     isHydrating = false;
     markClean();
@@ -344,47 +384,101 @@
     };
   }
 
+
+  function validatePendingVersionFiles() {
+    if (getValue("sd-publish-now") === "true" && !pendingPdfFile) {
+      throw new Error("Publishing requires a viewable PDF. Upload the PDF rendition before choosing Publish Now.");
+    }
+    if (!pendingPdfFile && !pendingSourceFile) return;
+    if (pendingPdfFile && !isPdfFile(pendingPdfFile)) {
+      throw new Error("The viewable/live file must be a PDF.");
+    }
+    if (pendingSourceFile && !pendingPdfFile) {
+      throw new Error("Upload the matching PDF before saving a Word/source document. Use Print/Export to PDF, then upload that PDF in the Viewable PDF box.");
+    }
+    if (getValue("sd-publish-now") === "true" && !pendingPdfFile) {
+      throw new Error("Publishing requires a viewable PDF. Upload the PDF rendition before choosing Publish Now.");
+    }
+    if (pendingSourceFile && !getEl("sd-pdf-confirm")?.checked) {
+      throw new Error("Confirm that the viewable PDF matches the editable/source file before saving this paired version.");
+    }
+  }
+
   async function saveDocument() {
     if (!selectedCustomerId) throw new Error("Select a customer/organization first.");
     if (isCurrentDocumentArchived()) throw new Error("Archived documents must be restored before they can be edited.");
+    validatePendingVersionFiles();
     const targetDocumentId = selectedDocumentId || crypto.randomUUID();
     setStatus("Saving document metadata...");
     const result = await callCoreAdminAction("upsert_document", documentPayload(targetDocumentId));
     const document = result.document;
     selectedDocumentId = String(document.document_id);
 
-    if (pendingFile) {
-      await uploadPendingFileAndCreateVersion(document);
+    if (pendingPdfFile || pendingSourceFile) {
+      await uploadPendingFilesAndCreateVersion(document);
     }
 
-    pendingFile = null;
+    resetPendingFiles(false);
     await loadDocuments(false);
     closeEditor("Document saved. Select a document to edit or click New Document.");
   }
 
-  async function uploadPendingFileAndCreateVersion(document) {
-    const file = pendingFile;
-    if (!file) return;
+  async function uploadOneDocumentFile(file, document, role) {
     const safeFile = sanitizeFileName(file.name);
-    const storagePath = ["organizations", selectedCustomerId, "documents", document.document_id, `${Date.now()}-${safeFile}`].join("/");
-    setStatus("Uploading document file to protected storage...");
+    const storagePath = ["organizations", selectedCustomerId, "documents", document.document_id, role, `${Date.now()}-${safeFile}`].join("/");
+    setStatus(`Uploading ${role === "public-pdf" ? "viewable PDF" : "editable source"} to protected storage...`);
     const { error: uploadError } = await supabaseClient.storage
       .from(STORAGE_BUCKET)
       .upload(storagePath, file, { contentType: file.type || "application/octet-stream", upsert: false });
     if (uploadError) throw uploadError;
-
-    setStatus("Creating document version...");
-    await callCoreAdminAction("create_document_version", {
-      organization_id: selectedCustomerId,
-      document_id: document.document_id,
+    return {
       storage_bucket: STORAGE_BUCKET,
       storage_path: storagePath,
       original_file_name: file.name,
       mime_type: file.type || "application/octet-stream",
       file_size_bytes: file.size || 0,
+      uploaded_at: new Date().toISOString(),
+      role,
+    };
+  }
+
+  async function uploadPendingFilesAndCreateVersion(document) {
+    if (!pendingPdfFile && !pendingSourceFile) return;
+
+    if (pendingPdfFile && !isPdfFile(pendingPdfFile)) {
+      throw new Error("The viewable/live file must be a PDF.");
+    }
+
+    if (pendingSourceFile && !pendingPdfFile) {
+      throw new Error("Upload the matching PDF before saving a Word/source document. The public/member page only displays the PDF rendition.");
+    }
+
+    if (pendingSourceFile && !getEl("sd-pdf-confirm")?.checked) {
+      throw new Error("Confirm that the viewable PDF matches the editable/source file before saving this paired version.");
+    }
+
+    const pdfInfo = await uploadOneDocumentFile(pendingPdfFile, document, "public-pdf");
+    const sourceInfo = pendingSourceFile ? await uploadOneDocumentFile(pendingSourceFile, document, "source") : null;
+
+    setStatus("Creating document version...");
+    await callCoreAdminAction("create_document_version", {
+      organization_id: selectedCustomerId,
+      document_id: document.document_id,
+      storage_bucket: pdfInfo.storage_bucket,
+      storage_path: pdfInfo.storage_path,
+      original_file_name: pdfInfo.original_file_name,
+      mime_type: pdfInfo.mime_type,
+      file_size_bytes: pdfInfo.file_size_bytes,
       version_status: getValue("sd-version-status") || "draft",
       publish_now: getValue("sd-publish-now") === "true",
+      pdf_match_confirmed: Boolean(sourceInfo),
       notes: getValue("sd-version-notes"),
+      metadata_json: {
+        viewable_pdf_file: pdfInfo,
+        source_file: sourceInfo,
+        pdf_match_confirmed: Boolean(sourceInfo),
+        workflow: sourceInfo ? "paired-source-and-pdf" : "pdf-only",
+      },
     });
   }
 
@@ -409,25 +503,25 @@
     setStatus("Version updated.");
   }
 
-  async function getVersionAccess(versionId) {
-    const result = await callCoreAdminAction("get_document_download_url", { organization_id: selectedCustomerId, version_id: versionId });
+  async function getVersionAccess(versionId, fileRole = "public") {
+    const result = await callCoreAdminAction("get_document_download_url", { organization_id: selectedCustomerId, version_id: versionId, file_role: fileRole });
     if (!result.signed_url && !result.preview_signed_url && !result.download_signed_url) throw new Error("No signed document URL was returned.");
     return result;
   }
 
-  async function previewVersion(versionId) {
-    const result = await getVersionAccess(versionId);
+  async function previewVersion(versionId, fileRole = "public") {
+    const result = await getVersionAccess(versionId, fileRole);
     const version = result.version || versions.find((v) => String(v.version_id) === String(versionId)) || {};
     previewState = {
       isOpen: true,
       url: result.preview_signed_url || result.signed_url || result.download_signed_url,
-      title: `${version.original_file_name || "Document preview"}`,
+      title: `${result.file_name || version.original_file_name || "Document preview"}`,
     };
     renderPreviewModal();
   }
 
-  async function downloadVersion(versionId) {
-    const result = await getVersionAccess(versionId);
+  async function downloadVersion(versionId, fileRole = "public") {
+    const result = await getVersionAccess(versionId, fileRole);
     window.open(result.download_signed_url || result.signed_url || result.preview_signed_url, "_blank", "noopener,noreferrer");
   }
 
@@ -436,27 +530,76 @@
     renderPreviewModal();
   }
 
-  function setPendingFile(file) {
+  function buildLocalPreviewHtml(file, previewUrl, role) {
+    if (!file) return "";
+    if (isPreviewablePdfFile(file) && previewUrl) {
+      return `<iframe class="sd-local-preview-frame" src="${escapeHtml(previewUrl)}" title="${escapeHtml(file.name)} preview"></iframe>`;
+    }
+    if (role === "source") {
+      return `<div class="sd-local-preview-message"><strong>Source preview not available in browser.</strong><span>Word/source files are stored for editing and download from version history. Upload the matching PDF for live preview and publication.</span></div>`;
+    }
+    return `<div class="sd-local-preview-message"><strong>Preview unavailable.</strong><span>Only PDF files can be previewed reliably on-page.</span></div>`;
+  }
+
+  function setPendingPdfFile(file) {
     if (!file) return;
-    pendingFile = file;
-    renderPendingFile();
+    if (!isPdfFile(file)) {
+      showError(new Error("The viewable/live file must be a PDF. Use Print/Export to PDF, then upload that PDF here."));
+      return;
+    }
+    if (pendingPdfPreviewUrl) URL.revokeObjectURL(pendingPdfPreviewUrl);
+    pendingPdfFile = file;
+    pendingPdfPreviewUrl = URL.createObjectURL(file);
+    renderPendingFiles();
     markDirty();
   }
 
-  function renderPendingFile() {
-    const el = getEl("sd-pending-file");
+  function setPendingSourceFile(file) {
+    if (!file) return;
+    if (pendingSourcePreviewUrl) URL.revokeObjectURL(pendingSourcePreviewUrl);
+    pendingSourceFile = file;
+    pendingSourcePreviewUrl = isPreviewablePdfFile(file) ? URL.createObjectURL(file) : "";
+    renderPendingFiles();
+    markDirty();
+  }
+
+  function renderFileSlot(id, file, previewUrl, role) {
+    const el = getEl(id);
     if (!el) return;
-    if (!pendingFile) {
-      el.innerHTML = `<span class="sd-muted">No file selected. Drag a file here or click to choose one.</span>`;
+    if (!file) {
+      el.innerHTML = role === "pdf"
+        ? `<span class="sd-muted">No PDF selected. Drag the live/viewable PDF here or click to choose it.</span>`
+        : `<span class="sd-muted">No source file selected. Optional: drag the editable Word/source file here.</span>`;
       return;
     }
     el.innerHTML = `
       <div class="sd-file-chip">
-        <strong>${escapeHtml(pendingFile.name)}</strong>
-        <span>${escapeHtml(pendingFile.type || "application/octet-stream")} • ${escapeHtml(formatBytes(pendingFile.size))}</span>
-        <button id="sd-clear-pending-file" type="button" class="sd-mini-button">Remove</button>
-      </div>`;
-    getEl("sd-clear-pending-file")?.addEventListener("click", (event) => { event.stopPropagation(); pendingFile = null; renderPendingFile(); markDirty(); });
+        <strong>${escapeHtml(file.name)}</strong>
+        <span>${escapeHtml(file.type || "application/octet-stream")} • ${escapeHtml(formatBytes(file.size))}</span>
+        <button id="${role === "pdf" ? "sd-clear-pdf-file" : "sd-clear-source-file"}" type="button" class="sd-mini-button">Remove</button>
+      </div>
+      <div class="sd-local-preview">${buildLocalPreviewHtml(file, previewUrl, role === "pdf" ? "pdf" : "source")}</div>`;
+    getEl(role === "pdf" ? "sd-clear-pdf-file" : "sd-clear-source-file")?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (role === "pdf") {
+        if (pendingPdfPreviewUrl) URL.revokeObjectURL(pendingPdfPreviewUrl);
+        pendingPdfFile = null;
+        pendingPdfPreviewUrl = "";
+      } else {
+        if (pendingSourcePreviewUrl) URL.revokeObjectURL(pendingSourcePreviewUrl);
+        pendingSourceFile = null;
+        pendingSourcePreviewUrl = "";
+      }
+      renderPendingFiles();
+      markDirty();
+    });
+  }
+
+  function renderPendingFiles() {
+    renderFileSlot("sd-pending-pdf", pendingPdfFile, pendingPdfPreviewUrl, "pdf");
+    renderFileSlot("sd-pending-source", pendingSourceFile, pendingSourcePreviewUrl, "source");
+    const confirmWrap = getEl("sd-pdf-confirm-wrap");
+    if (confirmWrap) confirmWrap.style.display = pendingSourceFile ? "grid" : "none";
   }
 
   function renderDocumentList() {
@@ -488,10 +631,17 @@
   }
 
   function versionActionLabel(version) {
-    const status = String(version.version_status || "");
+    if (!version) return "Publish";
+    const status = String(version.version_status || "draft");
     if (status === "superseded") return "Make Live Again";
-    if (status === "published") return "Current Live";
+    if (status === "approved") return "Publish Approved";
     return "Publish / Make Live";
+  }
+
+  function sourceFileLabel(source) {
+    if (!source) return "No editable/source file stored.";
+    const size = source.file_size_bytes ? ` • ${formatBytes(source.file_size_bytes)}` : "";
+    return `${source.original_file_name || "source file"}${size}`;
   }
 
   function renderVersions() {
@@ -502,34 +652,37 @@
       return;
     }
     if (!versions.length) {
-      wrap.innerHTML = `<div class="sd-empty">No uploaded versions yet. Choose a file and save the document to create v1.</div>`;
+      wrap.innerHTML = `<div class="sd-empty">No uploaded versions yet. Choose a PDF file and save the document to create v1. If you upload a Word/source file, upload its matching PDF in the PDF box.</div>`;
       return;
     }
     wrap.innerHTML = `
-      <div class="sd-version-help">Version history is append-only. Publishing a prior version makes it the current live file again; it does not delete later versions.</div>
+      <div class="sd-version-help">Version history is append-only. The live/public file is the PDF rendition. Editable/source files are stored for admin use and are not shown publicly.</div>
       ${versions.map((v) => {
         const status = String(v.version_status || "draft");
         const tone = status === "published" ? "green" : status === "superseded" ? "neutral" : status === "rejected" ? "red" : status === "approved" ? "blue" : "amber";
         const publishLabel = versionActionLabel(v);
+        const source = getVersionSourceFile(v);
+        const pdfOk = isPdfVersion(v);
         return `<article class="sd-version-row ${status === "published" ? "is-live" : ""}">
           <div>
-            <div class="sd-version-head"><strong>v${escapeHtml(v.version_number)} ${escapeHtml(v.version_label || "")}</strong>${statusPill(status === "published" ? "current live" : status, tone)}</div>
-            <div class="sd-muted">${escapeHtml(v.original_file_name || "file")} • ${escapeHtml(formatBytes(v.file_size_bytes))} • uploaded ${escapeHtml(formatDate(v.created_at))}</div>
+            <div class="sd-version-head"><strong>v${escapeHtml(v.version_number)} ${escapeHtml(v.version_label || "")}</strong>${statusPill(status === "published" ? "current live" : status, tone)}${pdfOk ? statusPill("PDF", "green") : statusPill("no PDF rendition", "red")}</div>
+            <div class="sd-muted"><strong>Viewable PDF:</strong> ${escapeHtml(v.original_file_name || "file")} • ${escapeHtml(formatBytes(v.file_size_bytes))} • uploaded ${escapeHtml(formatDate(v.created_at))}</div>
+            <div class="sd-muted"><strong>Editable source:</strong> ${escapeHtml(sourceFileLabel(source))}</div>
             ${v.notes ? `<div class="sd-note">${escapeHtml(v.notes)}</div>` : ""}
           </div>
           <div class="sd-version-actions">
-            <button type="button" class="sd-mini-button" data-preview-version="${escapeHtml(v.version_id)}">Preview</button>
-            <button type="button" class="sd-mini-button" data-download-version="${escapeHtml(v.version_id)}">Download</button>
+            ${pdfOk ? `<button type="button" class="sd-mini-button" data-preview-version="${escapeHtml(v.version_id)}" data-file-role="public">Preview PDF</button><button type="button" class="sd-mini-button" data-download-version="${escapeHtml(v.version_id)}" data-file-role="public">Download PDF</button>` : `<span class="sd-muted">PDF preview unavailable</span>`}
+            ${source ? `<button type="button" class="sd-mini-button" data-download-version="${escapeHtml(v.version_id)}" data-file-role="source">Download Source</button>` : ""}
             ${status !== "approved" && status !== "published" && status !== "superseded" ? `<button type="button" class="sd-mini-button" data-approve-version="${escapeHtml(v.version_id)}">Approve</button>` : ""}
-            ${status !== "published" ? `<button type="button" class="sd-mini-button primary" data-publish-version="${escapeHtml(v.version_id)}">${escapeHtml(publishLabel)}</button>` : `<span class="sd-live-note">Live</span>`}
+            ${status !== "published" ? (pdfOk ? `<button type="button" class="sd-mini-button primary" data-publish-version="${escapeHtml(v.version_id)}">${escapeHtml(publishLabel)}</button>` : `<button type="button" class="sd-mini-button primary" disabled title="Upload a PDF rendition before publishing.">${escapeHtml(publishLabel)}</button>`) : `<span class="sd-live-note">Live</span>`}
             ${!["rejected", "published", "superseded"].includes(status) ? `<button type="button" class="sd-mini-button danger" data-reject-version="${escapeHtml(v.version_id)}">Reject</button>` : ""}
           </div>
         </article>`;
       }).join("")}`;
-    wrap.querySelectorAll("[data-preview-version]").forEach((btn) => btn.addEventListener("click", () => previewVersion(btn.dataset.previewVersion).catch(showError)));
-    wrap.querySelectorAll("[data-download-version]").forEach((btn) => btn.addEventListener("click", () => downloadVersion(btn.dataset.downloadVersion).catch(showError)));
+    wrap.querySelectorAll("[data-preview-version]").forEach((btn) => btn.addEventListener("click", () => previewVersion(btn.dataset.previewVersion, btn.dataset.fileRole || "public").catch(showError)));
+    wrap.querySelectorAll("[data-download-version]").forEach((btn) => btn.addEventListener("click", () => downloadVersion(btn.dataset.downloadVersion, btn.dataset.fileRole || "public").catch(showError)));
     wrap.querySelectorAll("[data-approve-version]").forEach((btn) => btn.addEventListener("click", () => setVersionStatus(btn.dataset.approveVersion, "approve_document_version", "Approve this version?").catch(showError)));
-    wrap.querySelectorAll("[data-publish-version]").forEach((btn) => btn.addEventListener("click", () => setVersionStatus(btn.dataset.publishVersion, "publish_document_version", "Publish this version? This will make it the current live version for its visibility level.").catch(showError)));
+    wrap.querySelectorAll("[data-publish-version]").forEach((btn) => btn.addEventListener("click", () => setVersionStatus(btn.dataset.publishVersion, "publish_document_version", "Publish this PDF version? This will make it the current live PDF for its visibility level.").catch(showError)));
     wrap.querySelectorAll("[data-reject-version]").forEach((btn) => btn.addEventListener("click", () => setVersionStatus(btn.dataset.rejectVersion, "reject_document_version", "Reject this version?").catch(showError)));
   }
 
@@ -542,7 +695,7 @@
 
   function css() {
     return `
-      .sd-wrap{max-width:1180px;margin:24px auto 60px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:#172033;box-sizing:border-box}.sd-wrap *{box-sizing:border-box}.sd-panel{background:#fff;border:1px solid #dfe7f1;border-radius:22px;box-shadow:0 14px 38px rgba(12,38,64,.12);overflow:hidden}.sd-head{padding:24px 26px;background:linear-gradient(135deg,#12365a,#2f80c4);color:#fff}.sd-head h1{margin:0;font-size:clamp(30px,4vw,50px);line-height:1;font-weight:900;letter-spacing:-.04em}.sd-head p{max-width:880px;margin:10px 0 0;color:rgba(255,255,255,.88);line-height:1.55}.sd-version-badge{display:inline-flex;margin-top:12px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.28);font-size:11px;font-weight:900;letter-spacing:.04em}.sd-body{padding:20px;background:linear-gradient(180deg,#eef7ff,#fff)}.sd-login{display:grid;grid-template-columns:1fr 1fr auto auto;gap:10px;margin-bottom:14px;padding:12px;border-radius:16px;background:#fff;border:1px solid #dfe7f1}.sd-input,.sd-select,.sd-textarea{width:100%;border:1px solid #ccd8e5;border-radius:12px;padding:10px 12px;font:inherit;background:#fff;color:#172033}.sd-input[readonly],.sd-input:disabled,.sd-select:disabled,.sd-textarea:disabled{background:#f1f5f9;color:#64748b;cursor:not-allowed}.sd-textarea{min-height:92px;resize:vertical}.sd-button,.sd-mini-button{border:1px solid #b9c8d8;border-radius:999px;background:#fff;color:#12365a;font-weight:900;cursor:pointer;padding:9px 13px}.sd-button:hover,.sd-mini-button:hover{transform:translateY(-1px);box-shadow:0 6px 14px rgba(12,38,64,.10)}.sd-button.primary,.sd-mini-button.primary{background:#12365a;color:#fff;border-color:#12365a}.sd-button.danger,.sd-mini-button.danger{background:#fee2e2;color:#991b1b;border-color:#f3b9b9}.sd-mini-button{padding:7px 10px;font-size:12px}.sd-toolbar{display:grid;grid-template-columns:minmax(260px,1fr) auto auto auto;gap:10px;align-items:end;margin-bottom:14px}.sd-grid{display:grid;grid-template-columns:410px minmax(0,1fr);gap:16px;align-items:start}.sd-card{background:rgba(255,255,255,.94);border:1px solid #dfe7f1;border-radius:18px;padding:16px;box-shadow:0 8px 22px rgba(12,38,64,.08)}.sd-section-title{margin:0 0 10px;color:#0b2744;font-size:18px}.sd-subtitle{margin:0 0 14px;color:#5d6b78;font-size:13px;line-height:1.5}.sd-help{margin:6px 0 0;color:#64748b;font-size:12px;line-height:1.45}.sd-field{display:grid;gap:6px;margin-bottom:12px}.sd-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:900;color:#4b6582}.sd-two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.sd-document-list{display:grid;gap:12px;max-height:760px;overflow:auto;padding-right:4px}.sd-doc-group{border:1px solid #dfe7f1;border-radius:16px;background:#f8fbff;padding:10px}.sd-doc-group summary{cursor:pointer;color:#12365a;font-size:13px;text-transform:uppercase;letter-spacing:.08em;font-weight:900;margin-bottom:8px}.sd-doc-group summary span{float:right;background:#eaf5ff;border-radius:999px;padding:2px 8px}.sd-doc-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr);gap:7px;text-align:left;margin:0 0 8px;padding:12px;border:1px solid #dfe7f1;border-radius:14px;background:#fff;cursor:pointer;transition:border-color .16s ease,box-shadow .16s ease,background .16s ease}.sd-doc-row:hover,.sd-doc-row.selected{border-color:#2f80c4;box-shadow:0 6px 14px rgba(47,128,196,.14)}.sd-doc-row.archived{background:#fff7ed;border-color:#fdba74}.sd-doc-row-main strong{display:block;color:#0b2744}.sd-doc-row-main small{display:block;color:#5d6b78;margin-top:3px;overflow:hidden;text-overflow:ellipsis}.sd-row-pills{display:flex;gap:6px;flex-wrap:wrap}.sd-pill{display:inline-flex;border-radius:999px;padding:4px 8px;font-size:10px;font-weight:900;text-transform:uppercase;border:1px solid #d1d9e4;background:#f8fafc;color:#475569}.sd-pill.green{background:#e7f6ec;color:#14532d;border-color:#bde5c9}.sd-pill.blue{background:#eaf5ff;color:#12365a;border-color:#c9e4f8}.sd-pill.amber{background:#fff7ed;color:#9a4a00;border-color:#fed7aa}.sd-pill.red{background:#fee2e2;color:#991b1b;border-color:#fecaca}.sd-muted{color:#5d6b78;font-size:12px;line-height:1.45}.sd-note{margin-top:6px;padding:8px;border-radius:10px;background:#f8fafc;color:#475569;font-size:12px}.sd-mode-card{min-height:260px;display:flex;align-items:center;justify-content:center;text-align:center}.sd-mode-card-inner{max-width:520px}.sd-mode-card h2{margin:0 0 10px;color:#0b2744;font-size:26px}.sd-editor-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid #dfe7f1}.sd-editor-title h2{margin:0;color:#0b2744;font-size:22px}.sd-editor-title p{margin:6px 0 0;color:#64748b;font-size:13px}.sd-lock-warning{padding:12px 14px;margin-bottom:12px;border-radius:14px;border:1px solid #fdba74;background:#fff7ed;color:#9a4a00;font-weight:800;font-size:13px;line-height:1.5}.sd-drop{min-height:118px;border:2px dashed #aac0d8;border-radius:16px;background:#f8fbff;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;cursor:pointer}.sd-drop.is-over{border-color:#2f80c4;background:#eaf5ff}.sd-drop.disabled{opacity:.55;cursor:not-allowed}.sd-drop input{position:absolute;opacity:0;pointer-events:none}.sd-file-chip{display:grid;gap:4px;justify-items:center}.sd-file-chip span{font-size:12px;color:#5d6b78}.sd-version-list{display:grid;gap:10px}.sd-version-help{padding:10px 12px;border:1px solid #c9e4f8;background:#eaf5ff;color:#12365a;border-radius:12px;font-size:12px;line-height:1.45;font-weight:800}.sd-version-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;border:1px solid #dfe7f1;border-radius:14px;background:#fff;padding:12px}.sd-version-row.is-live{border-color:#bde5c9;background:#f1fbf4}.sd-version-head{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:4px}.sd-version-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.sd-live-note{display:inline-flex;align-items:center;padding:7px 10px;border-radius:999px;background:#e7f6ec;color:#14532d;font-size:12px;font-weight:900}.sd-dirty{display:inline-flex;margin-left:8px;padding:5px 9px;border-radius:999px;background:#e7f6ec;color:#14532d;font-size:11px;font-weight:900}.sd-dirty.is-dirty{background:#fff7ed;color:#9a4a00}.sd-output{white-space:pre-wrap;background:#0f172a;color:#dbeafe;border-radius:14px;padding:12px;max-height:260px;overflow:auto;font-size:12px}.sd-empty{padding:14px;border:1px dashed #cbd5e1;border-radius:12px;color:#64748b;background:#fff;text-align:center}.sd-preview-backdrop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(7,24,42,.72);z-index:2147483000;padding:24px}.sd-preview-backdrop.is-open{display:flex}.sd-preview-modal{width:min(1100px,96vw);height:min(820px,92vh);background:#fff;border-radius:18px;box-shadow:0 24px 80px rgba(0,0,0,.38);display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden}.sd-preview-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 14px;border-bottom:1px solid #dfe7f1;background:#f8fbff}.sd-preview-head strong{color:#0b2744}.sd-preview-frame{width:100%;height:100%;border:0;background:#fff}@media(max-width:920px){.sd-grid,.sd-toolbar,.sd-login,.sd-two{grid-template-columns:1fr}.sd-version-row,.sd-editor-head{grid-template-columns:1fr;display:grid}.sd-version-actions{justify-content:flex-start}}
+      .sd-wrap{max-width:1180px;margin:24px auto 60px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:#172033;box-sizing:border-box}.sd-wrap *{box-sizing:border-box}.sd-panel{background:#fff;border:1px solid #dfe7f1;border-radius:22px;box-shadow:0 14px 38px rgba(12,38,64,.12);overflow:hidden}.sd-head{padding:24px 26px;background:linear-gradient(135deg,#12365a,#2f80c4);color:#fff}.sd-head h1{margin:0;font-size:clamp(30px,4vw,50px);line-height:1;font-weight:900;letter-spacing:-.04em}.sd-head p{max-width:880px;margin:10px 0 0;color:rgba(255,255,255,.88);line-height:1.55}.sd-version-badge{display:inline-flex;margin-top:12px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.28);font-size:11px;font-weight:900;letter-spacing:.04em}.sd-body{padding:20px;background:linear-gradient(180deg,#eef7ff,#fff)}.sd-login{display:grid;grid-template-columns:1fr 1fr auto auto;gap:10px;margin-bottom:14px;padding:12px;border-radius:16px;background:#fff;border:1px solid #dfe7f1}.sd-input,.sd-select,.sd-textarea{width:100%;border:1px solid #ccd8e5;border-radius:12px;padding:10px 12px;font:inherit;background:#fff;color:#172033}.sd-input[readonly],.sd-input:disabled,.sd-select:disabled,.sd-textarea:disabled{background:#f1f5f9;color:#64748b;cursor:not-allowed}.sd-textarea{min-height:92px;resize:vertical}.sd-button,.sd-mini-button{border:1px solid #b9c8d8;border-radius:999px;background:#fff;color:#12365a;font-weight:900;cursor:pointer;padding:9px 13px}.sd-button:hover,.sd-mini-button:hover{transform:translateY(-1px);box-shadow:0 6px 14px rgba(12,38,64,.10)}.sd-button.primary,.sd-mini-button.primary{background:#12365a;color:#fff;border-color:#12365a}.sd-button.danger,.sd-mini-button.danger{background:#fee2e2;color:#991b1b;border-color:#f3b9b9}.sd-mini-button{padding:7px 10px;font-size:12px}.sd-toolbar{display:grid;grid-template-columns:minmax(260px,1fr) auto auto auto;gap:10px;align-items:end;margin-bottom:14px}.sd-grid{display:grid;grid-template-columns:410px minmax(0,1fr);gap:16px;align-items:start}.sd-card{background:rgba(255,255,255,.94);border:1px solid #dfe7f1;border-radius:18px;padding:16px;box-shadow:0 8px 22px rgba(12,38,64,.08)}.sd-section-title{margin:0 0 10px;color:#0b2744;font-size:18px}.sd-subtitle{margin:0 0 14px;color:#5d6b78;font-size:13px;line-height:1.5}.sd-help{margin:6px 0 0;color:#64748b;font-size:12px;line-height:1.45}.sd-field{display:grid;gap:6px;margin-bottom:12px}.sd-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:900;color:#4b6582}.sd-two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.sd-document-list{display:grid;gap:12px;max-height:760px;overflow:auto;padding-right:4px}.sd-doc-group{border:1px solid #dfe7f1;border-radius:16px;background:#f8fbff;padding:10px}.sd-doc-group summary{cursor:pointer;color:#12365a;font-size:13px;text-transform:uppercase;letter-spacing:.08em;font-weight:900;margin-bottom:8px}.sd-doc-group summary span{float:right;background:#eaf5ff;border-radius:999px;padding:2px 8px}.sd-doc-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr);gap:7px;text-align:left;margin:0 0 8px;padding:12px;border:1px solid #dfe7f1;border-radius:14px;background:#fff;cursor:pointer;transition:border-color .16s ease,box-shadow .16s ease,background .16s ease}.sd-doc-row:hover,.sd-doc-row.selected{border-color:#2f80c4;box-shadow:0 6px 14px rgba(47,128,196,.14)}.sd-doc-row.archived{background:#fff7ed;border-color:#fdba74}.sd-doc-row-main strong{display:block;color:#0b2744}.sd-doc-row-main small{display:block;color:#5d6b78;margin-top:3px;overflow:hidden;text-overflow:ellipsis}.sd-row-pills{display:flex;gap:6px;flex-wrap:wrap}.sd-pill{display:inline-flex;border-radius:999px;padding:4px 8px;font-size:10px;font-weight:900;text-transform:uppercase;border:1px solid #d1d9e4;background:#f8fafc;color:#475569}.sd-pill.green{background:#e7f6ec;color:#14532d;border-color:#bde5c9}.sd-pill.blue{background:#eaf5ff;color:#12365a;border-color:#c9e4f8}.sd-pill.amber{background:#fff7ed;color:#9a4a00;border-color:#fed7aa}.sd-pill.red{background:#fee2e2;color:#991b1b;border-color:#fecaca}.sd-muted{color:#5d6b78;font-size:12px;line-height:1.45}.sd-note{margin-top:6px;padding:8px;border-radius:10px;background:#f8fafc;color:#475569;font-size:12px}.sd-mode-card{min-height:260px;display:flex;align-items:center;justify-content:center;text-align:center}.sd-mode-card-inner{max-width:520px}.sd-mode-card h2{margin:0 0 10px;color:#0b2744;font-size:26px}.sd-editor-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid #dfe7f1}.sd-editor-title h2{margin:0;color:#0b2744;font-size:22px}.sd-editor-title p{margin:6px 0 0;color:#64748b;font-size:13px}.sd-lock-warning{padding:12px 14px;margin-bottom:12px;border-radius:14px;border:1px solid #fdba74;background:#fff7ed;color:#9a4a00;font-weight:800;font-size:13px;line-height:1.5}.sd-upload-section{margin:14px 0;padding:14px;border:1px solid #dfe7f1;border-radius:16px;background:#f8fbff}.sd-upload-title{margin:0 0 6px;color:#0b2744;font-size:17px}.sd-upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.sd-drop{min-height:180px;border:2px dashed #aac0d8;border-radius:16px;background:#fff;display:flex;align-items:center;justify-content:center;text-align:center;padding:14px;cursor:pointer;position:relative;overflow:hidden}.sd-drop.is-over{border-color:#2f80c4;background:#eaf5ff}.sd-drop.disabled{opacity:.55;cursor:not-allowed}.sd-drop input{position:absolute;opacity:0;pointer-events:none}.sd-file-chip{display:grid;gap:4px;justify-items:center;margin-bottom:10px}.sd-file-chip span{font-size:12px;color:#5d6b78}.sd-local-preview{width:100%;margin-top:8px}.sd-local-preview-frame{width:100%;height:210px;border:1px solid #dfe7f1;border-radius:12px;background:#fff}.sd-local-preview-message{min-height:110px;display:grid;align-content:center;gap:6px;padding:14px;border:1px dashed #cbd5e1;border-radius:12px;background:#f8fafc;color:#64748b}.sd-local-preview-message strong{color:#0b2744}.sd-confirm-row{grid-template-columns:auto 1fr;gap:9px;align-items:start;margin-top:12px;padding:11px 12px;border-radius:12px;border:1px solid #fed7aa;background:#fff7ed;color:#9a4a00;font-size:13px;font-weight:800}.sd-confirm-row input{margin-top:2px}.sd-confirm-row span{text-align:left;line-height:1.45}.sd-version-list{display:grid;gap:10px}.sd-version-help{padding:10px 12px;border:1px solid #c9e4f8;background:#eaf5ff;color:#12365a;border-radius:12px;font-size:12px;line-height:1.45;font-weight:800}.sd-version-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;border:1px solid #dfe7f1;border-radius:14px;background:#fff;padding:12px}.sd-version-row.is-live{border-color:#bde5c9;background:#f1fbf4}.sd-version-head{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:4px}.sd-version-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.sd-live-note{display:inline-flex;align-items:center;padding:7px 10px;border-radius:999px;background:#e7f6ec;color:#14532d;font-size:12px;font-weight:900}.sd-dirty{display:inline-flex;margin-left:8px;padding:5px 9px;border-radius:999px;background:#e7f6ec;color:#14532d;font-size:11px;font-weight:900}.sd-dirty.is-dirty{background:#fff7ed;color:#9a4a00}.sd-output{white-space:pre-wrap;background:#0f172a;color:#dbeafe;border-radius:14px;padding:12px;max-height:260px;overflow:auto;font-size:12px}.sd-empty{padding:14px;border:1px dashed #cbd5e1;border-radius:12px;color:#64748b;background:#fff;text-align:center}.sd-preview-backdrop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(7,24,42,.72);z-index:2147483000;padding:24px}.sd-preview-backdrop.is-open{display:flex}.sd-preview-modal{width:min(1100px,96vw);height:min(820px,92vh);background:#fff;border-radius:18px;box-shadow:0 24px 80px rgba(0,0,0,.38);display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden}.sd-preview-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 14px;border-bottom:1px solid #dfe7f1;background:#f8fbff}.sd-preview-head strong{color:#0b2744}.sd-preview-frame{width:100%;height:100%;border:0;background:#fff}@media(max-width:920px){.sd-grid,.sd-toolbar,.sd-login,.sd-two,.sd-upload-grid{grid-template-columns:1fr}.sd-version-row,.sd-editor-head{grid-template-columns:1fr;display:grid}.sd-version-actions{justify-content:flex-start}}
     `;
   }
 
@@ -618,7 +771,7 @@
     return `
       <section class="sd-card sd-editor">
         <div class="sd-editor-head">
-          <div class="sd-editor-title"><h2>${escapeHtml(modeLabel)} <span id="sd-dirty" class="sd-dirty">Saved / clean</span></h2><p>${editorMode === "new" ? "Save creates the document record. If a file is selected, it becomes version 1." : "You are editing an existing document record. Uploading a file creates a new version."}</p></div>
+          <div class="sd-editor-title"><h2>${escapeHtml(modeLabel)} <span id="sd-dirty" class="sd-dirty">Saved / clean</span></h2><p>${editorMode === "new" ? "Save creates the document record. Upload a PDF to create version 1. Optional Word/source files must be paired with a matching PDF." : "You are editing an existing document record. Uploading files creates a new append-only version; existing versions are never overwritten."}</p></div>
           <button id="sd-close-editor" class="sd-button" type="button">Close Editor</button>
         </div>
         ${archived ? `<div class="sd-lock-warning">This document is archived. Restore it before changing metadata or uploading versions.</div>` : ""}
@@ -626,8 +779,16 @@
         <div class="sd-two"><label class="sd-field"><span class="sd-label">Category</span><input id="sd-category" class="sd-input" type="text" placeholder="General, Minutes, Bylaws, Aircraft, Orientation" ${disabled}></label><label class="sd-field"><span class="sd-label">Visibility</span><select id="sd-visibility" class="sd-select" ${disabled}><option value="public">Public</option><option value="members">Members</option><option value="admins">Organization Admins</option><option value="board">Board/Internal</option><option value="internal">Platform/Internal</option></select><span class="sd-help">Public appears on the public page. Members/admin/board/internal are hidden from the public page.</span></label></div>
         <label class="sd-field"><span class="sd-label">Sort Order</span><input id="sd-sort-order" class="sd-input" type="number" value="100" ${disabled}></label>
         <label class="sd-field"><span class="sd-label">Description</span><textarea id="sd-description" class="sd-textarea" placeholder="Short description shown next to the document." ${disabled}></textarea></label>
-        <div id="sd-drop" class="sd-drop ${archived ? "disabled" : ""}"><input id="sd-file-input" type="file" ${disabled}><div id="sd-pending-file"><span class="sd-muted">No file selected. Drag a file here or click to choose one.</span></div></div>
-        <div class="sd-two" style="margin-top:12px"><label class="sd-field"><span class="sd-label">New Version Status</span><select id="sd-version-status" class="sd-select" ${disabled}><option value="draft">Draft</option><option value="review">Review</option><option value="approved">Approved</option></select></label><label class="sd-field"><span class="sd-label">Publish Now</span><select id="sd-publish-now" class="sd-select" ${disabled}><option value="false">No</option><option value="true">Yes - publish uploaded version</option></select></label></div>
+        <section class="sd-upload-section">
+          <h3 class="sd-upload-title">Upload New Version Files</h3>
+          <p class="sd-subtitle">The live/viewable file must be a PDF. If you upload a Word/source file, upload the matching PDF in the PDF box before saving.</p>
+          <div class="sd-upload-grid">
+            <div id="sd-pdf-drop" class="sd-drop sd-drop-pdf ${archived ? "disabled" : ""}"><input id="sd-pdf-input" type="file" accept="application/pdf,.pdf" ${disabled}><div><div class="sd-label" style="margin-bottom:8px">Viewable PDF / Live File</div><div id="sd-pending-pdf"><span class="sd-muted">No PDF selected. Drag the live/viewable PDF here or click to choose it.</span></div></div></div>
+            <div id="sd-source-drop" class="sd-drop sd-drop-source ${archived ? "disabled" : ""}"><input id="sd-source-input" type="file" accept=".doc,.docx,.pdf,.txt,.csv,.xls,.xlsx,.ppt,.pptx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf" ${disabled}><div><div class="sd-label" style="margin-bottom:8px">Editable Source File</div><div id="sd-pending-source"><span class="sd-muted">No source file selected. Optional: drag the editable Word/source file here.</span></div></div></div>
+          </div>
+          <label id="sd-pdf-confirm-wrap" class="sd-confirm-row" style="display:none"><input id="sd-pdf-confirm" type="checkbox" ${disabled}><span>I confirm the PDF rendition matches the editable/source file uploaded with this version.</span></label>
+        </section>
+        <div class="sd-two" style="margin-top:12px"><label class="sd-field"><span class="sd-label">New Version Status</span><select id="sd-version-status" class="sd-select" ${disabled}><option value="draft">Draft</option><option value="review">Review</option><option value="approved">Approved</option></select></label><label class="sd-field"><span class="sd-label">Publish Now</span><select id="sd-publish-now" class="sd-select" ${disabled}><option value="false">No</option><option value="true">Yes - publish uploaded PDF</option></select><span class="sd-help">Publish Now requires a PDF. Public/member pages preview/download only the PDF rendition.</span></label></div>
         <label class="sd-field"><span class="sd-label">Version Notes</span><textarea id="sd-version-notes" class="sd-textarea" placeholder="Optional notes for this upload/version." ${disabled}></textarea></label>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0">${archived ? `<button id="sd-restore" class="sd-button primary" type="button">Restore Document</button>` : `<button id="sd-save" class="sd-button primary" type="button">Save Document</button>${editorMode === "edit" ? `<button id="sd-archive" class="sd-button danger" type="button">Archive Document</button>` : ""}`}</div>
         <h2 class="sd-section-title">Version History</h2><div id="sd-version-list" class="sd-version-list"></div>
@@ -643,7 +804,7 @@
       selectedCustomerId = e.target.value;
       selectedDocumentId = "";
       versions = [];
-      pendingFile = null;
+      resetPendingFiles(false);
       editorMode = "idle";
       markClean();
       render();
@@ -663,14 +824,21 @@
     getEl("sd-save")?.addEventListener("click", () => saveDocument().catch(showError));
     getEl("sd-archive")?.addEventListener("click", () => archiveOrRestoreDocument(true).catch(showError));
     getEl("sd-restore")?.addEventListener("click", () => archiveOrRestoreDocument(false).catch(showError));
-    const drop = getEl("sd-drop");
-    const input = getEl("sd-file-input");
-    if (!isCurrentDocumentArchived()) {
+    const pdfDrop = getEl("sd-pdf-drop");
+    const pdfInput = getEl("sd-pdf-input");
+    const sourceDrop = getEl("sd-source-drop");
+    const sourceInput = getEl("sd-source-input");
+    function bindDrop(drop, input, setter) {
       drop?.addEventListener("click", () => input?.click());
-      input?.addEventListener("change", () => setPendingFile(input.files && input.files[0]));
+      input?.addEventListener("change", () => setter(input.files && input.files[0]));
       ["dragenter", "dragover"].forEach((name) => drop?.addEventListener(name, (event) => { event.preventDefault(); drop.classList.add("is-over"); }));
       ["dragleave", "drop"].forEach((name) => drop?.addEventListener(name, (event) => { event.preventDefault(); drop.classList.remove("is-over"); }));
-      drop?.addEventListener("drop", (event) => setPendingFile(event.dataTransfer?.files?.[0] || null));
+      drop?.addEventListener("drop", (event) => setter(event.dataTransfer?.files?.[0] || null));
+    }
+    if (!isCurrentDocumentArchived()) {
+      bindDrop(pdfDrop, pdfInput, setPendingPdfFile);
+      bindDrop(sourceDrop, sourceInput, setPendingSourceFile);
+      getEl("sd-pdf-confirm")?.addEventListener("change", markDirty);
     }
     bindDirty(root);
     hydrateDocument(editorMode === "edit" ? currentDocument() : null);

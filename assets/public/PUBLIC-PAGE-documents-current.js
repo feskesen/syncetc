@@ -1,11 +1,11 @@
 // PUBLIC-PAGE-documents-current.js
-// Internal Version: 2026-06-05-002
-// Purpose: Public Documents / Resources renderer. Shows only public published documents returned by core-public-render, grouped by collapsible categories with preview/download actions.
+// Internal Version: 2026-06-05-003
+// Purpose: Public Documents / Resources renderer. Shows only public published PDF documents returned by core-public-render, grouped by collapsible categories with PDF preview/download actions.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-002";
+  const VERSION = "2026-06-05-003";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const DEFAULT_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-public-render`;
@@ -122,7 +122,7 @@
             ${categories.length ? `<div class="syncetc-docs-groups">${categories.map((category) => `<details class="syncetc-docs-group" open><summary>${escapeHtml(category)} <span>${grouped[category].length}</span></summary><div class="syncetc-docs-list">${grouped[category].map((doc) => {
               const previewUrl = doc.preview_signed_url || doc.signed_url || doc.download_signed_url || "";
               const downloadUrl = doc.download_signed_url || doc.signed_url || doc.preview_signed_url || "";
-              return `<article class="syncetc-doc-card"><div><h3>${escapeHtml(doc.title || doc.original_file_name || "Document")}</h3>${hasText(doc.description) ? `<p>${escapeHtml(doc.description)}</p>` : ""}<div class="syncetc-doc-meta">${escapeHtml(documentMeta(doc))}</div></div><div class="syncetc-doc-actions">${previewUrl ? `<button type="button" class="syncetc-doc-button" data-doc-preview="${escapeHtml(previewUrl)}" data-doc-title="${escapeHtml(doc.title || doc.original_file_name || "Document")}">Open / Preview</button>` : ""}${downloadUrl ? `<a class="syncetc-doc-button secondary" href="${escapeHtml(downloadUrl)}" target="_blank" rel="noopener">Download</a>` : `<span class="syncetc-doc-meta">Unavailable</span>`}</div></article>`;
+              return `<article class="syncetc-doc-card"><div><h3>${escapeHtml(doc.title || doc.original_file_name || "Document")}</h3>${hasText(doc.description) ? `<p>${escapeHtml(doc.description)}</p>` : ""}<div class="syncetc-doc-meta">${escapeHtml(documentMeta(doc))}</div></div><div class="syncetc-doc-actions">${previewUrl ? `<button type="button" class="syncetc-doc-button" data-doc-preview="${escapeHtml(previewUrl)}" data-doc-title="${escapeHtml(doc.title || doc.original_file_name || "Document")}">Preview PDF</button>` : ""}${downloadUrl ? `<a class="syncetc-doc-button secondary" href="${escapeHtml(downloadUrl)}" target="_blank" rel="noopener">Download PDF</a>` : `<span class="syncetc-doc-meta">Unavailable</span>`}</div></article>`;
             }).join("")}</div></details>`).join("")}</div>` : `<div class="syncetc-docs-empty">${escapeHtml(emptyMessage)}</div>`}
             ${getBool(options, "show_docs_note", true) !== false && hasText(note) ? `<div class="syncetc-docs-note">${formatPlainText(note)}</div>` : ""}
           </main>

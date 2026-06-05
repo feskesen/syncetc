@@ -1,13 +1,13 @@
 // ADMIN-PAGE-page-editor-current.js
-// Internal Version: 2026-06-05-002
-// Purpose: Page Editor with restore history, corrected dirty-state tracking, Aircraft fields, and Home public page fields, and Info/FAQ fields/FAQ manager.
+// Internal Version: 2026-06-05-003
+// Purpose: Page Editor with restore history, corrected dirty-state tracking, Aircraft fields, Home public page fields, and Gallery public page fields.
 // Uses existing core-admin-action backend actions.
 // Actions used: list_customers, list_customer_pages, get_customer_page_settings, update_customer_page, update_page_settings, list_page_settings_history, restore_page_settings_snapshot, reset_page_settings_to_template_defaults.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-002";
+  const VERSION = "2026-06-05-003";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -32,8 +32,6 @@
   let pageHistoryLimit = 10;
   let pageHistoryTotalCount = 0;
   let pageHistoryFilter = "all";
-  let infoFaqItems = [];
-  let selectedInfoFaqItemId = "";
   const DIRTY_MESSAGE = "You have unsaved Page Editor changes. Leave anyway?";
 
   const FEATURE_DEFAULTS = {
@@ -389,22 +387,27 @@
     addIfElement(content, "contact_intro", "se-contact-intro");
     addIfElement(content, "contact_success_message", "se-contact-success-message");
 
+    addIfElement(content, "gallery_label", "se-gallery-label");
+    addIfElement(content, "gallery_title", "se-gallery-title");
+    addIfElement(content, "gallery_intro", "se-gallery-intro");
+
     addIfElement(content, "history_label", "se-history-label");
     addIfElement(content, "history_title", "se-history-title");
     addIfElement(content, "history_body", "se-history-body");
     addIfElement(content, "membership_label", "se-membership-label");
     addIfElement(content, "membership_title", "se-membership-title");
     addIfElement(content, "membership_body", "se-membership-body");
-    addIfElement(content, "officers_label", "se-officers-label");
-    addIfElement(content, "officers_title", "se-officers-title");
-    addIfElement(content, "officers_intro", "se-officers-intro");
-    addIfElement(content, "manual_officers_text", "se-manual-officers-text");
+    addIfElement(content, "board_label", "se-board-label");
+    addIfElement(content, "board_title", "se-board-title");
+    addIfElement(content, "board_intro", "se-board-intro");
+    addIfElement(content, "officer_source_mode", "se-officer-source-mode");
+    addIfElement(content, "manual_officers_json", "se-manual-officers-json");
     addIfElement(content, "faq_label", "se-faq-label");
     addIfElement(content, "faq_title", "se-faq-title");
     addIfElement(content, "faq_intro", "se-faq-intro");
-    addIfElement(content, "faq_empty_message", "se-faq-empty-message");
-    addIfElement(content, "contact_button_label", "se-contact-button-label");
-    addIfElement(content, "contact_button_url", "se-contact-button-url");
+    addIfElement(content, "contact_body", "se-info-contact-body");
+    addIfElement(content, "contact_cta_label", "se-info-contact-cta-label");
+    addIfElement(content, "contact_cta_url", "se-info-contact-cta-url");
 
     return content;
   }
@@ -446,13 +449,16 @@
     addCheckedIfElement(options, "show_mission_card", "se-show-mission-card");
     addCheckedIfElement(options, "show_contact_form", "se-show-contact-form");
     addCheckedIfElement(options, "marquee_pause_middle", "se-marquee-pause-middle");
+    addCheckedIfElement(options, "show_gallery_intro", "se-show-gallery-intro");
+    addCheckedIfElement(options, "show_photo_captions", "se-show-photo-captions");
+    addCheckedIfElement(options, "show_photo_credit", "se-show-photo-credit");
+    addCheckedIfElement(options, "show_featured_first", "se-show-featured-first");
+
     addCheckedIfElement(options, "show_history_card", "se-show-history-card");
     addCheckedIfElement(options, "show_membership_card", "se-show-membership-card");
-    addCheckedIfElement(options, "show_officers_card", "se-show-officers-card");
-    addCheckedIfElement(options, "show_faq_section", "se-show-faq-section");
+    addCheckedIfElement(options, "show_board_card", "se-show-board-card");
     addCheckedIfElement(options, "show_faq_categories", "se-show-faq-categories");
-    addCheckedIfElement(options, "show_contact_card", "se-show-contact-card");
-    addIfElement(options, "officer_source_mode", "se-officer-source-mode");
+    addCheckedIfElement(options, "show_contact_card", "se-show-info-contact-card");
 
     return options;
   }
@@ -679,7 +685,8 @@
     const templateKey = String(page.template_key || page.page_key || "").toLowerCase();
     const isHomePage = templateKey === "home";
     const isAircraftPage = templateKey === "aircraft";
-    const isInfoPage = templateKey === "info" || templateKey === "faq";
+    const isGalleryPage = templateKey === "gallery";
+    const isInfoPage = templateKey === "info";
 
     const editor = getEl("se-editor-fields");
     if (!editor) return;
@@ -802,95 +809,92 @@
       </section>
     `;
 
-
-    const infoHtml = `
+    const galleryHtml = `
       <section class="se-card se-inner-card">
-        <h2 class="se-section-title">Info Hero Stats</h2>
-        <p class="se-subtitle">Optional manual stat cards. Blank cards are omitted by the public renderer.</p>
-        <div class="se-two-col">
-          <label class="se-field"><span class="se-label">Stat 1 Label</span><input id="se-stat-1-label" class="se-input" type="text" value="${escapeHtml(content.stat_1_label || "")}"></label>
-          <label class="se-field"><span class="se-label">Stat 1 Text</span><input id="se-stat-1-text" class="se-input" type="text" value="${escapeHtml(content.stat_1_text || "")}"></label>
-          <label class="se-field"><span class="se-label">Stat 2 Label</span><input id="se-stat-2-label" class="se-input" type="text" value="${escapeHtml(content.stat_2_label || "")}"></label>
-          <label class="se-field"><span class="se-label">Stat 2 Text</span><input id="se-stat-2-text" class="se-input" type="text" value="${escapeHtml(content.stat_2_text || "")}"></label>
-          <label class="se-field"><span class="se-label">Stat 3 Label</span><input id="se-stat-3-label" class="se-input" type="text" value="${escapeHtml(content.stat_3_label || "")}"></label>
-          <label class="se-field"><span class="se-label">Stat 3 Text</span><input id="se-stat-3-text" class="se-input" type="text" value="${escapeHtml(content.stat_3_text || "")}"></label>
-        </div>
+        <h2 class="se-section-title">Gallery Intro</h2>
+        <p class="se-subtitle">Optional copy above the public gallery grid. Blank fields are omitted.</p>
+        <label class="se-field"><span class="se-label">Section Label</span><input id="se-gallery-label" class="se-input" type="text" value="${escapeHtml(content.gallery_label || "")}"></label>
+        <label class="se-field"><span class="se-label">Gallery Title</span><input id="se-gallery-title" class="se-input" type="text" value="${escapeHtml(content.gallery_title || "")}"></label>
+        <label class="se-field"><span class="se-label">Gallery Intro</span><textarea id="se-gallery-intro" class="se-input se-textarea">${escapeHtml(content.gallery_intro || "")}</textarea></label>
+        <label class="se-field"><span class="se-label">Empty State Message</span><textarea id="se-empty-state-message" class="se-input se-textarea">${escapeHtml(content.empty_state_message || "No public gallery photos are available yet.")}</textarea></label>
       </section>
 
       <section class="se-card se-inner-card">
-        <h2 class="se-section-title">Information Cards</h2>
+        <h2 class="se-section-title">Gallery Display Options / Note</h2>
         <div class="se-two-col">
-          <label class="se-field"><span class="se-label">History Label</span><input id="se-history-label" class="se-input" type="text" value="${escapeHtml(content.history_label || "")}"></label>
-          <label class="se-field"><span class="se-label">History Title</span><input id="se-history-title" class="se-input" type="text" value="${escapeHtml(content.history_title || "")}"></label>
+          <label class="se-check"><input id="se-show-gallery-intro" type="checkbox" ${checkAttr(options.show_gallery_intro !== false)}><span>Show gallery intro card when fields are filled</span></label>
+          <label class="se-check"><input id="se-show-photo-captions" type="checkbox" ${checkAttr(options.show_photo_captions !== false)}><span>Show photo captions/titles</span></label>
+          <label class="se-check"><input id="se-show-photo-credit" type="checkbox" ${checkAttr(options.show_photo_credit !== false)}><span>Show photo credit</span></label>
+          <label class="se-check"><input id="se-show-featured-first" type="checkbox" ${checkAttr(options.show_featured_first !== false)}><span>Sort featured photos first</span></label>
+          <label class="se-check"><input id="se-show-note-strip" type="checkbox" ${checkAttr(options.show_note_strip === true)}><span>Show note strip when filled</span></label>
         </div>
-        <label class="se-field"><span class="se-label">History Body</span><textarea id="se-history-body" class="se-input se-textarea">${escapeHtml(content.history_body || "")}</textarea></label>
+        <label class="se-field" style="margin-top:12px;"><span class="se-label">Note / Disclaimer</span><textarea id="se-note-body" class="se-input se-textarea">${escapeHtml(content.note_body || "")}</textarea></label>
+      </section>
+    `;
+
+    const infoHtml = `
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Info Cards</h2>
+        <p class="se-subtitle">Left-column public information cards. Blank fields are omitted by the renderer.</p>
         <div class="se-two-col">
-          <label class="se-field"><span class="se-label">Membership Label</span><input id="se-membership-label" class="se-input" type="text" value="${escapeHtml(content.membership_label || "")}"></label>
-          <label class="se-field"><span class="se-label">Membership Title</span><input id="se-membership-title" class="se-input" type="text" value="${escapeHtml(content.membership_title || "")}"></label>
+          <label class="se-field"><span class="se-label">History / Overview Label</span><input id="se-history-label" class="se-input" type="text" value="${escapeHtml(content.history_label || "Overview")}"></label>
+          <label class="se-field"><span class="se-label">History / Overview Title</span><input id="se-history-title" class="se-input" type="text" value="${escapeHtml(content.history_title || "About Us")}"></label>
+        </div>
+        <label class="se-field"><span class="se-label">History / Overview Body</span><textarea id="se-history-body" class="se-input se-textarea">${escapeHtml(content.history_body || "")}</textarea></label>
+        <div class="se-two-col">
+          <label class="se-field"><span class="se-label">Membership Label</span><input id="se-membership-label" class="se-input" type="text" value="${escapeHtml(content.membership_label || "Membership")}"></label>
+          <label class="se-field"><span class="se-label">Membership Title</span><input id="se-membership-title" class="se-input" type="text" value="${escapeHtml(content.membership_title || "Membership Information")}"></label>
         </div>
         <label class="se-field"><span class="se-label">Membership Body</span><textarea id="se-membership-body" class="se-input se-textarea">${escapeHtml(content.membership_body || "")}</textarea></label>
       </section>
 
       <section class="se-card se-inner-card">
-        <h2 class="se-section-title">Board / Officer Display</h2>
-        <p class="se-subtitle">Dynamic mode will later pull from roster roles. Manual rows are available now. Use one row per officer: Title | Name | Email optional | Note optional.</p>
+        <h2 class="se-section-title">Board / Officers</h2>
+        <p class="se-subtitle">Dynamic mode pulls from people + organization roles once roster data exists. Manual and hybrid modes allow override rows now.</p>
         <div class="se-two-col">
-          <label class="se-field"><span class="se-label">Section Label</span><input id="se-officers-label" class="se-input" type="text" value="${escapeHtml(content.officers_label || "")}"></label>
-          <label class="se-field"><span class="se-label">Title</span><input id="se-officers-title" class="se-input" type="text" value="${escapeHtml(content.officers_title || "")}"></label>
+          <label class="se-field"><span class="se-label">Board Label</span><input id="se-board-label" class="se-input" type="text" value="${escapeHtml(content.board_label || "Leadership")}"></label>
+          <label class="se-field"><span class="se-label">Board Title</span><input id="se-board-title" class="se-input" type="text" value="${escapeHtml(content.board_title || "Board / Officers")}"></label>
         </div>
-        <label class="se-field"><span class="se-label">Intro</span><textarea id="se-officers-intro" class="se-input se-textarea">${escapeHtml(content.officers_intro || "")}</textarea></label>
+        <label class="se-field"><span class="se-label">Board Intro</span><textarea id="se-board-intro" class="se-input se-textarea">${escapeHtml(content.board_intro || "")}</textarea></label>
         <label class="se-field"><span class="se-label">Officer Source Mode</span><select id="se-officer-source-mode" class="se-select">
-          <option value="dynamic_then_manual" ${selectedAttr(options.officer_source_mode || content.officer_source_mode, "dynamic_then_manual")}>Dynamic, fallback to manual</option>
-          <option value="dynamic" ${selectedAttr(options.officer_source_mode || content.officer_source_mode, "dynamic")}>Dynamic only</option>
-          <option value="manual" ${selectedAttr(options.officer_source_mode || content.officer_source_mode, "manual")}>Manual only</option>
-          <option value="manual_then_dynamic" ${selectedAttr(options.officer_source_mode || content.officer_source_mode, "manual_then_dynamic")}>Manual, fallback to dynamic</option>
-          <option value="hybrid" ${selectedAttr(options.officer_source_mode || content.officer_source_mode, "hybrid")}>Hybrid: dynamic + manual</option>
+          <option value="dynamic" ${selectedAttr(content.officer_source_mode || "dynamic", "dynamic")}>dynamic: use roster/roles</option>
+          <option value="manual" ${selectedAttr(content.officer_source_mode, "manual")}>manual: use rows below</option>
+          <option value="hybrid" ${selectedAttr(content.officer_source_mode, "hybrid")}>hybrid: dynamic plus manual rows</option>
         </select></label>
-        <label class="se-field"><span class="se-label">Manual Officer Rows</span><textarea id="se-manual-officers-text" class="se-input se-textarea" placeholder="President | Jane Smith | jane@example.com\nTreasurer | John Smith">${escapeHtml(content.manual_officers_text || "")}</textarea></label>
+        <label class="se-field"><span class="se-label">Manual Officer Rows</span><textarea id="se-manual-officers-json" class="se-input se-textarea" placeholder="President | Jane Smith
+Vice President | Arnie Palmer">${escapeHtml(content.manual_officers_json || "")}</textarea><small>Enter one officer per line. Use the pipe character | to separate the title from the name, like President | Jane Smith.</small><small>Public officer emails are intentionally not collected or shown here. Use the Contact form/contact-board link for public inquiries.</small></label>
       </section>
 
       <section class="se-card se-inner-card">
-        <h2 class="se-section-title">FAQ Section Copy</h2>
-        <div class="se-two-col">
-          <label class="se-field"><span class="se-label">FAQ Label</span><input id="se-faq-label" class="se-input" type="text" value="${escapeHtml(content.faq_label || "")}"></label>
-          <label class="se-field"><span class="se-label">FAQ Title</span><input id="se-faq-title" class="se-input" type="text" value="${escapeHtml(content.faq_title || "")}"></label>
-        </div>
+        <h2 class="se-section-title">FAQ Page Copy</h2>
+        <p class="se-subtitle">FAQ question/answer records are managed in FAQ Manager. These fields control the FAQ area heading and intro.</p>
+        <label class="se-field"><span class="se-label">FAQ Label</span><input id="se-faq-label" class="se-input" type="text" value="${escapeHtml(content.faq_label || "FAQ")}"></label>
+        <label class="se-field"><span class="se-label">FAQ Title</span><input id="se-faq-title" class="se-input" type="text" value="${escapeHtml(content.faq_title || "Frequently Asked Questions")}"></label>
         <label class="se-field"><span class="se-label">FAQ Intro</span><textarea id="se-faq-intro" class="se-input se-textarea">${escapeHtml(content.faq_intro || "")}</textarea></label>
-        <label class="se-field"><span class="se-label">FAQ Empty Message</span><textarea id="se-faq-empty-message" class="se-input se-textarea">${escapeHtml(content.faq_empty_message || "")}</textarea></label>
-      </section>
-
-      <section class="se-card se-inner-card">
-        <h2 class="se-section-title">Structured FAQ Items</h2>
-        <p class="se-subtitle">FAQ rows are separate database records so they can be reused, ordered, categorized, and managed without editing page layout.</p>
-        <div id="se-info-faq-manager" class="se-faq-manager">
-          <div class="se-empty">FAQ manager loads after the Info page is selected.</div>
-        </div>
       </section>
 
       <section class="se-card se-inner-card">
         <h2 class="se-section-title">Contact / Disclaimer</h2>
         <div class="se-two-col">
-          <label class="se-field"><span class="se-label">Contact Label</span><input id="se-contact-label" class="se-input" type="text" value="${escapeHtml(content.contact_label || "")}"></label>
-          <label class="se-field"><span class="se-label">Contact Title</span><input id="se-contact-title" class="se-input" type="text" value="${escapeHtml(content.contact_title || "")}"></label>
+          <label class="se-field"><span class="se-label">Contact Label</span><input id="se-contact-label" class="se-input" type="text" value="${escapeHtml(content.contact_label || "Questions")}"></label>
+          <label class="se-field"><span class="se-label">Contact Title</span><input id="se-contact-title" class="se-input" type="text" value="${escapeHtml(content.contact_title || "Need more information?")}"></label>
         </div>
-        <label class="se-field"><span class="se-label">Contact Intro</span><textarea id="se-contact-intro" class="se-input se-textarea">${escapeHtml(content.contact_intro || "")}</textarea></label>
+        <label class="se-field"><span class="se-label">Contact Body</span><textarea id="se-info-contact-body" class="se-input se-textarea">${escapeHtml(content.contact_body || "")}</textarea></label>
         <div class="se-two-col">
-          <label class="se-field"><span class="se-label">Button Label</span><input id="se-contact-button-label" class="se-input" type="text" value="${escapeHtml(content.contact_button_label || "")}"></label>
-          <label class="se-field"><span class="se-label">Button URL</span><input id="se-contact-button-url" class="se-input" type="text" value="${escapeHtml(content.contact_button_url || "")}"></label>
+          <label class="se-field"><span class="se-label">Contact Button Label</span><input id="se-info-contact-cta-label" class="se-input" type="text" value="${escapeHtml(content.contact_cta_label || "Contact Us")}"></label>
+          <label class="se-field"><span class="se-label">Contact Button URL</span><input id="se-info-contact-cta-url" class="se-input" type="text" value="${escapeHtml(content.contact_cta_url || "/home#contact-board")}"></label>
         </div>
         <label class="se-field"><span class="se-label">Note / Disclaimer</span><textarea id="se-note-body" class="se-input se-textarea">${escapeHtml(content.note_body || "")}</textarea></label>
       </section>
 
       <section class="se-card se-inner-card">
-        <h2 class="se-section-title">Info Display Options</h2>
+        <h2 class="se-section-title">Info/FAQ Display Options</h2>
         <div class="se-two-col">
-          <label class="se-check"><input id="se-show-hero-stats" type="checkbox" ${checkAttr(options.show_hero_stats !== false)}><span>Show hero stat cards when fields are filled</span></label>
-          <label class="se-check"><input id="se-show-history-card" type="checkbox" ${checkAttr(options.show_history_card !== false)}><span>Show history card</span></label>
-          <label class="se-check"><input id="se-show-membership-card" type="checkbox" ${checkAttr(options.show_membership_card !== false)}><span>Show membership card</span></label>
-          <label class="se-check"><input id="se-show-officers-card" type="checkbox" ${checkAttr(options.show_officers_card !== false)}><span>Show officers/board card</span></label>
-          <label class="se-check"><input id="se-show-faq-section" type="checkbox" ${checkAttr(options.show_faq_section !== false)}><span>Show FAQ section</span></label>
-          <label class="se-check"><input id="se-show-faq-categories" type="checkbox" ${checkAttr(options.show_faq_categories !== false)}><span>Show FAQ category headings when categories exist</span></label>
-          <label class="se-check"><input id="se-show-contact-card" type="checkbox" ${checkAttr(options.show_contact_card !== false)}><span>Show contact card</span></label>
+          <label class="se-check"><input id="se-show-history-card" type="checkbox" ${checkAttr(options.show_history_card !== false)}><span>Show history/overview card when filled</span></label>
+          <label class="se-check"><input id="se-show-membership-card" type="checkbox" ${checkAttr(options.show_membership_card !== false)}><span>Show membership card when filled</span></label>
+          <label class="se-check"><input id="se-show-board-card" type="checkbox" ${checkAttr(options.show_board_card !== false)}><span>Show board/officers card when filled</span></label>
+          <label class="se-check"><input id="se-show-faq-categories" type="checkbox" ${checkAttr(options.show_faq_categories !== false)}><span>Show FAQ category labels when present</span></label>
+          <label class="se-check"><input id="se-show-info-contact-card" type="checkbox" ${checkAttr(options.show_contact_card !== false)}><span>Show contact card when filled</span></label>
           <label class="se-check"><input id="se-show-note-strip" type="checkbox" ${checkAttr(options.show_note_strip !== false)}><span>Show note strip when filled</span></label>
         </div>
       </section>
@@ -946,150 +950,12 @@
       </section>
     `;
 
-    editor.innerHTML = pageIdentityHtml + heroHtml + (isAircraftPage ? aircraftHtml : isHomePage ? homeHtml : isInfoPage ? infoHtml : genericHtml);
+    editor.innerHTML = pageIdentityHtml + heroHtml + (isAircraftPage ? aircraftHtml : isHomePage ? homeHtml : isGalleryPage ? galleryHtml : isInfoPage ? infoHtml : genericHtml);
 
     isHydrating = true;
     bindDirtyWithin(editor);
     isHydrating = false;
   }
-
-
-
-  function getCurrentTemplateKey() {
-    return String((currentCustomerPage || {}).template_key || (currentCustomerPage || {}).page_key || "").toLowerCase();
-  }
-
-  function isCurrentInfoPage() {
-    const key = getCurrentTemplateKey();
-    return key === "info" || key === "faq";
-  }
-
-  function resetInfoFaqForm() {
-    selectedInfoFaqItemId = "";
-    ["se-faq-item-category", "se-faq-item-question", "se-faq-item-answer", "se-faq-item-sort"].forEach((id) => {
-      const el = getEl(id);
-      if (!el) return;
-      if (id === "se-faq-item-sort") el.value = "100";
-      else el.value = "";
-    });
-    const visibility = getEl("se-faq-item-visibility");
-    if (visibility) visibility.value = "public";
-    const status = getEl("se-faq-item-status");
-    if (status) status.value = "active";
-    renderInfoFaqManager();
-  }
-
-  function renderInfoFaqManager() {
-    const wrap = getEl("se-info-faq-manager");
-    if (!wrap) return;
-
-    const current = infoFaqItems.find((item) => item.faq_item_id === selectedInfoFaqItemId) || null;
-    const rows = infoFaqItems.map((item) => {
-      const isSelected = item.faq_item_id === selectedInfoFaqItemId;
-      const meta = [item.category || "Uncategorized", item.visibility || "public", item.status || "active", `sort ${item.sort_order ?? 100}`].join(" • ");
-      return `<div class="se-faq-row" style="${isSelected ? "border-color:#1f4f82;background:#eef5ff;" : ""}">
-        <div><strong>${escapeHtml(item.question || "Untitled FAQ")}</strong><small>${escapeHtml(meta)}</small></div>
-        <button class="se-button small" type="button" data-faq-edit="${escapeHtml(item.faq_item_id)}">Edit</button>
-      </div>`;
-    }).join("");
-
-    wrap.innerHTML = `
-      <div class="se-two-col">
-        <label class="se-field"><span class="se-label">Category</span><input id="se-faq-item-category" class="se-input" type="text" value="${escapeHtml(current?.category || "")}" placeholder="General, Membership, Operations"></label>
-        <label class="se-field"><span class="se-label">Sort Order</span><input id="se-faq-item-sort" class="se-input" type="number" value="${escapeHtml(current?.sort_order ?? 100)}"></label>
-      </div>
-      <label class="se-field"><span class="se-label">Question</span><input id="se-faq-item-question" class="se-input" type="text" value="${escapeHtml(current?.question || "")}"></label>
-      <label class="se-field"><span class="se-label">Answer</span><textarea id="se-faq-item-answer" class="se-input se-textarea">${escapeHtml(current?.answer || "")}</textarea></label>
-      <div class="se-two-col">
-        <label class="se-field"><span class="se-label">Visibility</span><select id="se-faq-item-visibility" class="se-select">
-          <option value="public" ${selectedAttr(current?.visibility || "public", "public")}>public</option>
-          <option value="members" ${selectedAttr(current?.visibility, "members")}>members</option>
-          <option value="admins" ${selectedAttr(current?.visibility, "admins")}>admins</option>
-          <option value="hidden" ${selectedAttr(current?.visibility, "hidden")}>hidden</option>
-        </select></label>
-        <label class="se-field"><span class="se-label">Status</span><select id="se-faq-item-status" class="se-select">
-          <option value="active" ${selectedAttr(current?.status || "active", "active")}>active</option>
-          <option value="draft" ${selectedAttr(current?.status, "draft")}>draft</option>
-          <option value="hidden" ${selectedAttr(current?.status, "hidden")}>hidden</option>
-          <option value="archived" ${selectedAttr(current?.status, "archived")}>archived</option>
-        </select></label>
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-        <button id="se-faq-item-save" class="se-button primary" type="button">${current ? "Save FAQ" : "Create FAQ"}</button>
-        <button id="se-faq-item-new" class="se-button" type="button">New FAQ</button>
-        ${current && !current.archived_at ? `<button id="se-faq-item-archive" class="se-button danger" type="button">Archive FAQ</button>` : ""}
-        ${current && current.archived_at ? `<button id="se-faq-item-restore" class="se-button" type="button">Restore FAQ</button>` : ""}
-      </div>
-      <div class="se-faq-list">${rows || `<div class="se-empty">No FAQ rows yet. Create the first FAQ above.</div>`}</div>
-    `;
-
-    wrap.querySelectorAll("[data-faq-edit]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        selectedInfoFaqItemId = btn.getAttribute("data-faq-edit") || "";
-        renderInfoFaqManager();
-      });
-    });
-
-    getEl("se-faq-item-new")?.addEventListener("click", resetInfoFaqForm);
-    getEl("se-faq-item-save")?.addEventListener("click", saveInfoFaqItem);
-    getEl("se-faq-item-archive")?.addEventListener("click", () => setInfoFaqArchived(true));
-    getEl("se-faq-item-restore")?.addEventListener("click", () => setInfoFaqArchived(false));
-  }
-
-  async function loadInfoFaqItems() {
-    if (!selectedCustomerPageId || !isCurrentInfoPage()) {
-      infoFaqItems = [];
-      selectedInfoFaqItemId = "";
-      return;
-    }
-    const result = await callCoreAdminAction("list_info_faq_items", {
-      customer_page_id: selectedCustomerPageId,
-      include_archived: true
-    });
-    infoFaqItems = Array.isArray(result.faq_items) ? result.faq_items : [];
-    selectedInfoFaqItemId = "";
-    renderInfoFaqManager();
-  }
-
-  async function saveInfoFaqItem() {
-    if (!selectedCustomerPageId) return;
-    const question = getValue("se-faq-item-question", "");
-    const answer = getValue("se-faq-item-answer", "");
-    if (!question || !answer) {
-      setStatus("FAQ question and answer are required.");
-      return;
-    }
-    setStatus("Saving FAQ item...");
-    const result = await callCoreAdminAction("upsert_info_faq_item", {
-      customer_page_id: selectedCustomerPageId,
-      faq_item_id: selectedInfoFaqItemId || undefined,
-      category: getValue("se-faq-item-category", ""),
-      question,
-      answer,
-      sort_order: Number(getValue("se-faq-item-sort", "100")) || 100,
-      visibility: getValue("se-faq-item-visibility", "public"),
-      status: getValue("se-faq-item-status", "active")
-    });
-    selectedInfoFaqItemId = result.faq_item?.faq_item_id || "";
-    await loadInfoFaqItems();
-    selectedInfoFaqItemId = result.faq_item?.faq_item_id || selectedInfoFaqItemId;
-    renderInfoFaqManager();
-    setStatus("FAQ item saved.");
-  }
-
-  async function setInfoFaqArchived(archive) {
-    if (!selectedCustomerPageId || !selectedInfoFaqItemId) return;
-    if (!window.confirm(archive ? "Archive this FAQ item?" : "Restore this FAQ item?")) return;
-    setStatus(archive ? "Archiving FAQ item..." : "Restoring FAQ item...");
-    await callCoreAdminAction(archive ? "archive_info_faq_item" : "restore_info_faq_item", {
-      customer_page_id: selectedCustomerPageId,
-      faq_item_id: selectedInfoFaqItemId
-    });
-    selectedInfoFaqItemId = "";
-    await loadInfoFaqItems();
-    setStatus(archive ? "FAQ item archived." : "FAQ item restored.");
-  }
-
 
   function renderShell() {
     ensureRoot().innerHTML = `
@@ -1123,11 +989,6 @@
         .se-note{font-size:12px;line-height:1.35;color:#5d6b82;margin-top:8px;}
         .se-empty{border:1px dashed #c7d2e2;border-radius:12px;padding:20px;color:#5d6b82;background:#fbfcfe;}
         .se-history-tools{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;margin-top:12px;}
-        .se-faq-manager{display:grid;gap:12px;}
-        .se-faq-list{display:grid;gap:8px;max-height:280px;overflow:auto;padding-right:4px;}
-        .se-faq-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;border:1px solid #e1e7f0;border-radius:12px;padding:10px;background:#fbfcfe;}
-        .se-faq-row strong{display:block;color:#172033;}
-        .se-faq-row small{display:block;color:#5d6b82;margin-top:3px;}
         .se-history-list{max-height:430px;overflow:auto;padding-right:4px;}
         .se-history-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:10px;border:1px solid #e1e7f0;border-radius:12px;padding:10px;margin-top:10px;background:#fbfcfe;}
         .se-history-title{display:block;font-size:13px;font-weight:900;color:#172033;margin-bottom:3px;}
@@ -1311,12 +1172,6 @@
     isHydrating = false;
 
     await loadPageHistory();
-    if (isCurrentInfoPage()) {
-      await loadInfoFaqItems();
-    } else {
-      infoFaqItems = [];
-      selectedInfoFaqItemId = "";
-    }
     markClean();
     setStatus("Page editor loaded.");
   }

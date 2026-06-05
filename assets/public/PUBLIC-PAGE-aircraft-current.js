@@ -127,7 +127,7 @@
 
   function buildCss(config) {
     return `
-      .syncetc-aircraft-page{max-width:${config.pageWidth};margin:34px auto 56px auto;padding:0 18px;color:${config.text};font-family:Arial,Helvetica,sans-serif;box-sizing:border-box;}
+      .syncetc-aircraft-page{width:100%;max-width:100%;margin:0;padding:0;color:${config.text};font-family:Arial,Helvetica,sans-serif;box-sizing:border-box;}
       .syncetc-aircraft-page *{box-sizing:border-box;}
       .syncetc-aircraft-shell{background:${rgba(config.surface, 0.94)};border:1px solid ${config.border};border-radius:${config.radiusLarge};box-shadow:${config.shadow};overflow:hidden;backdrop-filter:blur(8px);}
       .syncetc-aircraft-hero{padding:${config.heroPadding};background:${config.heroGradient};color:#fff;}
@@ -171,7 +171,7 @@
       .syncetc-aircraft-note strong{color:${config.primary};}
       .syncetc-aircraft-error{padding:18px;border-radius:${config.radius};background:#fff4f4;border:1px solid #ffb4b4;color:#8a1f1f;font-size:14px;line-height:1.5;}
       @media(max-width:980px){.syncetc-aircraft-card{grid-template-columns:1fr}.syncetc-aircraft-media{grid-template-columns:repeat(2,minmax(0,1fr));}}
-      @media(max-width:720px){.syncetc-aircraft-page{margin-top:20px;padding:0 12px}.syncetc-aircraft-hero{padding:24px 20px}.syncetc-aircraft-main{padding:18px}.syncetc-aircraft-stats{grid-template-columns:1fr}.syncetc-aircraft-card{padding:18px}.syncetc-aircraft-media{grid-template-columns:1fr}.syncetc-aircraft-photo-card img{height:230px}.syncetc-aircraft-lightbox{padding:14px}.syncetc-aircraft-title{font-size:25px}}
+      @media(max-width:720px){.syncetc-aircraft-page{margin-top:0;padding:0}.syncetc-aircraft-hero{padding:24px 20px}.syncetc-aircraft-main{padding:18px}.syncetc-aircraft-stats{grid-template-columns:1fr}.syncetc-aircraft-card{padding:18px}.syncetc-aircraft-media{grid-template-columns:1fr}.syncetc-aircraft-photo-card img{height:230px}.syncetc-aircraft-lightbox{padding:14px}.syncetc-aircraft-title{font-size:25px}}
     `;
   }
 

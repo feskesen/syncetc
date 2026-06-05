@@ -6,7 +6,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-003-E";
+  const VERSION = "2026-06-05-003-F";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -201,7 +201,6 @@
     ["sd-upload-validation", "sd-save-validation"].forEach((id) => {
       const el = getEl(id);
       if (!el) return;
-      X
       el.classList.toggle("is-visible", hasMessage);
     });
 

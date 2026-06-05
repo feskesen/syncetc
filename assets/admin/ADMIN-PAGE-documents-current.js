@@ -1,12 +1,12 @@
 // ADMIN-PAGE-documents-current.js
-// Internal Version: 2026-06-05-003
+// Internal Version: 2026-06-05-003-A
 // Purpose: Platform-admin Documents / Resources manager with paired PDF/source uploads, version history, protected storage, PDF previews, and clearer record selection.
 // Actions used: list_customers, list_documents, upsert_document, archive_document, restore_document, list_document_versions, create_document_version, approve_document_version, publish_document_version, reject_document_version, get_document_download_url.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-003";
+  const VERSION = "2026-06-05-003-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -34,6 +34,8 @@
   let lastStatus = "Ready.";
   let lastOutput = "";
   let previewState = { isOpen: false, url: "", title: "" };
+  let validationMessage = "";
+  let validationTarget = "";
 
   function ensureRoot() {
     let root = document.getElementById(ROOT_ID);
@@ -91,6 +93,13 @@
     return String(file.type || "").toLowerCase() === "application/pdf" || fileExt(file.name) === "pdf";
   }
 
+  function isEditableSourceFile(file) {
+    if (!file) return false;
+    const ext = fileExt(file.name);
+    const allowed = new Set(["doc", "docx", "odt", "rtf", "txt", "csv", "xls", "xlsx", "ods", "ppt", "pptx", "odp"]);
+    return allowed.has(ext) && ext !== "pdf";
+  }
+
   function isPdfVersion(version) {
     if (!version) return false;
     return String(version.mime_type || "").toLowerCase() === "application/pdf" || fileExt(version.original_file_name) === "pdf";
@@ -113,6 +122,7 @@
     pendingSourceFile = null;
     pendingPdfPreviewUrl = "";
     pendingSourcePreviewUrl = "";
+    clearValidation();
     if (renderNow) renderPendingFiles();
   }
 
@@ -169,6 +179,46 @@
     if (!el) return;
     el.textContent = isDirty ? "Unsaved document changes" : "Saved / clean";
     el.className = isDirty ? "sd-dirty is-dirty" : "sd-dirty";
+  }
+
+  function renderValidation() {
+    const message = cleanText(validationMessage);
+    ["sd-upload-validation", "sd-save-validation"].forEach((id) => {
+      const el = getEl(id);
+      if (!el) return;
+      el.textContent = message;
+      el.classList.toggle("is-visible", Boolean(message));
+    });
+
+    const pdfDrop = getEl("sd-pdf-drop");
+    const sourceDrop = getEl("sd-source-drop");
+    if (pdfDrop) pdfDrop.classList.toggle("is-invalid", validationTarget === "pdf" || validationTarget === "both");
+    if (sourceDrop) sourceDrop.classList.toggle("is-invalid", validationTarget === "source" || validationTarget === "both");
+  }
+
+  function setValidationError(message, target = "both") {
+    validationMessage = cleanText(message);
+    validationTarget = target || "both";
+    setStatus(`Error: ${validationMessage}`);
+    renderValidation();
+    const focusTarget = target === "pdf" ? getEl("sd-pdf-drop") : target === "source" ? getEl("sd-source-drop") : getEl("sd-upload-validation") || getEl("sd-save-validation");
+    if (focusTarget && typeof focusTarget.scrollIntoView === "function") {
+      focusTarget.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }
+
+  function clearValidation(target = "") {
+    if (!validationMessage) return;
+    if (!target || validationTarget === target || validationTarget === "both") {
+      validationMessage = "";
+      validationTarget = "";
+      renderValidation();
+    }
+  }
+
+  function validationError(message, target = "both") {
+    setValidationError(message, target);
+    return new Error(message);
   }
 
   function confirmDiscard(message) {
@@ -386,21 +436,30 @@
 
 
   function validatePendingVersionFiles() {
-    if (getValue("sd-publish-now") === "true" && !pendingPdfFile) {
-      throw new Error("Publishing requires a viewable PDF. Upload the PDF rendition before choosing Publish Now.");
-    }
-    if (!pendingPdfFile && !pendingSourceFile) return;
+    clearValidation();
+
     if (pendingPdfFile && !isPdfFile(pendingPdfFile)) {
-      throw new Error("The viewable/live file must be a PDF.");
+      throw validationError("The viewable/live file must be a PDF. Upload PDF files only in the Viewable PDF / Live File box.", "pdf");
     }
+
+    if (pendingSourceFile && isPdfFile(pendingSourceFile)) {
+      throw validationError("The Editable Source File box is for editable files such as DOCX, XLSX, PPTX, ODT, RTF, TXT, or CSV. Upload PDFs in the Viewable PDF / Live File box.", "source");
+    }
+
+    if (pendingSourceFile && !isEditableSourceFile(pendingSourceFile)) {
+      throw validationError("The Editable Source File box accepts editable source files only: DOCX, DOC, XLSX, PPTX, ODT, RTF, TXT, or CSV.", "source");
+    }
+
     if (pendingSourceFile && !pendingPdfFile) {
-      throw new Error("Upload the matching PDF before saving a Word/source document. Use Print/Export to PDF, then upload that PDF in the Viewable PDF box.");
+      throw validationError("A viewable PDF is required when uploading an editable source file. Use Print/Export to PDF, then upload the matching PDF in the Viewable PDF / Live File box before saving.", "both");
     }
+
     if (getValue("sd-publish-now") === "true" && !pendingPdfFile) {
-      throw new Error("Publishing requires a viewable PDF. Upload the PDF rendition before choosing Publish Now.");
+      throw validationError("Publishing requires a viewable PDF. Upload the PDF rendition before choosing Publish Now.", "pdf");
     }
+
     if (pendingSourceFile && !getEl("sd-pdf-confirm")?.checked) {
-      throw new Error("Confirm that the viewable PDF matches the editable/source file before saving this paired version.");
+      throw validationError("Confirm that the viewable PDF matches the editable/source file before saving this paired version.", "both");
     }
   }
 
@@ -446,15 +505,15 @@
     if (!pendingPdfFile && !pendingSourceFile) return;
 
     if (pendingPdfFile && !isPdfFile(pendingPdfFile)) {
-      throw new Error("The viewable/live file must be a PDF.");
+      throw validationError("The viewable/live file must be a PDF. Upload PDF files only in the Viewable PDF / Live File box.", "pdf");
     }
 
     if (pendingSourceFile && !pendingPdfFile) {
-      throw new Error("Upload the matching PDF before saving a Word/source document. The public/member page only displays the PDF rendition.");
+      throw validationError("A viewable PDF is required when uploading an editable source file. Upload the matching PDF in the Viewable PDF / Live File box before saving.", "both");
     }
 
     if (pendingSourceFile && !getEl("sd-pdf-confirm")?.checked) {
-      throw new Error("Confirm that the viewable PDF matches the editable/source file before saving this paired version.");
+      throw validationError("Confirm that the viewable PDF matches the editable/source file before saving this paired version.", "both");
     }
 
     const pdfInfo = await uploadOneDocumentFile(pendingPdfFile, document, "public-pdf");
@@ -544,21 +603,37 @@
   function setPendingPdfFile(file) {
     if (!file) return;
     if (!isPdfFile(file)) {
-      showError(new Error("The viewable/live file must be a PDF. Use Print/Export to PDF, then upload that PDF here."));
+      setValidationError("The Viewable PDF / Live File box accepts PDF files only. Upload editable source files in the Editable Source File box.", "pdf");
+      const input = getEl("sd-pdf-input");
+      if (input) input.value = "";
       return;
     }
     if (pendingPdfPreviewUrl) URL.revokeObjectURL(pendingPdfPreviewUrl);
     pendingPdfFile = file;
     pendingPdfPreviewUrl = URL.createObjectURL(file);
+    clearValidation("pdf");
     renderPendingFiles();
     markDirty();
   }
 
   function setPendingSourceFile(file) {
     if (!file) return;
+    if (isPdfFile(file)) {
+      setValidationError("The Editable Source File box is for editable files such as DOCX, XLSX, PPTX, ODT, RTF, TXT, or CSV. Upload PDFs in the Viewable PDF / Live File box.", "source");
+      const input = getEl("sd-source-input");
+      if (input) input.value = "";
+      return;
+    }
+    if (!isEditableSourceFile(file)) {
+      setValidationError("The Editable Source File box accepts editable source files only: DOCX, DOC, XLSX, PPTX, ODT, RTF, TXT, or CSV.", "source");
+      const input = getEl("sd-source-input");
+      if (input) input.value = "";
+      return;
+    }
     if (pendingSourcePreviewUrl) URL.revokeObjectURL(pendingSourcePreviewUrl);
     pendingSourceFile = file;
-    pendingSourcePreviewUrl = isPreviewablePdfFile(file) ? URL.createObjectURL(file) : "";
+    pendingSourcePreviewUrl = "";
+    clearValidation("source");
     renderPendingFiles();
     markDirty();
   }
@@ -695,7 +770,7 @@
 
   function css() {
     return `
-      .sd-wrap{max-width:1180px;margin:24px auto 60px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:#172033;box-sizing:border-box}.sd-wrap *{box-sizing:border-box}.sd-panel{background:#fff;border:1px solid #dfe7f1;border-radius:22px;box-shadow:0 14px 38px rgba(12,38,64,.12);overflow:hidden}.sd-head{padding:24px 26px;background:linear-gradient(135deg,#12365a,#2f80c4);color:#fff}.sd-head h1{margin:0;font-size:clamp(30px,4vw,50px);line-height:1;font-weight:900;letter-spacing:-.04em}.sd-head p{max-width:880px;margin:10px 0 0;color:rgba(255,255,255,.88);line-height:1.55}.sd-version-badge{display:inline-flex;margin-top:12px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.28);font-size:11px;font-weight:900;letter-spacing:.04em}.sd-body{padding:20px;background:linear-gradient(180deg,#eef7ff,#fff)}.sd-login{display:grid;grid-template-columns:1fr 1fr auto auto;gap:10px;margin-bottom:14px;padding:12px;border-radius:16px;background:#fff;border:1px solid #dfe7f1}.sd-input,.sd-select,.sd-textarea{width:100%;border:1px solid #ccd8e5;border-radius:12px;padding:10px 12px;font:inherit;background:#fff;color:#172033}.sd-input[readonly],.sd-input:disabled,.sd-select:disabled,.sd-textarea:disabled{background:#f1f5f9;color:#64748b;cursor:not-allowed}.sd-textarea{min-height:92px;resize:vertical}.sd-button,.sd-mini-button{border:1px solid #b9c8d8;border-radius:999px;background:#fff;color:#12365a;font-weight:900;cursor:pointer;padding:9px 13px}.sd-button:hover,.sd-mini-button:hover{transform:translateY(-1px);box-shadow:0 6px 14px rgba(12,38,64,.10)}.sd-button.primary,.sd-mini-button.primary{background:#12365a;color:#fff;border-color:#12365a}.sd-button.danger,.sd-mini-button.danger{background:#fee2e2;color:#991b1b;border-color:#f3b9b9}.sd-mini-button{padding:7px 10px;font-size:12px}.sd-toolbar{display:grid;grid-template-columns:minmax(260px,1fr) auto auto auto;gap:10px;align-items:end;margin-bottom:14px}.sd-grid{display:grid;grid-template-columns:410px minmax(0,1fr);gap:16px;align-items:start}.sd-card{background:rgba(255,255,255,.94);border:1px solid #dfe7f1;border-radius:18px;padding:16px;box-shadow:0 8px 22px rgba(12,38,64,.08)}.sd-section-title{margin:0 0 10px;color:#0b2744;font-size:18px}.sd-subtitle{margin:0 0 14px;color:#5d6b78;font-size:13px;line-height:1.5}.sd-help{margin:6px 0 0;color:#64748b;font-size:12px;line-height:1.45}.sd-field{display:grid;gap:6px;margin-bottom:12px}.sd-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:900;color:#4b6582}.sd-two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.sd-document-list{display:grid;gap:12px;max-height:760px;overflow:auto;padding-right:4px}.sd-doc-group{border:1px solid #dfe7f1;border-radius:16px;background:#f8fbff;padding:10px}.sd-doc-group summary{cursor:pointer;color:#12365a;font-size:13px;text-transform:uppercase;letter-spacing:.08em;font-weight:900;margin-bottom:8px}.sd-doc-group summary span{float:right;background:#eaf5ff;border-radius:999px;padding:2px 8px}.sd-doc-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr);gap:7px;text-align:left;margin:0 0 8px;padding:12px;border:1px solid #dfe7f1;border-radius:14px;background:#fff;cursor:pointer;transition:border-color .16s ease,box-shadow .16s ease,background .16s ease}.sd-doc-row:hover,.sd-doc-row.selected{border-color:#2f80c4;box-shadow:0 6px 14px rgba(47,128,196,.14)}.sd-doc-row.archived{background:#fff7ed;border-color:#fdba74}.sd-doc-row-main strong{display:block;color:#0b2744}.sd-doc-row-main small{display:block;color:#5d6b78;margin-top:3px;overflow:hidden;text-overflow:ellipsis}.sd-row-pills{display:flex;gap:6px;flex-wrap:wrap}.sd-pill{display:inline-flex;border-radius:999px;padding:4px 8px;font-size:10px;font-weight:900;text-transform:uppercase;border:1px solid #d1d9e4;background:#f8fafc;color:#475569}.sd-pill.green{background:#e7f6ec;color:#14532d;border-color:#bde5c9}.sd-pill.blue{background:#eaf5ff;color:#12365a;border-color:#c9e4f8}.sd-pill.amber{background:#fff7ed;color:#9a4a00;border-color:#fed7aa}.sd-pill.red{background:#fee2e2;color:#991b1b;border-color:#fecaca}.sd-muted{color:#5d6b78;font-size:12px;line-height:1.45}.sd-note{margin-top:6px;padding:8px;border-radius:10px;background:#f8fafc;color:#475569;font-size:12px}.sd-mode-card{min-height:260px;display:flex;align-items:center;justify-content:center;text-align:center}.sd-mode-card-inner{max-width:520px}.sd-mode-card h2{margin:0 0 10px;color:#0b2744;font-size:26px}.sd-editor-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid #dfe7f1}.sd-editor-title h2{margin:0;color:#0b2744;font-size:22px}.sd-editor-title p{margin:6px 0 0;color:#64748b;font-size:13px}.sd-lock-warning{padding:12px 14px;margin-bottom:12px;border-radius:14px;border:1px solid #fdba74;background:#fff7ed;color:#9a4a00;font-weight:800;font-size:13px;line-height:1.5}.sd-upload-section{margin:14px 0;padding:14px;border:1px solid #dfe7f1;border-radius:16px;background:#f8fbff}.sd-upload-title{margin:0 0 6px;color:#0b2744;font-size:17px}.sd-upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.sd-drop{min-height:180px;border:2px dashed #aac0d8;border-radius:16px;background:#fff;display:flex;align-items:center;justify-content:center;text-align:center;padding:14px;cursor:pointer;position:relative;overflow:hidden}.sd-drop.is-over{border-color:#2f80c4;background:#eaf5ff}.sd-drop.disabled{opacity:.55;cursor:not-allowed}.sd-drop input{position:absolute;opacity:0;pointer-events:none}.sd-file-chip{display:grid;gap:4px;justify-items:center;margin-bottom:10px}.sd-file-chip span{font-size:12px;color:#5d6b78}.sd-local-preview{width:100%;margin-top:8px}.sd-local-preview-frame{width:100%;height:210px;border:1px solid #dfe7f1;border-radius:12px;background:#fff}.sd-local-preview-message{min-height:110px;display:grid;align-content:center;gap:6px;padding:14px;border:1px dashed #cbd5e1;border-radius:12px;background:#f8fafc;color:#64748b}.sd-local-preview-message strong{color:#0b2744}.sd-confirm-row{grid-template-columns:auto 1fr;gap:9px;align-items:start;margin-top:12px;padding:11px 12px;border-radius:12px;border:1px solid #fed7aa;background:#fff7ed;color:#9a4a00;font-size:13px;font-weight:800}.sd-confirm-row input{margin-top:2px}.sd-confirm-row span{text-align:left;line-height:1.45}.sd-version-list{display:grid;gap:10px}.sd-version-help{padding:10px 12px;border:1px solid #c9e4f8;background:#eaf5ff;color:#12365a;border-radius:12px;font-size:12px;line-height:1.45;font-weight:800}.sd-version-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;border:1px solid #dfe7f1;border-radius:14px;background:#fff;padding:12px}.sd-version-row.is-live{border-color:#bde5c9;background:#f1fbf4}.sd-version-head{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:4px}.sd-version-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.sd-live-note{display:inline-flex;align-items:center;padding:7px 10px;border-radius:999px;background:#e7f6ec;color:#14532d;font-size:12px;font-weight:900}.sd-dirty{display:inline-flex;margin-left:8px;padding:5px 9px;border-radius:999px;background:#e7f6ec;color:#14532d;font-size:11px;font-weight:900}.sd-dirty.is-dirty{background:#fff7ed;color:#9a4a00}.sd-output{white-space:pre-wrap;background:#0f172a;color:#dbeafe;border-radius:14px;padding:12px;max-height:260px;overflow:auto;font-size:12px}.sd-empty{padding:14px;border:1px dashed #cbd5e1;border-radius:12px;color:#64748b;background:#fff;text-align:center}.sd-preview-backdrop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(7,24,42,.72);z-index:2147483000;padding:24px}.sd-preview-backdrop.is-open{display:flex}.sd-preview-modal{width:min(1100px,96vw);height:min(820px,92vh);background:#fff;border-radius:18px;box-shadow:0 24px 80px rgba(0,0,0,.38);display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden}.sd-preview-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 14px;border-bottom:1px solid #dfe7f1;background:#f8fbff}.sd-preview-head strong{color:#0b2744}.sd-preview-frame{width:100%;height:100%;border:0;background:#fff}@media(max-width:920px){.sd-grid,.sd-toolbar,.sd-login,.sd-two,.sd-upload-grid{grid-template-columns:1fr}.sd-version-row,.sd-editor-head{grid-template-columns:1fr;display:grid}.sd-version-actions{justify-content:flex-start}}
+      .sd-wrap{max-width:1180px;margin:24px auto 60px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:#172033;box-sizing:border-box}.sd-wrap *{box-sizing:border-box}.sd-panel{background:#fff;border:1px solid #dfe7f1;border-radius:22px;box-shadow:0 14px 38px rgba(12,38,64,.12);overflow:hidden}.sd-head{padding:24px 26px;background:linear-gradient(135deg,#12365a,#2f80c4);color:#fff}.sd-head h1{margin:0;font-size:clamp(30px,4vw,50px);line-height:1;font-weight:900;letter-spacing:-.04em}.sd-head p{max-width:880px;margin:10px 0 0;color:rgba(255,255,255,.88);line-height:1.55}.sd-version-badge{display:inline-flex;margin-top:12px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.28);font-size:11px;font-weight:900;letter-spacing:.04em}.sd-body{padding:20px;background:linear-gradient(180deg,#eef7ff,#fff)}.sd-login{display:grid;grid-template-columns:1fr 1fr auto auto;gap:10px;margin-bottom:14px;padding:12px;border-radius:16px;background:#fff;border:1px solid #dfe7f1}.sd-input,.sd-select,.sd-textarea{width:100%;border:1px solid #ccd8e5;border-radius:12px;padding:10px 12px;font:inherit;background:#fff;color:#172033}.sd-input[readonly],.sd-input:disabled,.sd-select:disabled,.sd-textarea:disabled{background:#f1f5f9;color:#64748b;cursor:not-allowed}.sd-textarea{min-height:92px;resize:vertical}.sd-button,.sd-mini-button{border:1px solid #b9c8d8;border-radius:999px;background:#fff;color:#12365a;font-weight:900;cursor:pointer;padding:9px 13px}.sd-button:hover,.sd-mini-button:hover{transform:translateY(-1px);box-shadow:0 6px 14px rgba(12,38,64,.10)}.sd-button.primary,.sd-mini-button.primary{background:#12365a;color:#fff;border-color:#12365a}.sd-button.danger,.sd-mini-button.danger{background:#fee2e2;color:#991b1b;border-color:#f3b9b9}.sd-mini-button{padding:7px 10px;font-size:12px}.sd-toolbar{display:grid;grid-template-columns:minmax(260px,1fr) auto auto auto;gap:10px;align-items:end;margin-bottom:14px}.sd-grid{display:grid;grid-template-columns:410px minmax(0,1fr);gap:16px;align-items:start}.sd-card{background:rgba(255,255,255,.94);border:1px solid #dfe7f1;border-radius:18px;padding:16px;box-shadow:0 8px 22px rgba(12,38,64,.08)}.sd-section-title{margin:0 0 10px;color:#0b2744;font-size:18px}.sd-subtitle{margin:0 0 14px;color:#5d6b78;font-size:13px;line-height:1.5}.sd-help{margin:6px 0 0;color:#64748b;font-size:12px;line-height:1.45}.sd-field{display:grid;gap:6px;margin-bottom:12px}.sd-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:900;color:#4b6582}.sd-two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.sd-document-list{display:grid;gap:12px;max-height:760px;overflow:auto;padding-right:4px}.sd-doc-group{border:1px solid #dfe7f1;border-radius:16px;background:#f8fbff;padding:10px}.sd-doc-group summary{cursor:pointer;color:#12365a;font-size:13px;text-transform:uppercase;letter-spacing:.08em;font-weight:900;margin-bottom:8px}.sd-doc-group summary span{float:right;background:#eaf5ff;border-radius:999px;padding:2px 8px}.sd-doc-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr);gap:7px;text-align:left;margin:0 0 8px;padding:12px;border:1px solid #dfe7f1;border-radius:14px;background:#fff;cursor:pointer;transition:border-color .16s ease,box-shadow .16s ease,background .16s ease}.sd-doc-row:hover,.sd-doc-row.selected{border-color:#2f80c4;box-shadow:0 6px 14px rgba(47,128,196,.14)}.sd-doc-row.archived{background:#fff7ed;border-color:#fdba74}.sd-doc-row-main strong{display:block;color:#0b2744}.sd-doc-row-main small{display:block;color:#5d6b78;margin-top:3px;overflow:hidden;text-overflow:ellipsis}.sd-row-pills{display:flex;gap:6px;flex-wrap:wrap}.sd-pill{display:inline-flex;border-radius:999px;padding:4px 8px;font-size:10px;font-weight:900;text-transform:uppercase;border:1px solid #d1d9e4;background:#f8fafc;color:#475569}.sd-pill.green{background:#e7f6ec;color:#14532d;border-color:#bde5c9}.sd-pill.blue{background:#eaf5ff;color:#12365a;border-color:#c9e4f8}.sd-pill.amber{background:#fff7ed;color:#9a4a00;border-color:#fed7aa}.sd-pill.red{background:#fee2e2;color:#991b1b;border-color:#fecaca}.sd-muted{color:#5d6b78;font-size:12px;line-height:1.45}.sd-note{margin-top:6px;padding:8px;border-radius:10px;background:#f8fafc;color:#475569;font-size:12px}.sd-mode-card{min-height:260px;display:flex;align-items:center;justify-content:center;text-align:center}.sd-mode-card-inner{max-width:520px}.sd-mode-card h2{margin:0 0 10px;color:#0b2744;font-size:26px}.sd-editor-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid #dfe7f1}.sd-editor-title h2{margin:0;color:#0b2744;font-size:22px}.sd-editor-title p{margin:6px 0 0;color:#64748b;font-size:13px}.sd-lock-warning{padding:12px 14px;margin-bottom:12px;border-radius:14px;border:1px solid #fdba74;background:#fff7ed;color:#9a4a00;font-weight:800;font-size:13px;line-height:1.5}.sd-validation-message{display:none;margin:10px 0 12px;padding:12px 14px;border-radius:14px;border:1px solid #fecaca;background:#fff1f2;color:#991b1b;font-size:13px;line-height:1.45;font-weight:900}.sd-validation-message.is-visible{display:block}.sd-drop.is-invalid{border-color:#ef4444!important;background:#fff1f2!important;box-shadow:0 0 0 4px rgba(239,68,68,.12)}.sd-button,.sd-mini-button{transition:transform .16s ease,box-shadow .16s ease,background .16s ease,border-color .16s ease,filter .16s ease}.sd-button:not(:disabled):hover,.sd-mini-button:not(:disabled):hover{filter:brightness(1.02);box-shadow:0 10px 22px rgba(12,38,64,.18)}.sd-button.primary:not(:disabled):hover,.sd-mini-button.primary:not(:disabled):hover{background:#0b2744;border-color:#0b2744}.sd-button.danger:not(:disabled):hover,.sd-mini-button.danger:not(:disabled):hover{background:#fecaca;border-color:#ef4444}.sd-button:active,.sd-mini-button:active{transform:translateY(0) scale(.99)}.sd-upload-section{margin:14px 0;padding:14px;border:1px solid #dfe7f1;border-radius:16px;background:#f8fbff}.sd-upload-title{margin:0 0 6px;color:#0b2744;font-size:17px}.sd-upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.sd-drop{min-height:180px;border:2px dashed #aac0d8;border-radius:16px;background:#fff;display:flex;align-items:center;justify-content:center;text-align:center;padding:14px;cursor:pointer;position:relative;overflow:hidden}.sd-drop.is-over{border-color:#2f80c4;background:#eaf5ff}.sd-drop.disabled{opacity:.55;cursor:not-allowed}.sd-drop input{position:absolute;opacity:0;pointer-events:none}.sd-file-chip{display:grid;gap:4px;justify-items:center;margin-bottom:10px}.sd-file-chip span{font-size:12px;color:#5d6b78}.sd-local-preview{width:100%;margin-top:8px}.sd-local-preview-frame{width:100%;height:210px;border:1px solid #dfe7f1;border-radius:12px;background:#fff}.sd-local-preview-message{min-height:110px;display:grid;align-content:center;gap:6px;padding:14px;border:1px dashed #cbd5e1;border-radius:12px;background:#f8fafc;color:#64748b}.sd-local-preview-message strong{color:#0b2744}.sd-confirm-row{grid-template-columns:auto 1fr;gap:9px;align-items:start;margin-top:12px;padding:11px 12px;border-radius:12px;border:1px solid #fed7aa;background:#fff7ed;color:#9a4a00;font-size:13px;font-weight:800}.sd-confirm-row input{margin-top:2px}.sd-confirm-row span{text-align:left;line-height:1.45}.sd-version-list{display:grid;gap:10px}.sd-version-help{padding:10px 12px;border:1px solid #c9e4f8;background:#eaf5ff;color:#12365a;border-radius:12px;font-size:12px;line-height:1.45;font-weight:800}.sd-version-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;border:1px solid #dfe7f1;border-radius:14px;background:#fff;padding:12px}.sd-version-row.is-live{border-color:#bde5c9;background:#f1fbf4}.sd-version-head{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:4px}.sd-version-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.sd-live-note{display:inline-flex;align-items:center;padding:7px 10px;border-radius:999px;background:#e7f6ec;color:#14532d;font-size:12px;font-weight:900}.sd-dirty{display:inline-flex;margin-left:8px;padding:5px 9px;border-radius:999px;background:#e7f6ec;color:#14532d;font-size:11px;font-weight:900}.sd-dirty.is-dirty{background:#fff7ed;color:#9a4a00}.sd-output{white-space:pre-wrap;background:#0f172a;color:#dbeafe;border-radius:14px;padding:12px;max-height:260px;overflow:auto;font-size:12px}.sd-empty{padding:14px;border:1px dashed #cbd5e1;border-radius:12px;color:#64748b;background:#fff;text-align:center}.sd-preview-backdrop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(7,24,42,.72);z-index:2147483000;padding:24px}.sd-preview-backdrop.is-open{display:flex}.sd-preview-modal{width:min(1100px,96vw);height:min(820px,92vh);background:#fff;border-radius:18px;box-shadow:0 24px 80px rgba(0,0,0,.38);display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden}.sd-preview-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 14px;border-bottom:1px solid #dfe7f1;background:#f8fbff}.sd-preview-head strong{color:#0b2744}.sd-preview-frame{width:100%;height:100%;border:0;background:#fff}@media(max-width:920px){.sd-grid,.sd-toolbar,.sd-login,.sd-two,.sd-upload-grid{grid-template-columns:1fr}.sd-version-row,.sd-editor-head{grid-template-columns:1fr;display:grid}.sd-version-actions{justify-content:flex-start}}
     `;
   }
 
@@ -728,6 +803,7 @@
     if (isAuthenticated) bindMainEvents();
     renderPreviewModal();
     renderDirty();
+    renderValidation();
   }
 
   function mainHtml() {
@@ -782,14 +858,16 @@
         <section class="sd-upload-section">
           <h3 class="sd-upload-title">Upload New Version Files</h3>
           <p class="sd-subtitle">The live/viewable file must be a PDF. If you upload a Word/source file, upload the matching PDF in the PDF box before saving.</p>
+          <div id="sd-upload-validation" class="sd-validation-message" role="alert" aria-live="polite"></div>
           <div class="sd-upload-grid">
             <div id="sd-pdf-drop" class="sd-drop sd-drop-pdf ${archived ? "disabled" : ""}"><input id="sd-pdf-input" type="file" accept="application/pdf,.pdf" ${disabled}><div><div class="sd-label" style="margin-bottom:8px">Viewable PDF / Live File</div><div id="sd-pending-pdf"><span class="sd-muted">No PDF selected. Drag the live/viewable PDF here or click to choose it.</span></div></div></div>
-            <div id="sd-source-drop" class="sd-drop sd-drop-source ${archived ? "disabled" : ""}"><input id="sd-source-input" type="file" accept=".doc,.docx,.pdf,.txt,.csv,.xls,.xlsx,.ppt,.pptx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf" ${disabled}><div><div class="sd-label" style="margin-bottom:8px">Editable Source File</div><div id="sd-pending-source"><span class="sd-muted">No source file selected. Optional: drag the editable Word/source file here.</span></div></div></div>
+            <div id="sd-source-drop" class="sd-drop sd-drop-source ${archived ? "disabled" : ""}"><input id="sd-source-input" type="file" accept=".doc,.docx,.odt,.rtf,.txt,.csv,.xls,.xlsx,.ods,.ppt,.pptx,.odp,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" ${disabled}><div><div class="sd-label" style="margin-bottom:8px">Editable Source File</div><div id="sd-pending-source"><span class="sd-muted">No source file selected. Optional: drag the editable Word/source file here.</span></div></div></div>
           </div>
           <label id="sd-pdf-confirm-wrap" class="sd-confirm-row" style="display:none"><input id="sd-pdf-confirm" type="checkbox" ${disabled}><span>I confirm the PDF rendition matches the editable/source file uploaded with this version.</span></label>
         </section>
         <div class="sd-two" style="margin-top:12px"><label class="sd-field"><span class="sd-label">New Version Status</span><select id="sd-version-status" class="sd-select" ${disabled}><option value="draft">Draft</option><option value="review">Review</option><option value="approved">Approved</option></select></label><label class="sd-field"><span class="sd-label">Publish Now</span><select id="sd-publish-now" class="sd-select" ${disabled}><option value="false">No</option><option value="true">Yes - publish uploaded PDF</option></select><span class="sd-help">Publish Now requires a PDF. Public/member pages preview/download only the PDF rendition.</span></label></div>
         <label class="sd-field"><span class="sd-label">Version Notes</span><textarea id="sd-version-notes" class="sd-textarea" placeholder="Optional notes for this upload/version." ${disabled}></textarea></label>
+        <div id="sd-save-validation" class="sd-validation-message" role="alert" aria-live="polite"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0">${archived ? `<button id="sd-restore" class="sd-button primary" type="button">Restore Document</button>` : `<button id="sd-save" class="sd-button primary" type="button">Save Document</button>${editorMode === "edit" ? `<button id="sd-archive" class="sd-button danger" type="button">Archive Document</button>` : ""}`}</div>
         <h2 class="sd-section-title">Version History</h2><div id="sd-version-list" class="sd-version-list"></div>
         <p id="sd-status" class="sd-subtitle" style="margin-top:14px">${escapeHtml(lastStatus)}</p>

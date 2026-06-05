@@ -1,12 +1,12 @@
 // ADMIN-PAGE-documents-current.js
-// Internal Version: 2026-06-05-003-D
+// Internal Version: 2026-06-05-004
 // Purpose: Platform-admin Documents / Resources manager with paired PDF/source uploads, version history, protected storage, PDF previews, and clearer record selection.
 // Actions used: list_customers, list_documents, upsert_document, archive_document, restore_document, list_document_versions, create_document_version, approve_document_version, publish_document_version, reject_document_version, get_document_download_url.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-003-F";
+  const VERSION = "2026-06-05-004";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -34,8 +34,9 @@
   let lastStatus = "Ready.";
   let lastOutput = "";
   let previewState = { isOpen: false, url: "", title: "" };
-  let validationMessage = "";
-  let validationTarget = "";
+  let validationErrors = [];
+  let documentPreviewUrls = {};
+  let documentPreviewLoading = new Set();
 
   function ensureRoot() {
     let root = document.getElementById(ROOT_ID);
@@ -181,89 +182,102 @@
     el.className = isDirty ? "sd-dirty is-dirty" : "sd-dirty";
   }
 
-  function validationTargets() {
-    return String(validationTarget || "").split(",").map((item) => cleanText(item)).filter(Boolean);
+  function errorTargetList(item) {
+    return String(item && item.target ? item.target : "general")
+      .split(",")
+      .map((target) => cleanText(target))
+      .filter(Boolean);
   }
 
-  function hasValidationTarget(target) {
-    const targets = validationTargets();
-    return targets.includes(target) || targets.includes("both");
+  function errorHasTarget(item, target) {
+    return errorTargetList(item).includes(target);
+  }
+
+  function messagesForTarget(target) {
+    return validationErrors
+      .filter((item) => errorHasTarget(item, target))
+      .map((item) => cleanText(item.message))
+      .filter(Boolean);
+  }
+
+  function uniqueMessages(messages) {
+    return Array.from(new Set((messages || []).map((message) => cleanText(message)).filter(Boolean)));
+  }
+
+  function renderValidationMessage(id, messages) {
+    const el = getEl(id);
+    if (!el) return;
+    const list = uniqueMessages(messages);
+    el.textContent = list.join("\n");
+    el.classList.toggle("is-visible", list.length > 0);
   }
 
   function renderValidation() {
-    const message = cleanText(validationMessage);
-    const targets = validationTargets();
-    const hasMessage = Boolean(message);
-    const isTitle = hasValidationTarget("title");
-    const isPdf = hasValidationTarget("pdf");
-    const isSource = hasValidationTarget("source");
+    const titleMessages = messagesForTarget("title");
+    const pdfMessages = messagesForTarget("pdf");
+    const sourceMessages = messagesForTarget("source");
+    const confirmMessages = messagesForTarget("confirm");
+    const uploadMessages = validationErrors
+      .filter((item) => errorHasTarget(item, "pdf") || errorHasTarget(item, "source") || errorHasTarget(item, "confirm") || errorHasTarget(item, "upload"))
+      .map((item) => cleanText(item.message));
+    const saveMessages = validationErrors.map((item) => cleanText(item.message));
 
-    ["sd-upload-validation", "sd-save-validation"].forEach((id) => {
-      const el = getEl(id);
-      if (!el) return;
-      el.classList.toggle("is-visible", hasMessage);
-    });
+    renderValidationMessage("sd-title-validation", titleMessages);
+    renderValidationMessage("sd-pdf-validation", pdfMessages);
+    renderValidationMessage("sd-source-validation", sourceMessages);
+    renderValidationMessage("sd-confirm-validation", confirmMessages);
+    renderValidationMessage("sd-upload-validation", uploadMessages);
+    renderValidationMessage("sd-save-validation", saveMessages);
 
     const titleInput = getEl("sd-title");
-    const titleValidation = getEl("sd-title-validation");
-    if (titleInput) titleInput.classList.toggle("is-invalid", isTitle);
-    if (titleValidation) {
-      const titleMessage = isTitle ? "Document title is required before saving." : "";
-      titleValidation.textContent = titleMessage;
-      titleValidation.classList.toggle("is-visible", Boolean(titleMessage));
-    }
-
     const pdfDrop = getEl("sd-pdf-drop");
     const sourceDrop = getEl("sd-source-drop");
-    const pdfValidation = getEl("sd-pdf-validation");
-    const sourceValidation = getEl("sd-source-validation");
-    if (pdfDrop) pdfDrop.classList.toggle("is-invalid", isPdf || hasValidationTarget("both"));
-    if (sourceDrop) sourceDrop.classList.toggle("is-invalid", isSource || hasValidationTarget("both"));
-    if (pdfValidation) {
-      const pdfMessage = isPdf || hasValidationTarget("both") ? "A viewable PDF is required, and the viewable/live file must be a PDF." : "";
-      pdfValidation.textContent = pdfMessage;
-      pdfValidation.classList.toggle("is-visible", Boolean(pdfMessage));
-    }
-    if (sourceValidation) {
-      const sourceMessage = isSource ? "The editable source field accepts source files such as DOCX, XLSX, PPTX, ODT, RTF, TXT, or CSV. Upload PDFs in the Viewable PDF field." : "";
-      sourceValidation.textContent = sourceMessage;
-      sourceValidation.classList.toggle("is-visible", Boolean(sourceMessage));
-    }
+    const confirmWrap = getEl("sd-pdf-confirm-wrap");
+
+    if (titleInput) titleInput.classList.toggle("is-invalid", titleMessages.length > 0);
+    if (pdfDrop) pdfDrop.classList.toggle("is-invalid", pdfMessages.length > 0);
+    if (sourceDrop) sourceDrop.classList.toggle("is-invalid", sourceMessages.length > 0);
+    if (confirmWrap) confirmWrap.classList.toggle("is-invalid", confirmMessages.length > 0);
   }
 
-  function setValidationError(message, target = "both") {
-    validationMessage = cleanText(message).replace(/\s*\|\s*/g, "\n");
-    validationTarget = target || "both";
-    setStatus(`Error: ${validationMessage.replace(/\n/g, " ")}`);
-    renderValidation();
-    const firstTarget = validationTargets()[0] || target;
-    const focusTarget = firstTarget === "title" ? getEl("sd-title") : firstTarget === "pdf" ? getEl("sd-pdf-drop") : firstTarget === "source" ? getEl("sd-source-drop") : getEl("sd-upload-validation") || getEl("sd-save-validation");
-    if (focusTarget && typeof focusTarget.scrollIntoView === "function") {
-      focusTarget.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
+  function focusFirstValidationTarget(errors) {
+    const first = (errors || []).flatMap(errorTargetList)[0] || "save";
+    const target =
+      first === "title" ? getEl("sd-title") :
+      first === "pdf" ? getEl("sd-pdf-drop") :
+      first === "source" ? getEl("sd-source-drop") :
+      first === "confirm" ? getEl("sd-pdf-confirm-wrap") :
+      getEl("sd-save-validation") || getEl("sd-upload-validation");
+    if (target && typeof target.scrollIntoView === "function") target.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
   function setValidationErrors(errors) {
-    const cleanErrors = (errors || []).filter((item) => item && item.message && item.target);
-    if (!cleanErrors.length) {
-      clearValidation();
-      return;
+    validationErrors = (errors || [])
+      .filter((item) => item && cleanText(item.message))
+      .map((item) => ({ target: cleanText(item.target || "general"), message: cleanText(item.message) }));
+    renderValidation();
+    if (validationErrors.length) {
+      const statusText = validationErrors.map((item) => item.message).join(" ");
+      setStatus(`Error: ${statusText}`);
+      focusFirstValidationTarget(validationErrors);
     }
-    const targetList = Array.from(new Set(cleanErrors.flatMap((item) => String(item.target).split(",").map((target) => cleanText(target)).filter(Boolean))));
-    const messageList = cleanErrors.map((item) => `• ${cleanText(item.message)}`);
-    setValidationError(messageList.join("\n"), targetList.join(",") || "both");
+  }
+
+  function setValidationError(message, target = "general") {
+    setValidationErrors([{ target, message }]);
   }
 
   function clearValidation(target = "") {
-    if (!validationMessage) return;
-    if (!target || hasValidationTarget(target)) {
-      validationMessage = "";
-      validationTarget = "";
-      renderValidation();
+    if (!validationErrors.length) return;
+    if (!target) {
+      validationErrors = [];
+    } else {
+      validationErrors = validationErrors.filter((item) => !errorHasTarget(item, target));
     }
+    renderValidation();
   }
 
-  function validationError(message, target = "both") {
+  function validationError(message, target = "general") {
     setValidationError(message, target);
     return new Error(message);
   }
@@ -509,11 +523,11 @@
     }
 
     if (pendingSourceFile && !pendingPdfFile) {
-      errors.push({ target: "pdf,source", message: "A viewable PDF is required when uploading an editable source file. Use Print/Export to PDF, then upload the matching PDF in the Viewable PDF / Live File box before saving." });
+      errors.push({ target: "pdf", message: "A matching viewable PDF is required when uploading an editable source file. Use Print/Export to PDF, then upload the matching PDF in the Viewable PDF / Live File box before saving." });
     }
 
     if (pendingSourceFile && pendingPdfFile && !getEl("sd-pdf-confirm")?.checked) {
-      errors.push({ target: "pdf,source", message: "Confirm that the viewable PDF matches the editable/source file before saving this paired version." });
+      errors.push({ target: "confirm", message: "Confirm that the viewable PDF matches the editable/source file before saving this paired version." });
     }
 
     return errors;
@@ -631,11 +645,11 @@
     }
 
     if (pendingSourceFile && !pendingPdfFile) {
-      throw validationError("A viewable PDF is required when uploading an editable source file. Upload the matching PDF in the Viewable PDF / Live File box before saving.", "both");
+      throw validationError("A matching viewable PDF is required when uploading an editable source file. Upload the matching PDF in the Viewable PDF / Live File box before saving.", "pdf");
     }
 
     if (pendingSourceFile && !getEl("sd-pdf-confirm")?.checked) {
-      throw validationError("Confirm that the viewable PDF matches the editable/source file before saving this paired version.", "both");
+      throw validationError("Confirm that the viewable PDF matches the editable/source file before saving this paired version.", "confirm");
     }
 
     const pdfInfo = await uploadOneDocumentFile(pendingPdfFile, document, "public-pdf");
@@ -765,8 +779,8 @@
     if (!el) return;
     if (!file) {
       el.innerHTML = role === "pdf"
-        ? `<span class="sd-muted">No PDF selected. Drag the live/viewable PDF here or click to choose it.</span>`
-        : `<span class="sd-muted">No source file selected. Optional: drag the editable Word/source file here.</span>`;
+        ? `<span class="sd-muted">No PDF selected. Drag the viewable/live PDF here or click to choose it. Accepted: .pdf only.</span>`
+        : `<span class="sd-muted">No source file selected. Optional: drag the editable source file here. Accepted: DOCX, DOC, XLSX, PPTX, ODT, RTF, TXT, CSV.</span>`;
       return;
     }
     el.innerHTML = `
@@ -799,6 +813,51 @@
     if (confirmWrap) confirmWrap.style.display = pendingSourceFile ? "grid" : "none";
   }
 
+  function signedPdfPreviewUrl(url) {
+    const clean = cleanText(url);
+    if (!clean) return "";
+    return clean.includes("#") ? clean : `${clean}#toolbar=0&navpanes=0&view=FitH&page=1`;
+  }
+
+  async function loadDocumentListPreview(documentId) {
+    if (!documentId || documentPreviewUrls[documentId] || documentPreviewLoading.has(documentId)) return;
+    documentPreviewLoading.add(documentId);
+    const boxes = Array.from(document.querySelectorAll(`[data-doc-preview-box="${CSS.escape(String(documentId))}"]`));
+    boxes.forEach((box) => { box.innerHTML = `<div class="sd-doc-preview-placeholder">Loading live PDF preview…</div>`; });
+    try {
+      const result = await callCoreAdminAction("get_document_download_url", { organization_id: selectedCustomerId, document_id: documentId, file_role: "public" });
+      const url = signedPdfPreviewUrl(result.preview_signed_url || result.signed_url || result.download_signed_url || "");
+      documentPreviewUrls[documentId] = url || "__none__";
+      boxes.forEach((box) => {
+        box.innerHTML = url
+          ? `<iframe class="sd-doc-preview-frame" src="${escapeHtml(url)}" title="Live PDF preview"></iframe>`
+          : `<div class="sd-doc-preview-placeholder">No preview URL returned.</div>`;
+      });
+    } catch (error) {
+      boxes.forEach((box) => { box.innerHTML = `<div class="sd-doc-preview-placeholder">Preview unavailable. Use Version History to preview/download.</div>`; });
+    } finally {
+      documentPreviewLoading.delete(documentId);
+    }
+  }
+
+  function scheduleDocumentListPreviews() {
+    window.setTimeout(() => {
+      document.querySelectorAll("[data-doc-preview-box]").forEach((box) => {
+        const documentId = box.getAttribute("data-doc-preview-box") || "";
+        const cached = documentPreviewUrls[documentId];
+        if (cached && cached !== "__none__") {
+          box.innerHTML = `<iframe class="sd-doc-preview-frame" src="${escapeHtml(cached)}" title="Live PDF preview"></iframe>`;
+          return;
+        }
+        if (cached === "__none__") {
+          box.innerHTML = `<div class="sd-doc-preview-placeholder">Preview unavailable.</div>`;
+          return;
+        }
+        loadDocumentListPreview(documentId).catch(() => {});
+      });
+    }, 0);
+  }
+
   function renderDocumentList() {
     const list = getEl("sd-document-list");
     if (!list) return;
@@ -818,13 +877,16 @@
           const archived = doc.archived_at || doc.status === "archived";
           const selected = String(doc.document_id) === String(selectedDocumentId) && editorMode === "edit";
           const visibilityTone = doc.visibility === "public" ? "green" : doc.visibility === "members" ? "blue" : doc.visibility === "internal" ? "red" : "amber";
-          return `<button type="button" class="sd-doc-row ${selected ? "selected" : ""} ${archived ? "archived" : ""}" data-doc-id="${escapeHtml(doc.document_id)}">
-            <span class="sd-doc-row-main"><strong>${escapeHtml(doc.title)}</strong><small>${escapeHtml(doc.description || doc.document_key || "No description")}</small></span>
-            <span class="sd-row-pills">${statusPill(doc.visibility, visibilityTone)} ${statusPill(archived ? "archived" : "active", archived ? "red" : "green")} ${doc.published_version_number ? statusPill(`v${doc.published_version_number} live`, "blue") : statusPill("no live version", "neutral")}</span>
-          </button>`;
+          const hasLivePdf = Boolean(doc.published_version_number || doc.current_published_version_id);
+          return `<article class="sd-doc-row ${selected ? "selected" : ""} ${archived ? "archived" : ""}">
+            <div class="sd-doc-preview-box" ${hasLivePdf ? `data-doc-preview-box="${escapeHtml(doc.document_id)}"` : ""}>${hasLivePdf ? `<div class="sd-doc-preview-placeholder">Live PDF preview loading…</div>` : `<div class="sd-doc-preview-placeholder">No live PDF</div>`}</div>
+            <div class="sd-doc-row-main"><strong>${escapeHtml(doc.title)}</strong><small>${escapeHtml(doc.description || doc.document_key || "No description")}</small><div class="sd-row-pills">${statusPill(doc.visibility, visibilityTone)} ${statusPill(archived ? "archived" : "active", archived ? "red" : "green")} ${doc.published_version_number ? statusPill(`v${doc.published_version_number} live`, "blue") : statusPill("no live version", "neutral")}</div></div>
+            <div class="sd-doc-row-actions"><button type="button" class="sd-mini-button primary" data-doc-id="${escapeHtml(doc.document_id)}">${archived ? "View / Restore" : "Edit"}</button></div>
+          </article>`;
         }).join("")}
       </details>`).join("");
     list.querySelectorAll("[data-doc-id]").forEach((btn) => btn.addEventListener("click", () => selectDocument(btn.dataset.docId).catch(showError)));
+    scheduleDocumentListPreviews();
   }
 
   function versionActionLabel(version) {
@@ -892,7 +954,7 @@
 
   function css() {
     return `
-      .sd-wrap{max-width:1180px;margin:24px auto 60px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:#172033;box-sizing:border-box}.sd-wrap *{box-sizing:border-box}.sd-panel{background:#fff;border:1px solid #dfe7f1;border-radius:22px;box-shadow:0 14px 38px rgba(12,38,64,.12);overflow:hidden}.sd-head{padding:24px 26px;background:linear-gradient(135deg,#12365a,#2f80c4);color:#fff}.sd-head h1{margin:0;font-size:clamp(30px,4vw,50px);line-height:1;font-weight:900;letter-spacing:-.04em}.sd-head p{max-width:880px;margin:10px 0 0;color:rgba(255,255,255,.88);line-height:1.55}.sd-version-badge{display:inline-flex;margin-top:12px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.28);font-size:11px;font-weight:900;letter-spacing:.04em}.sd-body{padding:20px;background:linear-gradient(180deg,#eef7ff,#fff)}.sd-login{display:grid;grid-template-columns:1fr 1fr auto auto;gap:10px;margin-bottom:14px;padding:12px;border-radius:16px;background:#fff;border:1px solid #dfe7f1}.sd-input,.sd-select,.sd-textarea{width:100%;border:1px solid #ccd8e5;border-radius:12px;padding:10px 12px;font:inherit;background:#fff;color:#172033}.sd-input,.sd-select{min-height:42px;height:42px}.sd-field .sd-input,.sd-field .sd-select{align-self:start}.sd-input[readonly],.sd-input:disabled,.sd-select:disabled,.sd-textarea:disabled{background:#f1f5f9;color:#64748b;cursor:not-allowed}.sd-textarea{min-height:92px;resize:vertical}.sd-button,.sd-mini-button{border:1px solid #b9c8d8;border-radius:999px;background:#fff;color:#12365a;font-weight:900;cursor:pointer;padding:9px 13px}.sd-button:hover,.sd-mini-button:hover{transform:translateY(-1px);box-shadow:0 6px 14px rgba(12,38,64,.10)}.sd-button.primary,.sd-mini-button.primary{background:#12365a;color:#fff;border-color:#12365a}.sd-button.danger,.sd-mini-button.danger{background:#fee2e2;color:#991b1b;border-color:#f3b9b9}.sd-mini-button{padding:7px 10px;font-size:12px}.sd-toolbar{display:grid;grid-template-columns:minmax(260px,1fr) auto auto auto;gap:10px;align-items:end;margin-bottom:14px}.sd-grid{display:grid;grid-template-columns:410px minmax(0,1fr);gap:16px;align-items:start}.sd-card{background:rgba(255,255,255,.94);border:1px solid #dfe7f1;border-radius:18px;padding:16px;box-shadow:0 8px 22px rgba(12,38,64,.08)}.sd-section-title{margin:0 0 10px;color:#0b2744;font-size:18px}.sd-subtitle{margin:0 0 14px;color:#5d6b78;font-size:13px;line-height:1.5}.sd-help{margin:6px 0 0;color:#64748b;font-size:12px;line-height:1.45}.sd-field{display:grid;gap:6px;margin-bottom:12px}.sd-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:900;color:#4b6582}.sd-two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.sd-document-list{display:grid;gap:12px;max-height:760px;overflow:auto;padding-right:4px}.sd-doc-group{border:1px solid #dfe7f1;border-radius:16px;background:#f8fbff;padding:10px}.sd-doc-group summary{cursor:pointer;color:#12365a;font-size:13px;text-transform:uppercase;letter-spacing:.08em;font-weight:900;margin-bottom:8px}.sd-doc-group summary span{float:right;background:#eaf5ff;border-radius:999px;padding:2px 8px}.sd-doc-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr);gap:7px;text-align:left;margin:0 0 8px;padding:12px;border:1px solid #dfe7f1;border-radius:14px;background:#fff;cursor:pointer;transition:border-color .16s ease,box-shadow .16s ease,background .16s ease}.sd-doc-row:hover,.sd-doc-row.selected{border-color:#2f80c4;box-shadow:0 6px 14px rgba(47,128,196,.14)}.sd-doc-row.archived{background:#fff7ed;border-color:#fdba74}.sd-doc-row-main strong{display:block;color:#0b2744}.sd-doc-row-main small{display:block;color:#5d6b78;margin-top:3px;overflow:hidden;text-overflow:ellipsis}.sd-row-pills{display:flex;gap:6px;flex-wrap:wrap}.sd-pill{display:inline-flex;border-radius:999px;padding:4px 8px;font-size:10px;font-weight:900;text-transform:uppercase;border:1px solid #d1d9e4;background:#f8fafc;color:#475569}.sd-pill.green{background:#e7f6ec;color:#14532d;border-color:#bde5c9}.sd-pill.blue{background:#eaf5ff;color:#12365a;border-color:#c9e4f8}.sd-pill.amber{background:#fff7ed;color:#9a4a00;border-color:#fed7aa}.sd-pill.red{background:#fee2e2;color:#991b1b;border-color:#fecaca}.sd-muted{color:#5d6b78;font-size:12px;line-height:1.45}.sd-note{margin-top:6px;padding:8px;border-radius:10px;background:#f8fafc;color:#475569;font-size:12px}.sd-mode-card{min-height:260px;display:flex;align-items:center;justify-content:center;text-align:center}.sd-mode-card-inner{max-width:520px}.sd-mode-card h2{margin:0 0 10px;color:#0b2744;font-size:26px}.sd-editor-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid #dfe7f1}.sd-editor-title h2{margin:0;color:#0b2744;font-size:22px}.sd-editor-title p{margin:6px 0 0;color:#64748b;font-size:13px}.sd-lock-warning{padding:12px 14px;margin-bottom:12px;border-radius:14px;border:1px solid #fdba74;background:#fff7ed;color:#9a4a00;font-weight:800;font-size:13px;line-height:1.5}.sd-validation-message{display:none;margin:10px 0 12px;padding:12px 14px;border-radius:14px;border:1px solid #fecaca;background:#fff1f2;color:#991b1b;font-size:13px;line-height:1.45;font-weight:900}.sd-validation-message.is-visible{display:block}.sd-field-validation{margin:0 0 2px;padding:9px 11px}.sd-input.is-invalid,.sd-select.is-invalid,.sd-textarea.is-invalid{border-color:#ef4444!important;background:#fff1f2!important;box-shadow:0 0 0 4px rgba(239,68,68,.12)}.sd-drop.is-invalid{border-color:#ef4444!important;background:#fff1f2!important;box-shadow:0 0 0 4px rgba(239,68,68,.12)}.sd-button,.sd-mini-button{transition:transform .16s ease,box-shadow .16s ease,background .16s ease,border-color .16s ease,filter .16s ease}.sd-button:not(:disabled):hover,.sd-mini-button:not(:disabled):hover{filter:brightness(1.02);box-shadow:0 10px 22px rgba(12,38,64,.18)}.sd-button.primary:not(:disabled):hover,.sd-mini-button.primary:not(:disabled):hover{background:#0b2744;border-color:#0b2744}.sd-button.danger:not(:disabled):hover,.sd-mini-button.danger:not(:disabled):hover{background:#fecaca;border-color:#ef4444}.sd-button:active,.sd-mini-button:active{transform:translateY(0) scale(.99)}.sd-upload-section{margin:14px 0;padding:14px;border:1px solid #dfe7f1;border-radius:16px;background:#f8fbff}.sd-upload-title{margin:0 0 6px;color:#0b2744;font-size:17px}.sd-upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.sd-drop{min-height:180px;border:2px dashed #aac0d8;border-radius:16px;background:#fff;display:flex;align-items:center;justify-content:center;text-align:center;padding:14px;cursor:pointer;position:relative;overflow:hidden}.sd-drop.is-over{border-color:#2f80c4;background:#eaf5ff}.sd-drop.disabled{opacity:.55;cursor:not-allowed}.sd-drop input{position:absolute;opacity:0;pointer-events:none}.sd-file-chip{display:grid;gap:4px;justify-items:center;margin-bottom:10px}.sd-file-chip span{font-size:12px;color:#5d6b78}.sd-local-preview{width:100%;margin-top:8px}.sd-local-preview-frame{width:100%;height:210px;border:1px solid #dfe7f1;border-radius:12px;background:#fff}.sd-local-preview-message{min-height:110px;display:grid;align-content:center;gap:6px;padding:14px;border:1px dashed #cbd5e1;border-radius:12px;background:#f8fafc;color:#64748b}.sd-local-preview-message strong{color:#0b2744}.sd-confirm-row{grid-template-columns:auto 1fr;gap:9px;align-items:start;margin-top:12px;padding:11px 12px;border-radius:12px;border:1px solid #fed7aa;background:#fff7ed;color:#9a4a00;font-size:13px;font-weight:800}.sd-confirm-row input{margin-top:2px}.sd-confirm-row span{text-align:left;line-height:1.45}.sd-version-list{display:grid;gap:10px}.sd-version-help{padding:10px 12px;border:1px solid #c9e4f8;background:#eaf5ff;color:#12365a;border-radius:12px;font-size:12px;line-height:1.45;font-weight:800}.sd-version-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;border:1px solid #dfe7f1;border-radius:14px;background:#fff;padding:12px}.sd-version-row.is-live{border-color:#bde5c9;background:#f1fbf4}.sd-version-head{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:4px}.sd-version-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.sd-live-note{display:inline-flex;align-items:center;padding:7px 10px;border-radius:999px;background:#e7f6ec;color:#14532d;font-size:12px;font-weight:900}.sd-dirty{display:inline-flex;margin-left:8px;padding:5px 9px;border-radius:999px;background:#e7f6ec;color:#14532d;font-size:11px;font-weight:900}.sd-dirty.is-dirty{background:#fff7ed;color:#9a4a00}.sd-output{white-space:pre-wrap;background:#0f172a;color:#dbeafe;border-radius:14px;padding:12px;max-height:260px;overflow:auto;font-size:12px}.sd-empty{padding:14px;border:1px dashed #cbd5e1;border-radius:12px;color:#64748b;background:#fff;text-align:center}.sd-choice-backdrop{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(7,24,42,.62);z-index:2147483001;padding:22px}.sd-choice-modal{width:min(560px,96vw);background:#fff;border:1px solid #dfe7f1;border-radius:20px;box-shadow:0 24px 70px rgba(0,0,0,.34);overflow:hidden}.sd-choice-head{padding:18px 20px;background:linear-gradient(135deg,#12365a,#2f80c4);color:#fff}.sd-choice-head h3{margin:0;font-size:22px;line-height:1.15}.sd-choice-body{padding:18px 20px;color:#172033}.sd-choice-body p{margin:0 0 10px;line-height:1.55}.sd-choice-note{color:#64748b;font-size:12px}.sd-choice-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;padding:14px 20px 18px;border-top:1px solid #dfe7f1;background:#f8fbff}.sd-preview-backdrop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(7,24,42,.72);z-index:2147483000;padding:24px}.sd-preview-backdrop.is-open{display:flex}.sd-preview-modal{width:min(1100px,96vw);height:min(820px,92vh);background:#fff;border-radius:18px;box-shadow:0 24px 80px rgba(0,0,0,.38);display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden}.sd-preview-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 14px;border-bottom:1px solid #dfe7f1;background:#f8fbff}.sd-preview-head strong{color:#0b2744}.sd-preview-frame{width:100%;height:100%;border:0;background:#fff}@media(max-width:920px){.sd-grid,.sd-toolbar,.sd-login,.sd-two,.sd-upload-grid{grid-template-columns:1fr}.sd-version-row,.sd-editor-head{grid-template-columns:1fr;display:grid}.sd-version-actions{justify-content:flex-start}}
+      .sd-wrap{max-width:1180px;margin:24px auto 60px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:#172033;box-sizing:border-box}.sd-wrap *{box-sizing:border-box}.sd-panel{background:#fff;border:1px solid #dfe7f1;border-radius:22px;box-shadow:0 14px 38px rgba(12,38,64,.12);overflow:hidden}.sd-head{padding:24px 26px;background:linear-gradient(135deg,#12365a,#2f80c4);color:#fff}.sd-head h1{margin:0;font-size:clamp(30px,4vw,50px);line-height:1;font-weight:900;letter-spacing:-.04em}.sd-head p{max-width:880px;margin:10px 0 0;color:rgba(255,255,255,.88);line-height:1.55}.sd-version-badge{display:inline-flex;margin-top:12px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.28);font-size:11px;font-weight:900;letter-spacing:.04em}.sd-body{padding:20px;background:linear-gradient(180deg,#eef7ff,#fff)}.sd-login{display:grid;grid-template-columns:1fr 1fr auto auto;gap:10px;margin-bottom:14px;padding:12px;border-radius:16px;background:#fff;border:1px solid #dfe7f1}.sd-input,.sd-select,.sd-textarea{width:100%;border:1px solid #ccd8e5;border-radius:12px;padding:10px 12px;font:inherit;background:#fff;color:#172033}.sd-input,.sd-select{min-height:42px;height:42px}.sd-field .sd-input,.sd-field .sd-select{align-self:start}.sd-input[readonly],.sd-input:disabled,.sd-select:disabled,.sd-textarea:disabled{background:#f1f5f9;color:#64748b;cursor:not-allowed}.sd-textarea{min-height:92px;resize:vertical}.sd-button,.sd-mini-button{border:1px solid #b9c8d8;border-radius:999px;background:#fff;color:#12365a;font-weight:900;cursor:pointer;padding:9px 13px}.sd-button:hover,.sd-mini-button:hover{transform:translateY(-1px);box-shadow:0 6px 14px rgba(12,38,64,.10)}.sd-button.primary,.sd-mini-button.primary{background:#12365a;color:#fff;border-color:#12365a}.sd-button.danger,.sd-mini-button.danger{background:#fee2e2;color:#991b1b;border-color:#f3b9b9}.sd-mini-button{padding:7px 10px;font-size:12px}.sd-toolbar{display:grid;grid-template-columns:minmax(260px,1fr) auto auto auto;gap:10px;align-items:end;margin-bottom:14px}.sd-grid{display:grid;grid-template-columns:410px minmax(0,1fr);gap:16px;align-items:start}.sd-card{background:rgba(255,255,255,.94);border:1px solid #dfe7f1;border-radius:18px;padding:16px;box-shadow:0 8px 22px rgba(12,38,64,.08)}.sd-section-title{margin:0 0 10px;color:#0b2744;font-size:18px}.sd-subtitle{margin:0 0 14px;color:#5d6b78;font-size:13px;line-height:1.5}.sd-help{margin:6px 0 0;color:#64748b;font-size:12px;line-height:1.45}.sd-field{display:grid;gap:6px;margin-bottom:12px}.sd-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:900;color:#4b6582}.sd-two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.sd-document-list{display:grid;gap:12px;max-height:760px;overflow:auto;padding-right:4px}.sd-doc-group{border:1px solid #dfe7f1;border-radius:16px;background:#f8fbff;padding:10px}.sd-doc-group summary{cursor:pointer;color:#12365a;font-size:13px;text-transform:uppercase;letter-spacing:.08em;font-weight:900;margin-bottom:8px}.sd-doc-group summary span{float:right;background:#eaf5ff;border-radius:999px;padding:2px 8px}.sd-doc-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr);gap:7px;text-align:left;margin:0 0 8px;padding:12px;border:1px solid #dfe7f1;border-radius:14px;background:#fff;cursor:pointer;transition:border-color .16s ease,box-shadow .16s ease,background .16s ease}.sd-doc-row:hover,.sd-doc-row.selected{border-color:#2f80c4;box-shadow:0 6px 14px rgba(47,128,196,.14)}.sd-doc-row.archived{background:#fff7ed;border-color:#fdba74}.sd-doc-row-main strong{display:block;color:#0b2744}.sd-doc-row-main small{display:block;color:#5d6b78;margin-top:3px;overflow:hidden;text-overflow:ellipsis}.sd-row-pills{display:flex;gap:6px;flex-wrap:wrap}.sd-pill{display:inline-flex;border-radius:999px;padding:4px 8px;font-size:10px;font-weight:900;text-transform:uppercase;border:1px solid #d1d9e4;background:#f8fafc;color:#475569}.sd-pill.green{background:#e7f6ec;color:#14532d;border-color:#bde5c9}.sd-pill.blue{background:#eaf5ff;color:#12365a;border-color:#c9e4f8}.sd-pill.amber{background:#fff7ed;color:#9a4a00;border-color:#fed7aa}.sd-pill.red{background:#fee2e2;color:#991b1b;border-color:#fecaca}.sd-muted{color:#5d6b78;font-size:12px;line-height:1.45}.sd-note{margin-top:6px;padding:8px;border-radius:10px;background:#f8fafc;color:#475569;font-size:12px}.sd-mode-card{min-height:260px;display:flex;align-items:center;justify-content:center;text-align:center}.sd-mode-card-inner{max-width:520px}.sd-mode-card h2{margin:0 0 10px;color:#0b2744;font-size:26px}.sd-editor-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid #dfe7f1}.sd-editor-title h2{margin:0;color:#0b2744;font-size:22px}.sd-editor-title p{margin:6px 0 0;color:#64748b;font-size:13px}.sd-lock-warning{padding:12px 14px;margin-bottom:12px;border-radius:14px;border:1px solid #fdba74;background:#fff7ed;color:#9a4a00;font-weight:800;font-size:13px;line-height:1.5}.sd-validation-message{display:none;margin:10px 0 12px;padding:12px 14px;border-radius:14px;border:1px solid #fecaca;background:#fff1f2;color:#991b1b;font-size:13px;line-height:1.45;font-weight:900}.sd-validation-message.is-visible{display:block}.sd-field-validation{margin:0 0 2px;padding:9px 11px}.sd-input.is-invalid,.sd-select.is-invalid,.sd-textarea.is-invalid{border-color:#ef4444!important;background:#fff1f2!important;box-shadow:0 0 0 4px rgba(239,68,68,.12)}.sd-drop.is-invalid{border-color:#ef4444!important;background:#fff1f2!important;box-shadow:0 0 0 4px rgba(239,68,68,.12)}.sd-button,.sd-mini-button{transition:transform .16s ease,box-shadow .16s ease,background .16s ease,border-color .16s ease,filter .16s ease}.sd-button:not(:disabled):hover,.sd-mini-button:not(:disabled):hover{filter:brightness(1.02);box-shadow:0 10px 22px rgba(12,38,64,.18)}.sd-button.primary:not(:disabled):hover,.sd-mini-button.primary:not(:disabled):hover{background:#0b2744;border-color:#0b2744}.sd-button.danger:not(:disabled):hover,.sd-mini-button.danger:not(:disabled):hover{background:#fecaca;border-color:#ef4444}.sd-button:active,.sd-mini-button:active{transform:translateY(0) scale(.99)}.sd-upload-section{margin:14px 0;padding:14px;border:1px solid #dfe7f1;border-radius:16px;background:#f8fbff}.sd-upload-title{margin:0 0 6px;color:#0b2744;font-size:17px}.sd-upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.sd-drop{min-height:180px;border:2px dashed #aac0d8;border-radius:16px;background:#fff;display:flex;align-items:center;justify-content:center;text-align:center;padding:14px;cursor:pointer;position:relative;overflow:hidden}.sd-drop.is-over{border-color:#2f80c4;background:#eaf5ff}.sd-drop.disabled{opacity:.55;cursor:not-allowed}.sd-drop input{position:absolute;opacity:0;pointer-events:none}.sd-file-chip{display:grid;gap:4px;justify-items:center;margin-bottom:10px}.sd-file-chip span{font-size:12px;color:#5d6b78}.sd-local-preview{width:100%;margin-top:8px}.sd-local-preview-frame{width:100%;height:210px;border:1px solid #dfe7f1;border-radius:12px;background:#fff}.sd-local-preview-message{min-height:110px;display:grid;align-content:center;gap:6px;padding:14px;border:1px dashed #cbd5e1;border-radius:12px;background:#f8fafc;color:#64748b}.sd-local-preview-message strong{color:#0b2744}.sd-confirm-row{grid-template-columns:auto 1fr;gap:9px;align-items:start;margin-top:12px;padding:11px 12px;border-radius:12px;border:1px solid #fed7aa;background:#fff7ed;color:#9a4a00;font-size:13px;font-weight:800}.sd-confirm-row input{margin-top:2px}.sd-confirm-row span{text-align:left;line-height:1.45}.sd-version-list{display:grid;gap:10px}.sd-version-help{padding:10px 12px;border:1px solid #c9e4f8;background:#eaf5ff;color:#12365a;border-radius:12px;font-size:12px;line-height:1.45;font-weight:800}.sd-version-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;border:1px solid #dfe7f1;border-radius:14px;background:#fff;padding:12px}.sd-version-row.is-live{border-color:#bde5c9;background:#f1fbf4}.sd-version-head{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:4px}.sd-version-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.sd-live-note{display:inline-flex;align-items:center;padding:7px 10px;border-radius:999px;background:#e7f6ec;color:#14532d;font-size:12px;font-weight:900}.sd-dirty{display:inline-flex;margin-left:8px;padding:5px 9px;border-radius:999px;background:#e7f6ec;color:#14532d;font-size:11px;font-weight:900}.sd-dirty.is-dirty{background:#fff7ed;color:#9a4a00}.sd-output{white-space:pre-wrap;background:#0f172a;color:#dbeafe;border-radius:14px;padding:12px;max-height:260px;overflow:auto;font-size:12px}.sd-empty{padding:14px;border:1px dashed #cbd5e1;border-radius:12px;color:#64748b;background:#fff;text-align:center}.sd-choice-backdrop{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(7,24,42,.62);z-index:2147483001;padding:22px}.sd-choice-modal{width:min(560px,96vw);background:#fff;border:1px solid #dfe7f1;border-radius:20px;box-shadow:0 24px 70px rgba(0,0,0,.34);overflow:hidden}.sd-choice-head{padding:18px 20px;background:linear-gradient(135deg,#12365a,#2f80c4);color:#fff}.sd-choice-head h3{margin:0;font-size:22px;line-height:1.15}.sd-choice-body{padding:18px 20px;color:#172033}.sd-choice-body p{margin:0 0 10px;line-height:1.55}.sd-choice-note{color:#64748b;font-size:12px}.sd-choice-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;padding:14px 20px 18px;border-top:1px solid #dfe7f1;background:#f8fbff}.sd-preview-backdrop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(7,24,42,.72);z-index:2147483000;padding:24px}.sd-preview-backdrop.is-open{display:flex}.sd-preview-modal{width:min(1100px,96vw);height:min(820px,92vh);background:#fff;border-radius:18px;box-shadow:0 24px 80px rgba(0,0,0,.38);display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden}.sd-preview-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 14px;border-bottom:1px solid #dfe7f1;background:#f8fbff}.sd-preview-head strong{color:#0b2744}.sd-preview-frame{width:100%;height:100%;border:0;background:#fff}.sd-two{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start;margin-bottom:12px}.sd-field{display:grid;grid-template-rows:auto auto auto;gap:6px;margin:0 0 12px}.sd-field .sd-input,.sd-field .sd-select{height:42px!important;min-height:42px!important;line-height:20px}.sd-confirm-row.is-invalid{border-color:#ef4444!important;background:#fff1f2!important;color:#991b1b!important;box-shadow:0 0 0 4px rgba(239,68,68,.12)}.sd-validation-message{white-space:pre-line}.sd-save-actions{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.sd-document-list{max-height:780px}.sd-doc-row{grid-template-columns:118px minmax(0,1fr) auto!important;align-items:center;cursor:default}.sd-doc-preview-box{width:108px;height:138px;border:1px solid #dfe7f1;border-radius:12px;background:#fff;overflow:hidden;display:flex;align-items:center;justify-content:center}.sd-doc-preview-frame{width:100%;height:100%;border:0;background:#fff}.sd-doc-preview-placeholder{padding:8px;text-align:center;color:#64748b;font-size:11px;line-height:1.35;font-weight:800}.sd-doc-row-actions{display:flex;align-items:center;justify-content:flex-end}.sd-doc-row-main{min-width:0}.sd-doc-row-main strong{font-size:14px}.sd-doc-row-main small{white-space:normal;line-height:1.35}.sd-doc-row:hover,.sd-doc-row.selected{border-color:#2f80c4;box-shadow:0 6px 14px rgba(47,128,196,.14)}@media(max-width:920px){.sd-grid,.sd-toolbar,.sd-login,.sd-two,.sd-upload-grid{grid-template-columns:1fr}.sd-doc-row{grid-template-columns:92px minmax(0,1fr)!important}.sd-doc-preview-box{width:84px;height:108px}.sd-doc-row-actions{grid-column:1 / -1;justify-content:flex-start}.sd-version-row,.sd-editor-head{grid-template-columns:1fr;display:grid}.sd-version-actions{justify-content:flex-start}}
     `;
   }
 
@@ -969,7 +1031,7 @@
     return `
       <section class="sd-card sd-editor">
         <div class="sd-editor-head">
-          <div class="sd-editor-title"><h2>${escapeHtml(modeLabel)} <span id="sd-dirty" class="sd-dirty">Saved / clean</span></h2><p>${editorMode === "new" ? "Save creates the document record. Upload a PDF to create version 1. Optional Word/source files must be paired with a matching PDF." : "You are editing an existing document record. Uploading files creates a new append-only version; existing versions are never overwritten."}</p></div>
+          <div class="sd-editor-title"><h2>${escapeHtml(modeLabel)} <span id="sd-dirty" class="sd-dirty">Saved / clean</span></h2><p>${editorMode === "new" ? "Save creates the document record. A viewable PDF is required for the live/preview file. Optional editable source files must be paired with a matching PDF." : "You are editing an existing document record. Uploading files creates a new append-only version; existing versions are never overwritten."}</p></div>
           <button id="sd-close-editor" class="sd-button" type="button">Close Editor</button>
         </div>
         ${archived ? `<div class="sd-lock-warning">This document is archived. Restore it before changing metadata or uploading versions.</div>` : ""}
@@ -979,13 +1041,13 @@
         <label class="sd-field"><span class="sd-label">Description</span><textarea id="sd-description" class="sd-textarea" placeholder="Short description shown next to the document." ${disabled}></textarea></label>
         <section class="sd-upload-section">
           <h3 class="sd-upload-title">Upload New Version Files</h3>
-          <p class="sd-subtitle">The live/viewable file must be a PDF. If you upload a Word/source file, upload the matching PDF in the PDF box before saving.</p>
+          <p class="sd-subtitle">The live/viewable file must be a PDF in this version. Upload editable Word/source files only in the source box, and pair them with the matching PDF before saving.</p>
           <div id="sd-upload-validation" class="sd-validation-message" role="alert" aria-live="polite"></div>
           <div class="sd-upload-grid">
-            <div><div id="sd-pdf-drop" class="sd-drop sd-drop-pdf ${archived ? "disabled" : ""}"><input id="sd-pdf-input" type="file" accept="application/pdf,.pdf" ${disabled}><div><div class="sd-label" style="margin-bottom:8px">Viewable PDF / Live File</div><div id="sd-pending-pdf"><span class="sd-muted">No PDF selected. Drag the live/viewable PDF here or click to choose it.</span></div></div></div><span id="sd-pdf-validation" class="sd-validation-message sd-field-validation" role="alert" aria-live="polite"></span></div>
-            <div><div id="sd-source-drop" class="sd-drop sd-drop-source ${archived ? "disabled" : ""}"><input id="sd-source-input" type="file" accept=".doc,.docx,.odt,.rtf,.txt,.csv,.xls,.xlsx,.ods,.ppt,.pptx,.odp,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" ${disabled}><div><div class="sd-label" style="margin-bottom:8px">Editable Source File</div><div id="sd-pending-source"><span class="sd-muted">No source file selected. Optional: drag the editable Word/source file here.</span></div></div></div><span id="sd-source-validation" class="sd-validation-message sd-field-validation" role="alert" aria-live="polite"></span></div>
+            <div><div id="sd-pdf-drop" class="sd-drop sd-drop-pdf ${archived ? "disabled" : ""}"><input id="sd-pdf-input" type="file" accept="application/pdf,.pdf" ${disabled}><div><div class="sd-label" style="margin-bottom:8px">Viewable PDF / Live File</div><div id="sd-pending-pdf"><span class="sd-muted">No PDF selected. Drag the viewable/live PDF here or click to choose it. Accepted: .pdf only.</span></div></div></div><span id="sd-pdf-validation" class="sd-validation-message sd-field-validation" role="alert" aria-live="polite"></span></div>
+            <div><div id="sd-source-drop" class="sd-drop sd-drop-source ${archived ? "disabled" : ""}"><input id="sd-source-input" type="file" accept=".doc,.docx,.odt,.rtf,.txt,.csv,.xls,.xlsx,.ods,.ppt,.pptx,.odp,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" ${disabled}><div><div class="sd-label" style="margin-bottom:8px">Editable Source File</div><div id="sd-pending-source"><span class="sd-muted">No source file selected. Optional: drag the editable source file here. Accepted: DOCX, DOC, XLSX, PPTX, ODT, RTF, TXT, CSV.</span></div></div></div><span id="sd-source-validation" class="sd-validation-message sd-field-validation" role="alert" aria-live="polite"></span></div>
           </div>
-          <label id="sd-pdf-confirm-wrap" class="sd-confirm-row" style="display:none"><input id="sd-pdf-confirm" type="checkbox" ${disabled}><span>I confirm the PDF rendition matches the editable/source file uploaded with this version.</span></label>
+          <label id="sd-pdf-confirm-wrap" class="sd-confirm-row" style="display:none"><input id="sd-pdf-confirm" type="checkbox" ${disabled}><span>I confirm the PDF rendition matches the editable/source file uploaded with this version.</span></label><span id="sd-confirm-validation" class="sd-validation-message sd-field-validation" role="alert" aria-live="polite"></span>
         </section>
         <div style="margin-top:12px"><label class="sd-field"><span class="sd-label">New Version Status</span><select id="sd-version-status" class="sd-select" ${disabled}><option value="draft">Draft</option><option value="review">Review</option><option value="approved">Approved</option></select><span class="sd-help">After saving an uploaded PDF, you will choose whether to make it live now or keep it as a draft.</span></label></div>
         <label class="sd-field"><span class="sd-label">Version Notes</span><textarea id="sd-version-notes" class="sd-textarea" placeholder="Optional notes for this upload/version." ${disabled}></textarea></label>

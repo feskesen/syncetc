@@ -1,1 +1,0 @@
-This folder will hold GitHub-hosted frontend assets.

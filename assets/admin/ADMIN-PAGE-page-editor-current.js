@@ -7,7 +7,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-004-C";
+  const VERSION = "2026-06-05-004-D";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -40,6 +40,7 @@
   let infoFaqIncludeArchived = true;
   let infoFaqCsvPreviewRows = [];
   let infoFaqDragItemId = "";
+  let infoFaqOrderSaving = false;
   const DIRTY_MESSAGE = "You have unsaved Page Editor changes. Leave anyway?";
 
   const FEATURE_DEFAULTS = {
@@ -151,10 +152,12 @@
 
   function syncShellDirtyState() {
     if (window.SyncEtcAdminShell && typeof window.SyncEtcAdminShell.setDirty === "function") {
-      const anyDirty = Boolean(isDirty || infoFaqDirty);
-      const message = infoFaqDirty && !isDirty
-        ? "You have unsaved FAQ item changes. Leave anyway?"
-        : DIRTY_MESSAGE;
+      const anyDirty = Boolean(isDirty || infoFaqDirty || infoFaqOrderSaving);
+      const message = infoFaqOrderSaving && !isDirty && !infoFaqDirty
+        ? "FAQ order is still saving. Leave anyway?"
+        : infoFaqDirty && !isDirty
+          ? "You have unsaved FAQ item changes. Leave anyway?"
+          : DIRTY_MESSAGE;
       window.SyncEtcAdminShell.setDirty(anyDirty, message);
     }
   }
@@ -1178,27 +1181,65 @@
     renderInfoFaqManager();
   }
 
-  async function saveFaqOrderForCategory(category, orderedItems) {
+  function setInfoFaqOrderSaving(value) {
+    infoFaqOrderSaving = !!value;
+    syncShellDirtyState();
+  }
+
+  function faqOrderPayload(item, sortOrder) {
+    return {
+      customer_page_id: selectedCustomerPageId,
+      faq_item_id: item.faq_item_id,
+      category: normalizedFaqCategory(item),
+      question: item.question || "Untitled FAQ",
+      answer: item.answer || " ",
+      sort_order: sortOrder,
+      visibility: item.visibility || "public",
+      status: item.status || "active",
+      metadata_json: { reordered_from: "page_editor_inline_faq_manager" }
+    };
+  }
+
+  async function persistFaqOrderForCategory(category, orderedItems) {
     if (!selectedCustomerPageId || !isCurrentInfoPage()) return;
-    const targetCategory = String(category || "General").trim() || "General";
-    setStatus(`Saving FAQ order for ${targetCategory}...`);
     for (let index = 0; index < orderedItems.length; index += 1) {
       const item = orderedItems[index];
       const sortOrder = (index + 1) * 100;
-      await callCoreAdminAction("upsert_info_faq_item", {
-        customer_page_id: selectedCustomerPageId,
-        faq_item_id: item.faq_item_id,
-        category: normalizedFaqCategory(item),
-        question: item.question || "Untitled FAQ",
-        answer: item.answer || " ",
-        sort_order: sortOrder,
-        visibility: item.visibility || "public",
-        status: item.status || "active",
-        metadata_json: { reordered_from: "page_editor_inline_faq_manager" }
-      });
+      await callCoreAdminAction("upsert_info_faq_item", faqOrderPayload(item, sortOrder));
     }
-    await loadInfoFaqItems(true);
-    setStatus(`FAQ order saved for ${targetCategory}.`);
+  }
+
+  function applyLocalFaqOrder(category, orderedItems) {
+    const targetCategory = String(category || "General").trim() || "General";
+    const orderById = new Map();
+    orderedItems.forEach((item, index) => {
+      orderById.set(String(item.faq_item_id), (index + 1) * 100);
+    });
+    infoFaqItems = infoFaqItems.map((item) => {
+      if (normalizedFaqCategory(item) !== targetCategory || isFaqArchived(item)) return item;
+      if (!orderById.has(String(item.faq_item_id))) return item;
+      return { ...item, sort_order: orderById.get(String(item.faq_item_id)) };
+    });
+  }
+
+  async function optimisticallySaveFaqOrder(category, orderedItems, selectedId) {
+    const targetCategory = String(category || "General").trim() || "General";
+    const previousItems = infoFaqItems.map((item) => ({ ...item }));
+    selectedInfoFaqItemId = selectedId || selectedInfoFaqItemId;
+    applyLocalFaqOrder(targetCategory, orderedItems);
+    renderInfoFaqManager();
+    setStatus(`Saving FAQ order for ${targetCategory}...`);
+    setInfoFaqOrderSaving(true);
+    try {
+      await persistFaqOrderForCategory(targetCategory, orderedItems);
+      setInfoFaqOrderSaving(false);
+      setStatus(`FAQ order saved for ${targetCategory}.`);
+    } catch (error) {
+      infoFaqItems = previousItems;
+      setInfoFaqOrderSaving(false);
+      renderInfoFaqManager();
+      setStatus(`FAQ order save failed: ${error.message || error}`);
+    }
   }
 
   async function moveInfoFaqItem(faqItemId, direction) {
@@ -1214,11 +1255,10 @@
     const reordered = [...rows];
     const [moved] = reordered.splice(index, 1);
     reordered.splice(nextIndex, 0, moved);
-    selectedInfoFaqItemId = String(faqItemId);
-    await saveFaqOrderForCategory(category, reordered);
+    await optimisticallySaveFaqOrder(category, reordered, String(faqItemId));
   }
 
-  async function dropInfoFaqItemOnTarget(sourceId, targetId) {
+  async function dropInfoFaqItemOnTarget(sourceId, targetId, position = "before") {
     if (!sourceId || !targetId || String(sourceId) === String(targetId)) return;
     if (!confirmDiscardInfoFaqChanges("You have unsaved FAQ item changes. Reorder FAQs and discard the unsaved edit fields?")) return;
     const source = infoFaqItems.find((row) => String(row.faq_item_id) === String(sourceId));
@@ -1232,9 +1272,8 @@
     const rows = reorderableFaqItemsForCategory(category).filter((row) => String(row.faq_item_id) !== String(sourceId));
     const targetIndex = rows.findIndex((row) => String(row.faq_item_id) === String(targetId));
     if (targetIndex < 0) return;
-    rows.splice(targetIndex, 0, source);
-    selectedInfoFaqItemId = String(sourceId);
-    await saveFaqOrderForCategory(category, rows);
+    rows.splice(position === "after" ? targetIndex + 1 : targetIndex, 0, source);
+    await optimisticallySaveFaqOrder(category, rows, String(sourceId));
   }
 
   function bindInfoFaqManagerEvents(wrap) {
@@ -1261,6 +1300,10 @@
     });
 
     let draggedFaqId = "";
+    function clearFaqDropMarkers() {
+      wrap.querySelectorAll(".se-faq-record").forEach((record) => record.classList.remove("is-dragging", "is-drop-before", "is-drop-after"));
+    }
+
     wrap.querySelectorAll(".se-faq-record[draggable='true'], .se-faq-drag-handle[draggable='true']").forEach((el) => {
       el.addEventListener("dragstart", (event) => {
         const record = el.closest(".se-faq-record");
@@ -1271,7 +1314,7 @@
         record?.classList.add("is-dragging");
       });
       el.addEventListener("dragend", () => {
-        wrap.querySelectorAll(".se-faq-record").forEach((record) => record.classList.remove("is-dragging", "is-drop-target"));
+        clearFaqDropMarkers();
         draggedFaqId = "";
       });
     });
@@ -1279,17 +1322,30 @@
     wrap.querySelectorAll(".se-faq-record[data-faq-record-id]").forEach((record) => {
       record.addEventListener("dragover", (event) => {
         if (!draggedFaqId || record.classList.contains("is-archived")) return;
+        const sourceId = draggedFaqId;
+        const targetId = record.getAttribute("data-faq-record-id") || "";
+        if (!targetId || String(sourceId) === String(targetId)) return;
+        const source = infoFaqItems.find((row) => String(row.faq_item_id) === String(sourceId));
+        const target = infoFaqItems.find((row) => String(row.faq_item_id) === String(targetId));
+        if (!source || !target || normalizedFaqCategory(source) !== normalizedFaqCategory(target)) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = "move";
-        record.classList.add("is-drop-target");
+        const rect = record.getBoundingClientRect();
+        const position = event.clientY > rect.top + rect.height / 2 ? "after" : "before";
+        wrap.querySelectorAll(".se-faq-record").forEach((row) => row.classList.remove("is-drop-before", "is-drop-after"));
+        record.classList.add(position === "after" ? "is-drop-after" : "is-drop-before");
       });
-      record.addEventListener("dragleave", () => record.classList.remove("is-drop-target"));
+      record.addEventListener("dragleave", (event) => {
+        const next = event.relatedTarget;
+        if (!next || !record.contains(next)) record.classList.remove("is-drop-before", "is-drop-after");
+      });
       record.addEventListener("drop", async (event) => {
         event.preventDefault();
-        record.classList.remove("is-drop-target");
         const sourceId = event.dataTransfer.getData("text/plain") || draggedFaqId;
         const targetId = record.getAttribute("data-faq-record-id") || "";
-        await dropInfoFaqItemOnTarget(sourceId, targetId);
+        const position = record.classList.contains("is-drop-after") ? "after" : "before";
+        clearFaqDropMarkers();
+        await dropInfoFaqItemOnTarget(sourceId, targetId, position);
       });
     });
 
@@ -1650,7 +1706,10 @@ What is your application process?,Submit an application and wait for review.,Mem
         .se-faq-drag-handle:active{cursor:grabbing;}
         .se-faq-archived-lock{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:7px 10px;background:#fff3cd;color:#8a5200;border:1px solid #e8c56f;font-size:12px;font-weight:900;}
         .se-faq-record.is-dragging{opacity:.45;}
-        .se-faq-record.is-drop-target{outline:3px solid rgba(31,79,130,.25);border-color:#1f4f82;}
+        .se-faq-record.is-drop-before,.se-faq-record.is-drop-after{position:relative;}
+        .se-faq-record.is-drop-before::before,.se-faq-record.is-drop-after::after{content:"Drop here";position:absolute;left:14px;right:14px;height:0;border-top:4px solid #1f4f82;color:#1f4f82;font-size:11px;font-weight:900;line-height:1;background:transparent;z-index:2;}
+        .se-faq-record.is-drop-before::before{top:-8px;}
+        .se-faq-record.is-drop-after::after{bottom:-8px;}
         .se-archived-note{margin:0 0 12px 0;background:#fff8e6;border:1px solid #e8c56f;color:#744a00;border-radius:10px;padding:10px 12px;}
         
         .se-faq-record-details{min-width:0;}
@@ -1912,9 +1971,9 @@ What is your application process?,Submit an application and wait for review.,Mem
 
   function bindEvents() {
     window.addEventListener("beforeunload", (event) => {
-      if (!isDirty) return;
+      if (!isDirty && !infoFaqOrderSaving) return;
       event.preventDefault();
-      event.returnValue = DIRTY_MESSAGE;
+      event.returnValue = infoFaqOrderSaving ? "FAQ order is still saving. Leave anyway?" : DIRTY_MESSAGE;
     });
 
     document.getElementById("se-login")?.addEventListener("click", async () => {

@@ -6,7 +6,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-002";
+  const VERSION = "2026-06-05-003";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -26,6 +26,8 @@
   let cleanSignature = "";
   let showArchived = false;
   let mediaFilter = "all";
+  let mediaPage = 1;
+  let mediaPageSize = 25;
   let pendingUploads = [];
 
   const DIRTY_MESSAGE = "You have unsaved Media Library changes. Leave anyway?";
@@ -357,6 +359,7 @@
       include_archived: showArchived,
     });
     mediaItems = result.media || [];
+    mediaPage = 1;
     renderMediaList();
     setStatus(`Loaded ${mediaItems.length} media item(s).`);
   }
@@ -396,10 +399,42 @@
     });
   }
 
+  function currentFilteredMediaItems() {
+    return filteredMediaItems();
+  }
+
+  function pagedMediaItems(rows) {
+    const total = rows.length;
+    const pageSize = Math.max(5, Number(mediaPageSize) || 25);
+    const maxPage = Math.max(1, Math.ceil(total / pageSize));
+    if (mediaPage > maxPage) mediaPage = maxPage;
+    if (mediaPage < 1) mediaPage = 1;
+    const start = (mediaPage - 1) * pageSize;
+    return { total, pageSize, maxPage, start, rows: rows.slice(start, start + pageSize) };
+  }
+
+  function renderMediaPager(total, pageSize, maxPage, start, visibleCount) {
+    const top = getEl("se-media-pager-top");
+    const bottom = getEl("se-media-pager-bottom");
+    const html = total > 0 ? `
+      <div class="se-pager-info">Showing ${escapeHtml(String(start + 1))}-${escapeHtml(String(start + visibleCount))} of ${escapeHtml(String(total))}</div>
+      <div class="se-pager-controls">
+        <button class="se-button secondary" type="button" data-media-page="prev" ${mediaPage <= 1 ? "disabled" : ""}>Prev</button>
+        <span class="se-page-label">Page ${escapeHtml(String(mediaPage))} of ${escapeHtml(String(maxPage))}</span>
+        <button class="se-button secondary" type="button" data-media-page="next" ${mediaPage >= maxPage ? "disabled" : ""}>Next</button>
+        <label class="se-page-size"><span>Rows</span><select id="se-page-size" class="se-select"><option value="10" ${pageSize===10?"selected":""}>10</option><option value="25" ${pageSize===25?"selected":""}>25</option><option value="50" ${pageSize===50?"selected":""}>50</option><option value="100" ${pageSize===100?"selected":""}>100</option></select></label>
+      </div>` : `<div class="se-pager-info">No records</div>`;
+    if (top) top.innerHTML = html;
+    if (bottom) bottom.innerHTML = total > pageSize ? html : "";
+  }
+
   function renderMediaList() {
     const list = getEl("se-media-list");
     if (!list) return;
-    const rows = filteredMediaItems();
+    const allRows = currentFilteredMediaItems();
+    const page = pagedMediaItems(allRows);
+    const rows = page.rows;
+    renderMediaPager(page.total, page.pageSize, page.maxPage, page.start, rows.length);
     if (!rows.length) {
       list.innerHTML = `<div class="se-empty">No media records match this filter.</div>`;
       return;
@@ -722,6 +757,13 @@
         .se-preview-tile img{width:100%;height:110px;object-fit:contain;background:#f6f9fc;border-radius:8px;display:block;}
         .se-mini-remove{position:absolute;top:5px;right:5px;width:26px;height:26px;border-radius:999px;border:0;background:#9b1c1c;color:#fff;font-weight:900;cursor:pointer;}
         .se-youtube-preview{position:relative;width:100%;min-height:220px;display:grid;place-items:center;background:#0f172a;border-radius:10px;overflow:hidden;}.se-youtube-preview img{max-width:100%;max-height:360px;object-fit:contain;}
+        .se-media-scroll{max-height:760px;overflow:auto;padding-right:4px;scrollbar-gutter:stable;}
+        .se-pager{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:10px 0;padding:10px;border:1px solid #d9e0ea;border-radius:12px;background:#f7f9fc;}
+        .se-pager-info,.se-page-label{font-size:12px;color:#5d6b82;font-weight:900;}
+        .se-pager-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+        .se-page-size{display:flex;align-items:center;gap:6px;font-size:12px;color:#5d6b82;font-weight:900;}
+        .se-page-size .se-select{min-width:82px;padding:8px 9px;}
+        .se-button:disabled{opacity:.46;cursor:not-allowed;transform:none;}
         .se-media-row{display:grid;grid-template-columns:84px minmax(0,1fr) auto;gap:12px;align-items:center;border:1px solid #d9e0ea;border-radius:14px;padding:12px;margin-bottom:10px;background:#fbfcfe;}
         .se-media-row.is-selected{border-color:#1f4f82;background:#f4f8fd;}.se-media-row.is-archived{opacity:.75;background:#f7f2f2;}
         .se-media-thumb{width:84px;height:64px;border:1px solid #c7d2e2;border-radius:10px;display:grid;place-items:center;overflow:hidden;background:#fff;font-weight:900;color:#1f4f82;position:relative;}
@@ -777,7 +819,9 @@
 
             <section class="se-card">
               <h2 class="se-section-title">Media Records</h2>
-              <div id="se-media-list"><div class="se-empty">Log in and select an organization.</div></div>
+              <div id="se-media-pager-top" class="se-pager"></div>
+              <div id="se-media-list" class="se-media-scroll"><div class="se-empty">Log in and select an organization.</div></div>
+              <div id="se-media-pager-bottom" class="se-pager"></div>
             </section>
 
             <section class="se-card">
@@ -963,6 +1007,7 @@
     ensureRoot().querySelectorAll(".se-tab").forEach((btn) => {
       btn.addEventListener("click", () => {
         mediaFilter = btn.getAttribute("data-filter") || "all";
+        mediaPage = 1;
         ensureRoot().querySelectorAll(".se-tab").forEach((b) => b.classList.toggle("is-active", b === btn));
         renderMediaList();
       });
@@ -974,6 +1019,24 @@
       try { await saveMedia(); } catch (error) { setStatus("Save failed."); setOutput({ ok: false, event: "save_failed", message: error instanceof Error ? error.message : String(error) }); }
     });
     getEl("se-copy-output")?.addEventListener("click", copyOutput);
+
+    ensureRoot().addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const dir = target.getAttribute("data-media-page");
+      if (!dir) return;
+      if (dir === "prev") mediaPage = Math.max(1, mediaPage - 1);
+      if (dir === "next") mediaPage += 1;
+      renderMediaList();
+    });
+
+    ensureRoot().addEventListener("change", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLSelectElement) || target.id !== "se-page-size") return;
+      mediaPageSize = Number(target.value) || 25;
+      mediaPage = 1;
+      renderMediaList();
+    });
 
     getEl("se-media-list")?.addEventListener("click", async (event) => {
       const target = event.target;

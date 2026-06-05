@@ -1,13 +1,13 @@
 // ADMIN-PAGE-page-editor-current.js
-// Internal Version: 2026-06-04-008
-// Purpose: Page Editor with paginated/collapsed history, restore filters, reset-to-template-defaults, corrected dirty-state tracking, and Aircraft page contract fields.
+// Internal Version: 2026-06-05-001
+// Purpose: Page Editor with restore history, corrected dirty-state tracking, Aircraft fields, and Home public page fields.
 // Uses existing core-admin-action backend actions.
 // Actions used: list_customers, list_customer_pages, get_customer_page_settings, update_customer_page, update_page_settings, list_page_settings_history, restore_page_settings_snapshot, reset_page_settings_to_template_defaults.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-04-008";
+  const VERSION = "2026-06-05-001";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -370,6 +370,23 @@
     addIfElement(content, "empty_state_message", "se-empty-state-message");
     addIfElement(content, "note_body", "se-note-body");
 
+    addIfElement(content, "marquee_text", "se-marquee-text");
+    addIfElement(content, "marquee_image_url", "se-marquee-image-url");
+    addIfElement(content, "featured_label", "se-featured-label");
+    addIfElement(content, "featured_title", "se-featured-title");
+    addIfElement(content, "featured_intro", "se-featured-intro");
+    addIfElement(content, "featured_button_label", "se-featured-button-label");
+    addIfElement(content, "featured_button_url", "se-featured-button-url");
+    addIfElement(content, "mission_label", "se-mission-label");
+    addIfElement(content, "mission_title", "se-mission-title");
+    addIfElement(content, "mission_body", "se-mission-body");
+    addIfElement(content, "mission_cta_label", "se-mission-cta-label");
+    addIfElement(content, "mission_cta_url", "se-mission-cta-url");
+    addIfElement(content, "contact_label", "se-contact-label");
+    addIfElement(content, "contact_title", "se-contact-title");
+    addIfElement(content, "contact_intro", "se-contact-intro");
+    addIfElement(content, "contact_success_message", "se-contact-success-message");
+
     return content;
   }
 
@@ -384,6 +401,10 @@
     addIfElement(labels, "rate_label", "se-rate-label");
     addIfElement(labels, "annual_due_label", "se-annual-due-label");
     addIfElement(labels, "home_base_label", "se-home-base-label");
+    addIfElement(labels, "contact_name_placeholder", "se-contact-name-placeholder");
+    addIfElement(labels, "contact_email_placeholder", "se-contact-email-placeholder");
+    addIfElement(labels, "contact_message_placeholder", "se-contact-message-placeholder");
+    addIfElement(labels, "contact_submit_label", "se-contact-submit-label");
 
     return labels;
   }
@@ -402,6 +423,10 @@
     addCheckedIfElement(options, "show_public_rates", "se-show-public-rates");
     addCheckedIfElement(options, "show_public_annual_due", "se-show-public-annual-due");
     addCheckedIfElement(options, "show_note_strip", "se-show-note-strip");
+    addCheckedIfElement(options, "show_featured_photo", "se-show-featured-photo");
+    addCheckedIfElement(options, "show_mission_card", "se-show-mission-card");
+    addCheckedIfElement(options, "show_contact_form", "se-show-contact-form");
+    addCheckedIfElement(options, "marquee_pause_middle", "se-marquee-pause-middle");
 
     return options;
   }
@@ -626,6 +651,7 @@
     const options = settings.options_json || {};
     const page = currentCustomerPage || {};
     const templateKey = String(page.template_key || page.page_key || "").toLowerCase();
+    const isHomePage = templateKey === "home";
     const isAircraftPage = templateKey === "aircraft";
 
     const editor = getEl("se-editor-fields");
@@ -672,6 +698,80 @@
         <label class="se-field"><span class="se-label">Announcement Text</span><textarea id="se-announcement-text" class="se-input se-textarea">${escapeHtml(content.announcement_text || "")}</textarea></label>
         <label class="se-field"><span class="se-label">Secondary Heading</span><input id="se-secondary-heading" class="se-input" type="text" value="${escapeHtml(content.secondary_heading || "")}"></label>
         <label class="se-field"><span class="se-label">Secondary Body</span><textarea id="se-secondary-body" class="se-input se-textarea">${escapeHtml(content.secondary_body || "")}</textarea></label>
+      </section>
+    `;
+
+    const homeHtml = `
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Home Hero Stats</h2>
+        <p class="se-subtitle">Optional manual stat cards. Blank cards are omitted by the public renderer.</p>
+        <div class="se-two-col">
+          <label class="se-field"><span class="se-label">Stat 1 Label</span><input id="se-stat-1-label" class="se-input" type="text" value="${escapeHtml(content.stat_1_label || "")}"></label>
+          <label class="se-field"><span class="se-label">Stat 1 Text</span><input id="se-stat-1-text" class="se-input" type="text" value="${escapeHtml(content.stat_1_text || "")}"></label>
+          <label class="se-field"><span class="se-label">Stat 2 Label</span><input id="se-stat-2-label" class="se-input" type="text" value="${escapeHtml(content.stat_2_label || "")}"></label>
+          <label class="se-field"><span class="se-label">Stat 2 Text</span><input id="se-stat-2-text" class="se-input" type="text" value="${escapeHtml(content.stat_2_text || "")}"></label>
+          <label class="se-field"><span class="se-label">Stat 3 Label</span><input id="se-stat-3-label" class="se-input" type="text" value="${escapeHtml(content.stat_3_label || "")}"></label>
+          <label class="se-field"><span class="se-label">Stat 3 Text</span><input id="se-stat-3-text" class="se-input" type="text" value="${escapeHtml(content.stat_3_text || "")}"></label>
+        </div>
+      </section>
+
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Announcement / Banner Tow</h2>
+        <p class="se-subtitle">Use the left-side feature toggles to turn the announcement strip or banner scroller on/off for this page.</p>
+        <label class="se-field"><span class="se-label">Announcement Strip Text</span><textarea id="se-announcement-text" class="se-input se-textarea">${escapeHtml(content.announcement_text || "")}</textarea></label>
+        <label class="se-field"><span class="se-label">Marquee / Banner Tow Text</span><textarea id="se-marquee-text" class="se-input se-textarea">${escapeHtml(content.marquee_text || "")}</textarea></label>
+        <label class="se-field"><span class="se-label">Marquee Image URL</span><input id="se-marquee-image-url" class="se-input" type="text" value="${escapeHtml(content.marquee_image_url || "")}"><small>Optional. Leave blank for text-only banner.</small></label>
+        <label class="se-check"><input id="se-marquee-pause-middle" type="checkbox" ${checkAttr(options.marquee_pause_middle !== false)}><span>Pause banner in the middle long enough to read</span></label>
+      </section>
+
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Featured Photo</h2>
+        <p class="se-subtitle">Uses a random public featured Gallery image when available. If no featured image exists, this section disappears publicly.</p>
+        <label class="se-field"><span class="se-label">Section Label</span><input id="se-featured-label" class="se-input" type="text" value="${escapeHtml(content.featured_label || "")}"></label>
+        <label class="se-field"><span class="se-label">Title</span><input id="se-featured-title" class="se-input" type="text" value="${escapeHtml(content.featured_title || "")}"></label>
+        <label class="se-field"><span class="se-label">Intro</span><textarea id="se-featured-intro" class="se-input se-textarea">${escapeHtml(content.featured_intro || "")}</textarea></label>
+        <div class="se-two-col">
+          <label class="se-field"><span class="se-label">Button Label</span><input id="se-featured-button-label" class="se-input" type="text" value="${escapeHtml(content.featured_button_label || "")}"></label>
+          <label class="se-field"><span class="se-label">Button URL</span><input id="se-featured-button-url" class="se-input" type="text" value="${escapeHtml(content.featured_button_url || "")}"></label>
+        </div>
+      </section>
+
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Mission / About Card</h2>
+        <label class="se-field"><span class="se-label">Section Label</span><input id="se-mission-label" class="se-input" type="text" value="${escapeHtml(content.mission_label || "")}"></label>
+        <label class="se-field"><span class="se-label">Title</span><input id="se-mission-title" class="se-input" type="text" value="${escapeHtml(content.mission_title || "")}"></label>
+        <label class="se-field"><span class="se-label">Body</span><textarea id="se-mission-body" class="se-input se-textarea">${escapeHtml(content.mission_body || "")}</textarea></label>
+        <div class="se-two-col">
+          <label class="se-field"><span class="se-label">CTA Label</span><input id="se-mission-cta-label" class="se-input" type="text" value="${escapeHtml(content.mission_cta_label || "")}"></label>
+          <label class="se-field"><span class="se-label">CTA URL</span><input id="se-mission-cta-url" class="se-input" type="text" value="${escapeHtml(content.mission_cta_url || "")}"></label>
+        </div>
+      </section>
+
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Contact Form</h2>
+        <p class="se-subtitle">Public submissions are stored in Supabase first. Email notification can be added later.</p>
+        <label class="se-field"><span class="se-label">Section Label</span><input id="se-contact-label" class="se-input" type="text" value="${escapeHtml(content.contact_label || "")}"></label>
+        <label class="se-field"><span class="se-label">Title</span><input id="se-contact-title" class="se-input" type="text" value="${escapeHtml(content.contact_title || "")}"></label>
+        <label class="se-field"><span class="se-label">Intro</span><textarea id="se-contact-intro" class="se-input se-textarea">${escapeHtml(content.contact_intro || "")}</textarea></label>
+        <label class="se-field"><span class="se-label">Success Message</span><textarea id="se-contact-success-message" class="se-input se-textarea">${escapeHtml(content.contact_success_message || "")}</textarea></label>
+        <div class="se-two-col">
+          <label class="se-field"><span class="se-label">Name Placeholder</span><input id="se-contact-name-placeholder" class="se-input" type="text" value="${escapeHtml(labels.contact_name_placeholder || "Name")}"></label>
+          <label class="se-field"><span class="se-label">Email Placeholder</span><input id="se-contact-email-placeholder" class="se-input" type="text" value="${escapeHtml(labels.contact_email_placeholder || "Email")}"></label>
+          <label class="se-field"><span class="se-label">Message Placeholder</span><input id="se-contact-message-placeholder" class="se-input" type="text" value="${escapeHtml(labels.contact_message_placeholder || "Message")}"></label>
+          <label class="se-field"><span class="se-label">Submit Button Label</span><input id="se-contact-submit-label" class="se-input" type="text" value="${escapeHtml(labels.contact_submit_label || "Send Message")}"></label>
+        </div>
+      </section>
+
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Home Display Options / Note</h2>
+        <div class="se-two-col">
+          <label class="se-check"><input id="se-show-hero-stats" type="checkbox" ${checkAttr(options.show_hero_stats !== false)}><span>Show hero stat cards when fields are filled</span></label>
+          <label class="se-check"><input id="se-show-featured-photo" type="checkbox" ${checkAttr(options.show_featured_photo !== false)}><span>Show featured photo when available</span></label>
+          <label class="se-check"><input id="se-show-mission-card" type="checkbox" ${checkAttr(options.show_mission_card !== false)}><span>Show mission/about card when filled</span></label>
+          <label class="se-check"><input id="se-show-contact-form" type="checkbox" ${checkAttr(options.show_contact_form !== false)}><span>Show contact form</span></label>
+          <label class="se-check"><input id="se-show-note-strip" type="checkbox" ${checkAttr(options.show_note_strip !== false)}><span>Show note strip when filled</span></label>
+        </div>
+        <label class="se-field" style="margin-top:12px;"><span class="se-label">Note / Disclaimer</span><textarea id="se-note-body" class="se-input se-textarea">${escapeHtml(content.note_body || "")}</textarea></label>
       </section>
     `;
 
@@ -725,7 +825,7 @@
       </section>
     `;
 
-    editor.innerHTML = pageIdentityHtml + heroHtml + (isAircraftPage ? aircraftHtml : genericHtml);
+    editor.innerHTML = pageIdentityHtml + heroHtml + (isAircraftPage ? aircraftHtml : isHomePage ? homeHtml : genericHtml);
 
     isHydrating = true;
     bindDirtyWithin(editor);

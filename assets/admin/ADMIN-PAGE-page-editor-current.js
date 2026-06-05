@@ -1,5 +1,5 @@
 // ADMIN-PAGE-page-editor-current.js
-// Internal Version: 2026-06-05-004
+// Internal Version: 2026-06-05-004-A
 // Purpose: Page Editor with restore history, corrected dirty-state tracking, Aircraft fields, Home public page fields, and Gallery public page fields.
 // Uses existing core-admin-action backend actions.
 // Actions used: list_customers, list_customer_pages, get_customer_page_settings, update_customer_page, update_page_settings, list_page_settings_history, restore_page_settings_snapshot, reset_page_settings_to_template_defaults.
@@ -7,7 +7,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-004";
+  const VERSION = "2026-06-05-004-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -39,6 +39,7 @@
   let isInfoFaqHydrating = false;
   let infoFaqIncludeArchived = true;
   let infoFaqCsvPreviewRows = [];
+  let infoFaqDragItemId = "";
   const DIRTY_MESSAGE = "You have unsaved Page Editor changes. Leave anyway?";
 
   const FEATURE_DEFAULTS = {
@@ -1045,6 +1046,31 @@
     };
   }
 
+  function normalizedFaqCategory(item) {
+    return String((item || {}).category || "General").trim() || "General";
+  }
+
+  function isFaqArchived(item) {
+    return Boolean((item || {}).archived_at) || String((item || {}).status || "").toLowerCase() === "archived";
+  }
+
+  function sortedInfoFaqItems() {
+    return [...infoFaqItems].sort((a, b) => {
+      const ca = normalizedFaqCategory(a).toLowerCase();
+      const cb = normalizedFaqCategory(b).toLowerCase();
+      if (ca !== cb) return ca.localeCompare(cb);
+      const sa = Number(a.sort_order ?? 100);
+      const sb = Number(b.sort_order ?? 100);
+      if (sa !== sb) return sa - sb;
+      return String(a.question || "").localeCompare(String(b.question || ""));
+    });
+  }
+
+  function reorderableFaqItemsForCategory(category) {
+    const targetCategory = String(category || "General").trim() || "General";
+    return sortedInfoFaqItems().filter((item) => normalizedFaqCategory(item) === targetCategory && !isFaqArchived(item));
+  }
+
   function renderCsvPreview(rows) {
     const target = getEl("se-faq-csv-preview");
     if (!target) return;
@@ -1152,6 +1178,65 @@
     renderInfoFaqManager();
   }
 
+  async function saveFaqOrderForCategory(category, orderedItems) {
+    if (!selectedCustomerPageId || !isCurrentInfoPage()) return;
+    const targetCategory = String(category || "General").trim() || "General";
+    setStatus(`Saving FAQ order for ${targetCategory}...`);
+    for (let index = 0; index < orderedItems.length; index += 1) {
+      const item = orderedItems[index];
+      const sortOrder = (index + 1) * 100;
+      await callCoreAdminAction("upsert_info_faq_item", {
+        customer_page_id: selectedCustomerPageId,
+        faq_item_id: item.faq_item_id,
+        category: normalizedFaqCategory(item),
+        question: item.question || "Untitled FAQ",
+        answer: item.answer || " ",
+        sort_order: sortOrder,
+        visibility: item.visibility || "public",
+        status: item.status || "active",
+        metadata_json: { reordered_from: "page_editor_inline_faq_manager" }
+      });
+    }
+    await loadInfoFaqItems(true);
+    setStatus(`FAQ order saved for ${targetCategory}.`);
+  }
+
+  async function moveInfoFaqItem(faqItemId, direction) {
+    if (!confirmDiscardInfoFaqChanges("You have unsaved FAQ item changes. Reorder FAQs and discard the unsaved edit fields?")) return;
+    const item = infoFaqItems.find((row) => String(row.faq_item_id) === String(faqItemId));
+    if (!item || isFaqArchived(item)) return;
+    const category = normalizedFaqCategory(item);
+    const rows = reorderableFaqItemsForCategory(category);
+    const index = rows.findIndex((row) => String(row.faq_item_id) === String(faqItemId));
+    if (index < 0) return;
+    const nextIndex = direction === "up" ? index - 1 : index + 1;
+    if (nextIndex < 0 || nextIndex >= rows.length) return;
+    const reordered = [...rows];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(nextIndex, 0, moved);
+    selectedInfoFaqItemId = String(faqItemId);
+    await saveFaqOrderForCategory(category, reordered);
+  }
+
+  async function dropInfoFaqItemOnTarget(sourceId, targetId) {
+    if (!sourceId || !targetId || String(sourceId) === String(targetId)) return;
+    if (!confirmDiscardInfoFaqChanges("You have unsaved FAQ item changes. Reorder FAQs and discard the unsaved edit fields?")) return;
+    const source = infoFaqItems.find((row) => String(row.faq_item_id) === String(sourceId));
+    const target = infoFaqItems.find((row) => String(row.faq_item_id) === String(targetId));
+    if (!source || !target || isFaqArchived(source) || isFaqArchived(target)) return;
+    const category = normalizedFaqCategory(source);
+    if (category !== normalizedFaqCategory(target)) {
+      setStatus("Drag reorder only works within the same FAQ category. Change the category field to move a FAQ to another category.");
+      return;
+    }
+    const rows = reorderableFaqItemsForCategory(category).filter((row) => String(row.faq_item_id) !== String(sourceId));
+    const targetIndex = rows.findIndex((row) => String(row.faq_item_id) === String(targetId));
+    if (targetIndex < 0) return;
+    rows.splice(targetIndex, 0, source);
+    selectedInfoFaqItemId = String(sourceId);
+    await saveFaqOrderForCategory(category, rows);
+  }
+
   function bindInfoFaqManagerEvents(wrap) {
     wrap.querySelectorAll("input, textarea, select").forEach((el) => {
       if (el.dataset.infoFaqDirtyBound === "true") return;
@@ -1165,6 +1250,40 @@
         if (!confirmDiscardInfoFaqChanges("You have unsaved FAQ item changes. Switch records and discard them?")) return;
         selectedInfoFaqItemId = button.getAttribute("data-faq-edit") || "";
         renderInfoFaqManager();
+      });
+    });
+
+    wrap.querySelectorAll("[data-faq-move]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        await moveInfoFaqItem(button.getAttribute("data-faq-id") || "", button.getAttribute("data-faq-move") || "");
+      });
+    });
+
+    wrap.querySelectorAll("[data-faq-drag-id]").forEach((row) => {
+      row.addEventListener("dragstart", (event) => {
+        infoFaqDragItemId = row.getAttribute("data-faq-drag-id") || "";
+        row.classList.add("is-dragging");
+        try { event.dataTransfer.setData("text/plain", infoFaqDragItemId); } catch (error) {}
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+      });
+      row.addEventListener("dragend", () => {
+        row.classList.remove("is-dragging");
+        infoFaqDragItemId = "";
+      });
+      row.addEventListener("dragover", (event) => {
+        if (!infoFaqDragItemId) return;
+        event.preventDefault();
+        row.classList.add("is-drag-over");
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      });
+      row.addEventListener("dragleave", () => row.classList.remove("is-drag-over"));
+      row.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        row.classList.remove("is-drag-over");
+        const sourceId = infoFaqDragItemId || (event.dataTransfer ? event.dataTransfer.getData("text/plain") : "");
+        const targetId = row.getAttribute("data-faq-drag-id") || "";
+        infoFaqDragItemId = "";
+        await dropInfoFaqItemOnTarget(sourceId, targetId);
       });
     });
 
@@ -1209,15 +1328,29 @@
     const current = currentInfoFaqItem();
     const activeCount = infoFaqItems.filter((item) => !item.archived_at && item.status !== "archived").length;
     const archivedCount = infoFaqItems.filter((item) => item.archived_at || item.status === "archived").length;
-    const rows = infoFaqItems.map((item) => {
+    const groupedRows = [];
+    let lastCategory = "";
+    sortedInfoFaqItems().forEach((item) => {
       const display = normalizeFaqRowForDisplay(item);
+      const category = normalizedFaqCategory(display);
+      if (category !== lastCategory) {
+        groupedRows.push(`<div class="se-faq-category-row">${escapeHtml(category)}</div>`);
+        lastCategory = category;
+      }
       const isSelected = String(display.faq_item_id) === String(selectedInfoFaqItemId);
-      const meta = [display.category, display.visibility, display.status, `sort ${display.sort_order}`].filter(Boolean).join(" • ");
-      return `<div class="se-faq-row ${isSelected ? "is-selected" : ""}">
-        <div><strong>${escapeHtml(display.question)}</strong><small>${escapeHtml(meta)}${display.archived_at ? " • archived" : ""}</small></div>
-        <button class="se-button secondary small" type="button" data-faq-edit="${escapeHtml(display.faq_item_id)}">Edit</button>
-      </div>`;
-    }).join("");
+      const archived = Boolean(display.archived_at) || display.status === "archived";
+      const meta = [display.visibility, display.status, `sort ${display.sort_order}`].filter(Boolean).join(" • ");
+      groupedRows.push(`<div class="se-faq-row ${isSelected ? "is-selected" : ""} ${archived ? "is-archived" : ""}" ${archived ? "" : `draggable="true" data-faq-drag-id="${escapeHtml(display.faq_item_id)}"`}>
+        <button class="se-faq-drag-handle" type="button" title="Drag to reorder within ${escapeHtml(category)}" ${archived ? "disabled" : ""}>↕</button>
+        <div><strong>${escapeHtml(display.question)}</strong><small>${escapeHtml(meta)}${archived ? " • archived" : ""}</small></div>
+        <div class="se-faq-row-controls">
+          <button class="se-button secondary small" type="button" data-faq-move="up" data-faq-id="${escapeHtml(display.faq_item_id)}" ${archived ? "disabled" : ""}>↑</button>
+          <button class="se-button secondary small" type="button" data-faq-move="down" data-faq-id="${escapeHtml(display.faq_item_id)}" ${archived ? "disabled" : ""}>↓</button>
+          <button class="se-button secondary small" type="button" data-faq-edit="${escapeHtml(display.faq_item_id)}">Edit</button>
+        </div>
+      </div>`);
+    });
+    const rows = groupedRows.join("");
 
     isInfoFaqHydrating = true;
     wrap.innerHTML = `
@@ -1237,7 +1370,7 @@
           <h3 class="se-faq-subtitle">${current ? "Edit FAQ Item" : "New FAQ Item"}</h3>
           <div class="se-two-col">
             <label class="se-field"><span class="se-label">Category</span><input id="se-faq-item-category" class="se-input" type="text" data-skip-page-dirty="true" value="${escapeHtml(current?.category || "General")}" placeholder="General, Membership, Operations"></label>
-            <label class="se-field"><span class="se-label">Sort Order</span><input id="se-faq-item-sort" class="se-input" type="number" data-skip-page-dirty="true" value="${escapeHtml(current?.sort_order ?? 100)}"></label>
+            <label class="se-field"><span class="se-label">Sort Order</span><input id="se-faq-item-sort" class="se-input" type="number" data-skip-page-dirty="true" value="${escapeHtml(current?.sort_order ?? 100)}"><span class="se-help">Usually set by drag/move controls. Lower numbers show first within a category.</span></label>
           </div>
           <label class="se-field"><span class="se-label">Question</span><input id="se-faq-item-question" class="se-input" type="text" data-skip-page-dirty="true" value="${escapeHtml(current?.question || "")}"></label>
           <label class="se-field"><span class="se-label">Answer</span><textarea id="se-faq-item-answer" class="se-input se-textarea" data-skip-page-dirty="true">${escapeHtml(current?.answer || "")}</textarea></label>
@@ -1271,7 +1404,18 @@
 
       <details class="se-faq-import">
         <summary>CSV Import / Seed FAQs</summary>
-        <p class="se-subtitle">Paste or upload CSV. Recommended headers: question, answer, category, sort_order. Import creates new FAQ records; it does not overwrite existing rows.</p>
+        <p class="se-subtitle">Paste or upload CSV to create new FAQ records. This import does not overwrite existing FAQs.</p>
+        <div class="se-import-help">
+          <strong>Expected CSV format</strong>
+          <ul>
+            <li>First row should contain headers.</li>
+            <li>Required columns: <code>question</code>, <code>answer</code>.</li>
+            <li>Optional columns: <code>category</code>, <code>sort_order</code>, <code>visibility</code>, <code>status</code>.</li>
+            <li>Supported alternate headers include <code>faq_question</code>, <code>faq_answer</code>, <code>q</code>, <code>a</code>, <code>sort</code>, and <code>order</code>.</li>
+          </ul>
+          <pre>question,answer,category,sort_order
+What is your application process?,Submit an application and wait for review.,Membership,100</pre>
+        </div>
         <label class="se-field"><span class="se-label">CSV File</span><input id="se-faq-csv-file" class="se-input" type="file" accept=".csv,text/csv,text/plain" data-skip-page-dirty="true"></label>
         <label class="se-field"><span class="se-label">CSV Text</span><textarea id="se-faq-csv-text" class="se-input se-textarea" data-skip-page-dirty="true" placeholder="question,answer,category,sort_order\nWhat is your application process?,Submit an application and wait for review.,Membership,100"></textarea></label>
         <div class="se-faq-actions">
@@ -1435,10 +1579,23 @@
         .se-faq-editor-panel,.se-faq-list-panel,.se-faq-import{border:1px solid #e1e7f0;background:#fbfcfe;border-radius:12px;padding:14px;}
         .se-faq-subtitle{margin:0 0 12px 0;font-size:16px;line-height:1.25;color:#172033;}
         .se-faq-list{display:grid;gap:8px;max-height:420px;overflow:auto;padding-right:4px;}
-        .se-faq-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;border:1px solid #e1e7f0;border-radius:12px;padding:10px;background:#fff;}
+        .se-faq-category-row{position:sticky;top:0;z-index:1;margin-top:4px;padding:7px 10px;border-radius:10px;background:#e9f1fb;color:#1f4f82;font-size:12px;font-weight:900;letter-spacing:.04em;text-transform:uppercase;}
+        .se-faq-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;border:1px solid #e1e7f0;border-radius:12px;padding:10px;background:#fff;}
         .se-faq-row.is-selected{border-color:#1f4f82;background:#eef5ff;}
+        .se-faq-row.is-dragging{opacity:.55;}
+        .se-faq-row.is-drag-over{border-color:#1f4f82;box-shadow:0 0 0 3px rgba(31,79,130,.12);}
+        .se-faq-row.is-archived{opacity:.68;}
         .se-faq-row strong{display:block;color:#172033;}
         .se-faq-row small{display:block;color:#5d6b82;margin-top:3px;}
+        .se-faq-drag-handle{width:34px;height:34px;border:1px solid #d9e0ea;border-radius:10px;background:#f8fafc;color:#1f4f82;font-weight:900;cursor:grab;}
+        .se-faq-drag-handle:disabled{cursor:not-allowed;opacity:.45;}
+        .se-faq-row-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;}
+        .se-help{display:block;margin-top:5px;color:#6b778c;font-size:12px;line-height:1.35;}
+        .se-import-help{margin:10px 0 14px;padding:12px;border:1px solid #d9e0ea;border-radius:12px;background:#fff;color:#26344d;font-size:13px;line-height:1.45;}
+        .se-import-help ul{margin:8px 0 0 18px;padding:0;}
+        .se-import-help li{margin:3px 0;}
+        .se-import-help code{font-family:Consolas,Menlo,monospace;background:#eef3f8;border-radius:5px;padding:1px 4px;}
+        .se-import-help pre{white-space:pre-wrap;overflow:auto;margin:10px 0 0;padding:10px;border-radius:10px;background:#172033;color:#fff;font-family:Consolas,Menlo,monospace;font-size:12px;}
         .se-faq-import summary{cursor:pointer;font-weight:900;color:#1f4f82;margin-bottom:10px;}
         .se-faq-csv-table-wrap{max-height:260px;overflow:auto;border:1px solid #e1e7f0;border-radius:10px;background:#fff;}
         .se-faq-csv-table{width:100%;border-collapse:collapse;font-size:12px;}

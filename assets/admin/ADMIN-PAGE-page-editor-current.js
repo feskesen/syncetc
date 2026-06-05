@@ -1,13 +1,13 @@
 // ADMIN-PAGE-page-editor-current.js
-// Internal Version: 2026-06-05-001
-// Purpose: Page Editor with restore history, corrected dirty-state tracking, Aircraft fields, and Home public page fields.
+// Internal Version: 2026-06-05-002
+// Purpose: Page Editor with restore history, corrected dirty-state tracking, Aircraft fields, Home public page fields, and Gallery public page fields.
 // Uses existing core-admin-action backend actions.
 // Actions used: list_customers, list_customer_pages, get_customer_page_settings, update_customer_page, update_page_settings, list_page_settings_history, restore_page_settings_snapshot, reset_page_settings_to_template_defaults.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-001";
+  const VERSION = "2026-06-05-002";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -387,6 +387,10 @@
     addIfElement(content, "contact_intro", "se-contact-intro");
     addIfElement(content, "contact_success_message", "se-contact-success-message");
 
+    addIfElement(content, "gallery_label", "se-gallery-label");
+    addIfElement(content, "gallery_title", "se-gallery-title");
+    addIfElement(content, "gallery_intro", "se-gallery-intro");
+
     return content;
   }
 
@@ -427,6 +431,10 @@
     addCheckedIfElement(options, "show_mission_card", "se-show-mission-card");
     addCheckedIfElement(options, "show_contact_form", "se-show-contact-form");
     addCheckedIfElement(options, "marquee_pause_middle", "se-marquee-pause-middle");
+    addCheckedIfElement(options, "show_gallery_intro", "se-show-gallery-intro");
+    addCheckedIfElement(options, "show_photo_captions", "se-show-photo-captions");
+    addCheckedIfElement(options, "show_photo_credit", "se-show-photo-credit");
+    addCheckedIfElement(options, "show_featured_first", "se-show-featured-first");
 
     return options;
   }
@@ -653,6 +661,7 @@
     const templateKey = String(page.template_key || page.page_key || "").toLowerCase();
     const isHomePage = templateKey === "home";
     const isAircraftPage = templateKey === "aircraft";
+    const isGalleryPage = templateKey === "gallery";
 
     const editor = getEl("se-editor-fields");
     if (!editor) return;
@@ -775,6 +784,29 @@
       </section>
     `;
 
+    const galleryHtml = `
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Gallery Intro</h2>
+        <p class="se-subtitle">Optional copy above the public gallery grid. Blank fields are omitted.</p>
+        <label class="se-field"><span class="se-label">Section Label</span><input id="se-gallery-label" class="se-input" type="text" value="${escapeHtml(content.gallery_label || "")}"></label>
+        <label class="se-field"><span class="se-label">Gallery Title</span><input id="se-gallery-title" class="se-input" type="text" value="${escapeHtml(content.gallery_title || "")}"></label>
+        <label class="se-field"><span class="se-label">Gallery Intro</span><textarea id="se-gallery-intro" class="se-input se-textarea">${escapeHtml(content.gallery_intro || "")}</textarea></label>
+        <label class="se-field"><span class="se-label">Empty State Message</span><textarea id="se-empty-state-message" class="se-input se-textarea">${escapeHtml(content.empty_state_message || "No public gallery photos are available yet.")}</textarea></label>
+      </section>
+
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Gallery Display Options / Note</h2>
+        <div class="se-two-col">
+          <label class="se-check"><input id="se-show-gallery-intro" type="checkbox" ${checkAttr(options.show_gallery_intro !== false)}><span>Show gallery intro card when fields are filled</span></label>
+          <label class="se-check"><input id="se-show-photo-captions" type="checkbox" ${checkAttr(options.show_photo_captions !== false)}><span>Show photo captions/titles</span></label>
+          <label class="se-check"><input id="se-show-photo-credit" type="checkbox" ${checkAttr(options.show_photo_credit !== false)}><span>Show photo credit</span></label>
+          <label class="se-check"><input id="se-show-featured-first" type="checkbox" ${checkAttr(options.show_featured_first !== false)}><span>Sort featured photos first</span></label>
+          <label class="se-check"><input id="se-show-note-strip" type="checkbox" ${checkAttr(options.show_note_strip === true)}><span>Show note strip when filled</span></label>
+        </div>
+        <label class="se-field" style="margin-top:12px;"><span class="se-label">Note / Disclaimer</span><textarea id="se-note-body" class="se-input se-textarea">${escapeHtml(content.note_body || "")}</textarea></label>
+      </section>
+    `;
+
     const aircraftHtml = `
       <section class="se-card se-inner-card">
         <h2 class="se-section-title">Aircraft Hero Stats</h2>
@@ -825,7 +857,7 @@
       </section>
     `;
 
-    editor.innerHTML = pageIdentityHtml + heroHtml + (isAircraftPage ? aircraftHtml : isHomePage ? homeHtml : genericHtml);
+    editor.innerHTML = pageIdentityHtml + heroHtml + (isAircraftPage ? aircraftHtml : isHomePage ? homeHtml : isGalleryPage ? galleryHtml : genericHtml);
 
     isHydrating = true;
     bindDirtyWithin(editor);

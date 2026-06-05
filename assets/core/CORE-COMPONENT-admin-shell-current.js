@@ -7,7 +7,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-04-003";
+  const VERSION = "2026-06-05-001";
   const SHELL_ID = "syncetc-admin-shell";
   const LOGO_URL = "https://bxywokidhgppmlzyqvem.supabase.co/storage/v1/object/public/core-assets/SyncEtc-logo-compact.png";
 
@@ -41,6 +41,11 @@
       label: "Aircraft Admin",
       href: "/aircraft-admin",
       match: "/aircraft-admin"
+    },
+    {
+      label: "Media Library",
+      href: "/media-library",
+      match: "/media-library"
     },
     {
       label: "Layout Designer",

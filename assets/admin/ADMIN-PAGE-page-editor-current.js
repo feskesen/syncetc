@@ -1,5 +1,5 @@
 // ADMIN-PAGE-page-editor-current.js
-// Internal Version: 2026-06-05-003
+// Internal Version: 2026-06-05-004
 // Purpose: Page Editor with restore history, corrected dirty-state tracking, Aircraft fields, Home public page fields, and Gallery public page fields.
 // Uses existing core-admin-action backend actions.
 // Actions used: list_customers, list_customer_pages, get_customer_page_settings, update_customer_page, update_page_settings, list_page_settings_history, restore_page_settings_snapshot, reset_page_settings_to_template_defaults.
@@ -7,7 +7,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-003";
+  const VERSION = "2026-06-05-004";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -32,6 +32,13 @@
   let pageHistoryLimit = 10;
   let pageHistoryTotalCount = 0;
   let pageHistoryFilter = "all";
+  let infoFaqItems = [];
+  let selectedInfoFaqItemId = "";
+  let infoFaqDirty = false;
+  let infoFaqCleanSignature = "";
+  let isInfoFaqHydrating = false;
+  let infoFaqIncludeArchived = true;
+  let infoFaqCsvPreviewRows = [];
   const DIRTY_MESSAGE = "You have unsaved Page Editor changes. Leave anyway?";
 
   const FEATURE_DEFAULTS = {
@@ -143,7 +150,11 @@
 
   function syncShellDirtyState() {
     if (window.SyncEtcAdminShell && typeof window.SyncEtcAdminShell.setDirty === "function") {
-      window.SyncEtcAdminShell.setDirty(isDirty, DIRTY_MESSAGE);
+      const anyDirty = Boolean(isDirty || infoFaqDirty);
+      const message = infoFaqDirty && !isDirty
+        ? "You have unsaved FAQ item changes. Leave anyway?"
+        : DIRTY_MESSAGE;
+      window.SyncEtcAdminShell.setDirty(anyDirty, message);
     }
   }
 
@@ -466,6 +477,7 @@
   function bindDirtyWithin(root) {
     if (!root) return;
     root.querySelectorAll("input, textarea, select").forEach((el) => {
+      if (el.closest("[data-skip-page-dirty='true']")) return;
       if (el.dataset.dirtyBound === "true") return;
       el.dataset.dirtyBound = "true";
       el.addEventListener("input", markDirty);
@@ -665,6 +677,10 @@
     currentPageSettings = null;
     currentEditableSchema = null;
     pageHistory = [];
+    infoFaqItems = [];
+    selectedInfoFaqItemId = "";
+    infoFaqCsvPreviewRows = [];
+    setInfoFaqDirty(false);
     clearFeatureToggles();
 
     const editor = getEl("se-editor-fields");
@@ -850,27 +866,34 @@
 
       <section class="se-card se-inner-card">
         <h2 class="se-section-title">Board / Officers</h2>
-        <p class="se-subtitle">Dynamic mode pulls from people + organization roles once roster data exists. Manual and hybrid modes allow override rows now.</p>
+        <p class="se-subtitle">Dynamic mode will pull from people + organization roles once roster data exists. Manual and hybrid modes allow corporate-admin override rows now.</p>
         <div class="se-two-col">
           <label class="se-field"><span class="se-label">Board Label</span><input id="se-board-label" class="se-input" type="text" value="${escapeHtml(content.board_label || "Leadership")}"></label>
           <label class="se-field"><span class="se-label">Board Title</span><input id="se-board-title" class="se-input" type="text" value="${escapeHtml(content.board_title || "Board / Officers")}"></label>
         </div>
         <label class="se-field"><span class="se-label">Board Intro</span><textarea id="se-board-intro" class="se-input se-textarea">${escapeHtml(content.board_intro || "")}</textarea></label>
         <label class="se-field"><span class="se-label">Officer Source Mode</span><select id="se-officer-source-mode" class="se-select">
-          <option value="dynamic" ${selectedAttr(content.officer_source_mode || "dynamic", "dynamic")}>dynamic: use roster/roles</option>
+          <option value="dynamic" ${selectedAttr(content.officer_source_mode || "dynamic", "dynamic")}>dynamic: use roster/roles when available</option>
           <option value="manual" ${selectedAttr(content.officer_source_mode, "manual")}>manual: use rows below</option>
           <option value="hybrid" ${selectedAttr(content.officer_source_mode, "hybrid")}>hybrid: dynamic plus manual rows</option>
         </select></label>
-        <label class="se-field"><span class="se-label">Manual Officer Rows</span><textarea id="se-manual-officers-json" class="se-input se-textarea" placeholder="President | Jane Smith
-Vice President | Arnie Palmer">${escapeHtml(content.manual_officers_json || "")}</textarea><small>Enter one officer per line. Use the pipe character | to separate the title from the name, like President | Jane Smith.</small><small>Public officer emails are intentionally not collected or shown here. Use the Contact form/contact-board link for public inquiries.</small></label>
+        <label class="se-field"><span class="se-label">Manual Officer Rows</span><textarea id="se-manual-officers-json" class="se-input se-textarea" placeholder="President | Jane Smith\nVice President | Arnie Palmer">${escapeHtml(content.manual_officers_json || "")}</textarea><small>Enter one officer per line. Use the pipe character | to separate the title from the name, like President | Jane Smith.</small><small>Public officer emails are intentionally not collected or shown here. Use the Contact form/contact-board link for public inquiries.</small></label>
       </section>
 
       <section class="se-card se-inner-card">
         <h2 class="se-section-title">FAQ Page Copy</h2>
-        <p class="se-subtitle">FAQ question/answer records are managed in FAQ Manager. These fields control the FAQ area heading and intro.</p>
+        <p class="se-subtitle">These fields control the heading/intro around the FAQ area. The actual questions and answers are structured records managed below.</p>
         <label class="se-field"><span class="se-label">FAQ Label</span><input id="se-faq-label" class="se-input" type="text" value="${escapeHtml(content.faq_label || "FAQ")}"></label>
         <label class="se-field"><span class="se-label">FAQ Title</span><input id="se-faq-title" class="se-input" type="text" value="${escapeHtml(content.faq_title || "Frequently Asked Questions")}"></label>
         <label class="se-field"><span class="se-label">FAQ Intro</span><textarea id="se-faq-intro" class="se-input se-textarea">${escapeHtml(content.faq_intro || "")}</textarea></label>
+      </section>
+
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Structured FAQ Items</h2>
+        <p class="se-subtitle">FAQ rows are separate records so they can be imported, ordered, categorized, archived, and managed without changing the page layout.</p>
+        <div id="se-info-faq-manager" class="se-faq-manager" data-skip-page-dirty="true">
+          <div class="se-empty">FAQ manager loads after the Info page is selected.</div>
+        </div>
       </section>
 
       <section class="se-card se-inner-card">
@@ -957,6 +980,408 @@ Vice President | Arnie Palmer">${escapeHtml(content.manual_officers_json || "")}
     isHydrating = false;
   }
 
+
+  function getCurrentTemplateKey() {
+    return String((currentCustomerPage || {}).template_key || (currentCustomerPage || {}).page_key || "").toLowerCase();
+  }
+
+  function isCurrentInfoPage() {
+    const key = getCurrentTemplateKey();
+    return key === "info" || key === "faq";
+  }
+
+  function setInfoFaqDirty(value) {
+    infoFaqDirty = !!value;
+    const el = getEl("se-faq-dirty-indicator");
+    if (el) {
+      el.textContent = infoFaqDirty ? "Unsaved FAQ changes" : "FAQ saved / clean";
+      el.className = infoFaqDirty ? "se-dirty is-dirty" : "se-dirty";
+    }
+    syncShellDirtyState();
+  }
+
+  function getInfoFaqFormSignature() {
+    return stableStringify({
+      faq_item_id: selectedInfoFaqItemId || "",
+      category: getValue("se-faq-item-category", ""),
+      sort_order: getValue("se-faq-item-sort", "100"),
+      question: getValue("se-faq-item-question", ""),
+      answer: getValue("se-faq-item-answer", ""),
+      visibility: getValue("se-faq-item-visibility", "public"),
+      status: getValue("se-faq-item-status", "active")
+    });
+  }
+
+  function markInfoFaqClean() {
+    infoFaqCleanSignature = getInfoFaqFormSignature();
+    setInfoFaqDirty(false);
+  }
+
+  function markInfoFaqDirty() {
+    if (isInfoFaqHydrating) return;
+    const signature = getInfoFaqFormSignature();
+    setInfoFaqDirty(Boolean(infoFaqCleanSignature && signature !== infoFaqCleanSignature));
+  }
+
+  function confirmDiscardInfoFaqChanges(message) {
+    if (!infoFaqDirty) return true;
+    return window.confirm(message || "You have unsaved FAQ item changes. Continue and discard them?");
+  }
+
+  function currentInfoFaqItem() {
+    return infoFaqItems.find((item) => String(item.faq_item_id) === String(selectedInfoFaqItemId)) || null;
+  }
+
+  function normalizeFaqRowForDisplay(item) {
+    return {
+      faq_item_id: item.faq_item_id || "",
+      question: item.question || "Untitled FAQ",
+      category: item.category || "General",
+      visibility: item.visibility || "public",
+      status: item.status || "active",
+      sort_order: item.sort_order ?? 100,
+      archived_at: item.archived_at || null,
+      created_at: item.created_at || null
+    };
+  }
+
+  function renderCsvPreview(rows) {
+    const target = getEl("se-faq-csv-preview");
+    if (!target) return;
+    if (!rows.length) {
+      target.innerHTML = `<div class="se-empty">No valid FAQ rows parsed yet.</div>`;
+      return;
+    }
+    const previewRows = rows.slice(0, 12).map((row, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(row.question || "")}</td>
+        <td>${escapeHtml(row.answer || "")}</td>
+        <td>${escapeHtml(row.category || "General")}</td>
+        <td>${escapeHtml(row.sort_order ?? "")}</td>
+      </tr>
+    `).join("");
+    target.innerHTML = `
+      <div class="se-note">Parsed ${rows.length} valid FAQ row${rows.length === 1 ? "" : "s"}. Showing the first ${Math.min(rows.length, 12)} before import.</div>
+      <div class="se-faq-csv-table-wrap"><table class="se-faq-csv-table"><thead><tr><th>#</th><th>Question</th><th>Answer</th><th>Category</th><th>Sort</th></tr></thead><tbody>${previewRows}</tbody></table></div>
+    `;
+  }
+
+  function parseCsvText(text) {
+    const rows = [];
+    let row = [];
+    let field = "";
+    let inQuotes = false;
+    const input = String(text || "");
+
+    for (let i = 0; i < input.length; i += 1) {
+      const ch = input[i];
+      const next = input[i + 1];
+      if (ch === '"') {
+        if (inQuotes && next === '"') {
+          field += '"';
+          i += 1;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === "," && !inQuotes) {
+        row.push(field);
+        field = "";
+      } else if ((ch === "\n" || ch === "\r") && !inQuotes) {
+        if (ch === "\r" && next === "\n") i += 1;
+        row.push(field);
+        if (row.some((cell) => String(cell || "").trim())) rows.push(row);
+        row = [];
+        field = "";
+      } else {
+        field += ch;
+      }
+    }
+
+    row.push(field);
+    if (row.some((cell) => String(cell || "").trim())) rows.push(row);
+    return rows;
+  }
+
+  function normalizeHeader(value) {
+    return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  }
+
+  function faqRowsFromCsv(text) {
+    const parsed = parseCsvText(text);
+    if (!parsed.length) return [];
+    const first = parsed[0].map(normalizeHeader);
+    const hasHeader = first.some((h) => ["question", "faq_question", "answer", "faq_answer", "category", "sort_order"].includes(h));
+    const dataRows = hasHeader ? parsed.slice(1) : parsed;
+    const indexFor = (names, fallback) => {
+      if (!hasHeader) return fallback;
+      for (const name of names) {
+        const idx = first.indexOf(name);
+        if (idx >= 0) return idx;
+      }
+      return fallback;
+    };
+    const qIdx = indexFor(["question", "faq_question", "q"], 0);
+    const aIdx = indexFor(["answer", "faq_answer", "response", "a"], 1);
+    const cIdx = indexFor(["category", "category_label", "category_key"], 2);
+    const sIdx = indexFor(["sort_order", "sort", "order"], 3);
+    const vIdx = indexFor(["visibility"], 4);
+    const stIdx = indexFor(["status"], 5);
+
+    return dataRows.map((cells, index) => {
+      const question = String(cells[qIdx] || "").trim();
+      const answer = String(cells[aIdx] || "").trim();
+      const category = String(cells[cIdx] || "General").trim() || "General";
+      const sort = Number(String(cells[sIdx] || "").trim());
+      const visibility = String(cells[vIdx] || "public").trim().toLowerCase() || "public";
+      const status = String(cells[stIdx] || "active").trim().toLowerCase() || "active";
+      return {
+        question,
+        answer,
+        category,
+        sort_order: Number.isFinite(sort) ? sort : 100 + index,
+        visibility: ["public", "members", "admins", "hidden"].includes(visibility) ? visibility : "public",
+        status: ["active", "draft", "hidden", "archived"].includes(status) ? status : "active"
+      };
+    }).filter((row) => row.question && row.answer);
+  }
+
+  function resetInfoFaqForm(skipConfirm = false) {
+    if (!skipConfirm && !confirmDiscardInfoFaqChanges("You have unsaved FAQ item changes. Start a new FAQ and discard them?")) return;
+    selectedInfoFaqItemId = "";
+    renderInfoFaqManager();
+  }
+
+  function bindInfoFaqManagerEvents(wrap) {
+    wrap.querySelectorAll("input, textarea, select").forEach((el) => {
+      if (el.dataset.infoFaqDirtyBound === "true") return;
+      el.dataset.infoFaqDirtyBound = "true";
+      el.addEventListener("input", markInfoFaqDirty);
+      el.addEventListener("change", markInfoFaqDirty);
+    });
+
+    wrap.querySelectorAll("[data-faq-edit]").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (!confirmDiscardInfoFaqChanges("You have unsaved FAQ item changes. Switch records and discard them?")) return;
+        selectedInfoFaqItemId = button.getAttribute("data-faq-edit") || "";
+        renderInfoFaqManager();
+      });
+    });
+
+    getEl("se-faq-item-new")?.addEventListener("click", () => resetInfoFaqForm(false));
+    getEl("se-faq-item-save")?.addEventListener("click", saveInfoFaqItem);
+    getEl("se-faq-item-archive")?.addEventListener("click", () => setInfoFaqArchived(true));
+    getEl("se-faq-item-restore")?.addEventListener("click", () => setInfoFaqArchived(false));
+    getEl("se-faq-refresh")?.addEventListener("click", () => loadInfoFaqItems(true));
+
+    getEl("se-faq-include-archived")?.addEventListener("change", async () => {
+      if (!confirmDiscardInfoFaqChanges("You have unsaved FAQ item changes. Reload the list and discard them?")) {
+        const el = getEl("se-faq-include-archived");
+        if (el) el.checked = infoFaqIncludeArchived;
+        return;
+      }
+      infoFaqIncludeArchived = getChecked("se-faq-include-archived");
+      await loadInfoFaqItems(false);
+    });
+
+    getEl("se-faq-csv-file")?.addEventListener("change", async (event) => {
+      const file = event.target?.files?.[0];
+      if (!file) return;
+      const text = await file.text();
+      const textarea = getEl("se-faq-csv-text");
+      if (textarea) textarea.value = text;
+      infoFaqCsvPreviewRows = faqRowsFromCsv(text);
+      renderCsvPreview(infoFaqCsvPreviewRows);
+    });
+
+    getEl("se-faq-csv-preview-button")?.addEventListener("click", () => {
+      infoFaqCsvPreviewRows = faqRowsFromCsv(getValue("se-faq-csv-text", ""));
+      renderCsvPreview(infoFaqCsvPreviewRows);
+    });
+
+    getEl("se-faq-csv-import-button")?.addEventListener("click", importInfoFaqCsvRows);
+  }
+
+  function renderInfoFaqManager() {
+    const wrap = getEl("se-info-faq-manager");
+    if (!wrap) return;
+
+    const current = currentInfoFaqItem();
+    const activeCount = infoFaqItems.filter((item) => !item.archived_at && item.status !== "archived").length;
+    const archivedCount = infoFaqItems.filter((item) => item.archived_at || item.status === "archived").length;
+    const rows = infoFaqItems.map((item) => {
+      const display = normalizeFaqRowForDisplay(item);
+      const isSelected = String(display.faq_item_id) === String(selectedInfoFaqItemId);
+      const meta = [display.category, display.visibility, display.status, `sort ${display.sort_order}`].filter(Boolean).join(" • ");
+      return `<div class="se-faq-row ${isSelected ? "is-selected" : ""}">
+        <div><strong>${escapeHtml(display.question)}</strong><small>${escapeHtml(meta)}${display.archived_at ? " • archived" : ""}</small></div>
+        <button class="se-button secondary small" type="button" data-faq-edit="${escapeHtml(display.faq_item_id)}">Edit</button>
+      </div>`;
+    }).join("");
+
+    isInfoFaqHydrating = true;
+    wrap.innerHTML = `
+      <div class="se-faq-toolbar">
+        <div>
+          <div class="se-faq-count"><strong>${activeCount}</strong> active / <strong>${archivedCount}</strong> archived FAQ item${infoFaqItems.length === 1 ? "" : "s"}</div>
+          <div id="se-faq-dirty-indicator" class="se-dirty">FAQ saved / clean</div>
+        </div>
+        <div class="se-faq-actions">
+          <label class="se-check" style="margin:0;"><input id="se-faq-include-archived" type="checkbox" data-skip-page-dirty="true" ${infoFaqIncludeArchived ? "checked" : ""}><span>Show archived</span></label>
+          <button id="se-faq-refresh" class="se-button secondary" type="button">Refresh FAQs</button>
+        </div>
+      </div>
+
+      <div class="se-faq-editor-grid">
+        <section class="se-faq-editor-panel">
+          <h3 class="se-faq-subtitle">${current ? "Edit FAQ Item" : "New FAQ Item"}</h3>
+          <div class="se-two-col">
+            <label class="se-field"><span class="se-label">Category</span><input id="se-faq-item-category" class="se-input" type="text" data-skip-page-dirty="true" value="${escapeHtml(current?.category || "General")}" placeholder="General, Membership, Operations"></label>
+            <label class="se-field"><span class="se-label">Sort Order</span><input id="se-faq-item-sort" class="se-input" type="number" data-skip-page-dirty="true" value="${escapeHtml(current?.sort_order ?? 100)}"></label>
+          </div>
+          <label class="se-field"><span class="se-label">Question</span><input id="se-faq-item-question" class="se-input" type="text" data-skip-page-dirty="true" value="${escapeHtml(current?.question || "")}"></label>
+          <label class="se-field"><span class="se-label">Answer</span><textarea id="se-faq-item-answer" class="se-input se-textarea" data-skip-page-dirty="true">${escapeHtml(current?.answer || "")}</textarea></label>
+          <div class="se-two-col">
+            <label class="se-field"><span class="se-label">Visibility</span><select id="se-faq-item-visibility" class="se-select" data-skip-page-dirty="true">
+              <option value="public" ${selectedAttr(current?.visibility || "public", "public")}>public</option>
+              <option value="members" ${selectedAttr(current?.visibility, "members")}>members</option>
+              <option value="admins" ${selectedAttr(current?.visibility, "admins")}>admins</option>
+              <option value="hidden" ${selectedAttr(current?.visibility, "hidden")}>hidden</option>
+            </select></label>
+            <label class="se-field"><span class="se-label">Status</span><select id="se-faq-item-status" class="se-select" data-skip-page-dirty="true">
+              <option value="active" ${selectedAttr(current?.status || "active", "active")}>active</option>
+              <option value="draft" ${selectedAttr(current?.status, "draft")}>draft</option>
+              <option value="hidden" ${selectedAttr(current?.status, "hidden")}>hidden</option>
+              <option value="archived" ${selectedAttr(current?.status, "archived")}>archived</option>
+            </select></label>
+          </div>
+          <div class="se-faq-actions">
+            <button id="se-faq-item-save" class="se-button" type="button">Save FAQ</button>
+            <button id="se-faq-item-new" class="se-button secondary" type="button">New FAQ</button>
+            ${current && !current.archived_at ? `<button id="se-faq-item-archive" class="se-button danger" type="button">Archive FAQ</button>` : ""}
+            ${current && current.archived_at ? `<button id="se-faq-item-restore" class="se-button secondary" type="button">Restore FAQ</button>` : ""}
+          </div>
+        </section>
+
+        <section class="se-faq-list-panel">
+          <h3 class="se-faq-subtitle">FAQ Records</h3>
+          <div class="se-faq-list">${rows || `<div class="se-empty">No FAQ rows yet. Create the first FAQ or import CSV rows below.</div>`}</div>
+        </section>
+      </div>
+
+      <details class="se-faq-import">
+        <summary>CSV Import / Seed FAQs</summary>
+        <p class="se-subtitle">Paste or upload CSV. Recommended headers: question, answer, category, sort_order. Import creates new FAQ records; it does not overwrite existing rows.</p>
+        <label class="se-field"><span class="se-label">CSV File</span><input id="se-faq-csv-file" class="se-input" type="file" accept=".csv,text/csv,text/plain" data-skip-page-dirty="true"></label>
+        <label class="se-field"><span class="se-label">CSV Text</span><textarea id="se-faq-csv-text" class="se-input se-textarea" data-skip-page-dirty="true" placeholder="question,answer,category,sort_order\nWhat is your application process?,Submit an application and wait for review.,Membership,100"></textarea></label>
+        <div class="se-faq-actions">
+          <button id="se-faq-csv-preview-button" class="se-button secondary" type="button">Preview CSV</button>
+          <button id="se-faq-csv-import-button" class="se-button" type="button">Import Previewed FAQs</button>
+        </div>
+        <div id="se-faq-csv-preview" style="margin-top:12px;"><div class="se-empty">Preview CSV rows before importing.</div></div>
+      </details>
+    `;
+    isInfoFaqHydrating = false;
+    bindInfoFaqManagerEvents(wrap);
+    markInfoFaqClean();
+    renderCsvPreview(infoFaqCsvPreviewRows);
+  }
+
+  async function loadInfoFaqItems(preserveSelected = false) {
+    if (!selectedCustomerPageId || !isCurrentInfoPage()) {
+      infoFaqItems = [];
+      selectedInfoFaqItemId = "";
+      infoFaqCsvPreviewRows = [];
+      setInfoFaqDirty(false);
+      return;
+    }
+    setStatus("Loading Info/FAQ records...");
+    const result = await callCoreAdminAction("list_info_faq_items", {
+      customer_page_id: selectedCustomerPageId,
+      include_archived: infoFaqIncludeArchived
+    });
+    infoFaqItems = Array.isArray(result.faq_items) ? result.faq_items : [];
+    if (!preserveSelected || !infoFaqItems.some((item) => String(item.faq_item_id) === String(selectedInfoFaqItemId))) {
+      selectedInfoFaqItemId = "";
+    }
+    renderInfoFaqManager();
+    setStatus(`Loaded ${infoFaqItems.length} FAQ record${infoFaqItems.length === 1 ? "" : "s"}.`);
+  }
+
+  async function saveInfoFaqItem() {
+    if (!selectedCustomerPageId || !isCurrentInfoPage()) {
+      setStatus("Select the Info page before saving FAQ items.");
+      return;
+    }
+    const question = getValue("se-faq-item-question", "").trim();
+    const answer = getValue("se-faq-item-answer", "").trim();
+    if (!question || !answer) {
+      setStatus("FAQ question and answer are required.");
+      return;
+    }
+    setStatus("Saving FAQ item...");
+    const result = await callCoreAdminAction("upsert_info_faq_item", {
+      customer_page_id: selectedCustomerPageId,
+      faq_item_id: selectedInfoFaqItemId || undefined,
+      category: getValue("se-faq-item-category", "General").trim() || "General",
+      question,
+      answer,
+      sort_order: Number(getValue("se-faq-item-sort", "100")) || 100,
+      visibility: getValue("se-faq-item-visibility", "public"),
+      status: getValue("se-faq-item-status", "active"),
+      metadata_json: { saved_from: "page_editor_inline_faq_manager" }
+    });
+    selectedInfoFaqItemId = result.faq_item?.faq_item_id || selectedInfoFaqItemId;
+    await loadInfoFaqItems(true);
+    setInfoFaqDirty(false);
+    setStatus("FAQ item saved.");
+  }
+
+  async function setInfoFaqArchived(archive) {
+    if (!selectedCustomerPageId || !selectedInfoFaqItemId) return;
+    if (!window.confirm(archive ? "Archive this FAQ item? It will stop showing publicly but can be restored later." : "Restore this archived FAQ item?")) return;
+    setStatus(archive ? "Archiving FAQ item..." : "Restoring FAQ item...");
+    await callCoreAdminAction(archive ? "archive_info_faq_item" : "restore_info_faq_item", {
+      customer_page_id: selectedCustomerPageId,
+      faq_item_id: selectedInfoFaqItemId
+    });
+    selectedInfoFaqItemId = "";
+    await loadInfoFaqItems(false);
+    setStatus(archive ? "FAQ item archived." : "FAQ item restored.");
+  }
+
+  async function importInfoFaqCsvRows() {
+    if (!selectedCustomerPageId || !isCurrentInfoPage()) {
+      setStatus("Select the Info page before importing FAQs.");
+      return;
+    }
+    const rows = infoFaqCsvPreviewRows.length ? infoFaqCsvPreviewRows : faqRowsFromCsv(getValue("se-faq-csv-text", ""));
+    if (!rows.length) {
+      setStatus("No valid CSV FAQ rows to import. Each row needs question and answer.");
+      return;
+    }
+    if (!window.confirm(`Import ${rows.length} FAQ row${rows.length === 1 ? "" : "s"}? This creates new records and does not overwrite existing FAQs.`)) return;
+    setStatus(`Importing ${rows.length} FAQ row${rows.length === 1 ? "" : "s"}...`);
+    let imported = 0;
+    for (const row of rows) {
+      await callCoreAdminAction("upsert_info_faq_item", {
+        customer_page_id: selectedCustomerPageId,
+        category: row.category || "General",
+        question: row.question,
+        answer: row.answer,
+        sort_order: Number(row.sort_order) || 100,
+        visibility: row.visibility || "public",
+        status: row.status || "active",
+        metadata_json: { imported_from_csv: true, imported_from: "page_editor_inline_faq_manager" }
+      });
+      imported += 1;
+      setStatus(`Imported ${imported} of ${rows.length} FAQ rows...`);
+    }
+    infoFaqCsvPreviewRows = [];
+    await loadInfoFaqItems(false);
+    setStatus(`Imported ${imported} FAQ row${imported === 1 ? "" : "s"}.`);
+  }
+
   function renderShell() {
     ensureRoot().innerHTML = `
       <style>
@@ -1001,6 +1426,24 @@ Vice President | Arnie Palmer">${escapeHtml(content.manual_officers_json || "")}
         .se-history-count{font-size:12px;color:#5d6b82;font-weight:800;}
         .se-danger-zone{border-color:#ffd0d0;background:#fffafa;}
         .se-button.danger{border-color:#9f1d1d;background:#9f1d1d;color:#fff;}
+        .se-button.small{padding:7px 10px;font-size:12px;}
+        .se-faq-manager{display:grid;gap:12px;}
+        .se-faq-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border:1px solid #e1e7f0;background:#fbfcfe;border-radius:12px;padding:12px;}
+        .se-faq-count{font-size:13px;color:#26344d;margin-bottom:8px;}
+        .se-faq-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+        .se-faq-editor-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,.85fr);gap:14px;align-items:start;}
+        .se-faq-editor-panel,.se-faq-list-panel,.se-faq-import{border:1px solid #e1e7f0;background:#fbfcfe;border-radius:12px;padding:14px;}
+        .se-faq-subtitle{margin:0 0 12px 0;font-size:16px;line-height:1.25;color:#172033;}
+        .se-faq-list{display:grid;gap:8px;max-height:420px;overflow:auto;padding-right:4px;}
+        .se-faq-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;border:1px solid #e1e7f0;border-radius:12px;padding:10px;background:#fff;}
+        .se-faq-row.is-selected{border-color:#1f4f82;background:#eef5ff;}
+        .se-faq-row strong{display:block;color:#172033;}
+        .se-faq-row small{display:block;color:#5d6b82;margin-top:3px;}
+        .se-faq-import summary{cursor:pointer;font-weight:900;color:#1f4f82;margin-bottom:10px;}
+        .se-faq-csv-table-wrap{max-height:260px;overflow:auto;border:1px solid #e1e7f0;border-radius:10px;background:#fff;}
+        .se-faq-csv-table{width:100%;border-collapse:collapse;font-size:12px;}
+        .se-faq-csv-table th,.se-faq-csv-table td{border-bottom:1px solid #e1e7f0;padding:7px;text-align:left;vertical-align:top;}
+        .se-faq-csv-table th{background:#eef3f8;color:#26344d;font-weight:900;position:sticky;top:0;}
         @media(max-width:900px){.se-layout{grid-template-columns:1fr;}.se-sidebar{position:relative;top:auto;}.se-controls{grid-template-columns:1fr;}.se-two-col{grid-template-columns:1fr;}}
 
         .se-badge.warn{background:#fff0d9;color:#8a5200;}
@@ -1170,6 +1613,15 @@ Vice President | Arnie Palmer">${escapeHtml(content.manual_officers_json || "")}
       }
     });
     isHydrating = false;
+
+    if (isCurrentInfoPage()) {
+      await loadInfoFaqItems(false);
+    } else {
+      infoFaqItems = [];
+      selectedInfoFaqItemId = "";
+      infoFaqCsvPreviewRows = [];
+      setInfoFaqDirty(false);
+    }
 
     await loadPageHistory();
     markClean();

@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-002";
+  const VERSION = "2026-06-05-003";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const DEFAULT_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-public-render`;
@@ -118,14 +118,14 @@
   function officerRows(payload, content) {
     const mode = getText(content, "officer_source_mode", "dynamic") || "dynamic";
     const dynamicRows = Array.isArray(payload.officers) ? payload.officers : [];
-    const manualRows = parseManualOfficers(content.manual_officers_json);
+    const manualRows = parseManualOfficers(content.manual_officers_json || content.manual_officers_text);
     if (mode === "manual") return manualRows;
     if (mode === "hybrid") return [...dynamicRows, ...manualRows];
     return dynamicRows;
   }
 
   function officersHtml(payload, content, options) {
-    if (!getBool(options, "show_board_card", true)) return "";
+    if (!getBool(options, "show_board_card", getBool(options, "show_officers_card", true))) return "";
     const label = getText(content, "board_label", "Leadership");
     const title = getText(content, "board_title", "Board / Officers");
     const intro = getText(content, "board_intro");
@@ -140,7 +140,7 @@
     const title = getText(content, "faq_title", "Frequently Asked Questions");
     const intro = getText(content, "faq_intro");
     const showCategories = getBool(options, "show_faq_categories", true);
-    return `<article class="syncetc-info-card"><div class="syncetc-info-label">${escapeHtml(label || "FAQ")}</div>${title ? `<h2>${escapeHtml(title)}</h2>` : ""}${paragraphHtml(intro)}${items.length ? `<div class="syncetc-info-faq-list">${items.map((item, index) => `<div class="syncetc-info-faq-item"><button type="button" class="syncetc-info-faq-button" aria-expanded="false"><span>${escapeHtml(item.question || "Question")}</span><span class="syncetc-info-faq-icon">+</span></button>${showCategories && item.category_label ? `<div class="syncetc-info-faq-category">${escapeHtml(item.category_label)}</div>` : ""}<div class="syncetc-info-faq-answer">${paragraphHtml(item.answer || "")}</div></div>`).join("")}</div>` : `<div class="syncetc-info-empty">FAQ items are not currently available.</div>`}</article>`;
+    return `<article class="syncetc-info-card"><div class="syncetc-info-label">${escapeHtml(label || "FAQ")}</div>${title ? `<h2>${escapeHtml(title)}</h2>` : ""}${paragraphHtml(intro)}${items.length ? `<div class="syncetc-info-faq-list">${items.map((item, index) => `<div class="syncetc-info-faq-item"><button type="button" class="syncetc-info-faq-button" aria-expanded="false"><span>${escapeHtml(item.question || "Question")}</span><span class="syncetc-info-faq-icon">+</span></button>${showCategories && (item.category_label || item.category) ? `<div class="syncetc-info-faq-category">${escapeHtml(item.category_label || item.category)}</div>` : ""}<div class="syncetc-info-faq-answer">${paragraphHtml(item.answer || "")}</div></div>`).join("")}</div>` : `<div class="syncetc-info-empty">FAQ items are not currently available.</div>`}</article>`;
   }
 
   function contactHtml(content, options) {

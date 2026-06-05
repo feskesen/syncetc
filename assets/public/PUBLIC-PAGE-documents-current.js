@@ -1,0 +1,162 @@
+// PUBLIC-PAGE-documents-current.js
+// Internal Version: 2026-06-05-001
+// Purpose: Public Documents / Resources renderer. Shows only public published documents returned by core-public-render.
+
+(function () {
+  "use strict";
+
+  const VERSION = "2026-06-05-001";
+  const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
+  const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
+  const DEFAULT_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-public-render`;
+  const ROOT_SELECTOR = "#syncetc-documents-page-root";
+
+  function cleanText(value) { return String(value ?? "").replace(/\s+/g, " ").trim(); }
+  function hasText(value) { return cleanText(value).length > 0; }
+  function escapeHtml(value) { return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&#039;"); }
+  function getJson(source, key) { const value = source && typeof source === "object" ? source[key] : null; return value && typeof value === "object" && !Array.isArray(value) ? value : {}; }
+  function getText(source, key, fallback = "") { const value = source && typeof source === "object" ? source[key] : undefined; return typeof value === "string" ? value.trim() : fallback; }
+  function getBool(source, key, fallback = false) { const value = source && typeof source === "object" ? source[key] : undefined; return typeof value === "boolean" ? value : fallback; }
+  function safeHref(value, fallback = "#") { const url = String(value || "").trim(); if (!url) return fallback; if (url.startsWith("/") || url.startsWith("#")) return url; if (/^https?:\/\//i.test(url)) return url; return fallback; }
+
+  function hexToRgb(hex) {
+    const clean = String(hex || "").replace("#", "").trim();
+    if (!/^[0-9a-f]{6}$/i.test(clean)) return { r: 31, g: 79, b: 130 };
+    return { r: parseInt(clean.slice(0, 2), 16), g: parseInt(clean.slice(2, 4), 16), b: parseInt(clean.slice(4, 6), 16) };
+  }
+  function rgba(hex, alpha) { const rgb = hexToRgb(hex); return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`; }
+
+  function styleConfig(payload) {
+    const profile = payload?.style_profile || {};
+    const colors = getJson(profile, "colors_json");
+    const spacing = getJson(profile, "spacing_json");
+    const effects = getJson(profile, "effects_json");
+    const typography = getJson(profile, "typography_json");
+    const primary = getText(colors, "brand_primary", "#1f4f82");
+    const surface = getText(colors, "surface", "#ffffff");
+    const text = getText(colors, "text", "#172033");
+    const corners = getText(effects, "corners", "soft");
+    const shadows = getText(effects, "shadows", "soft");
+    const cardStyle = getText(profile, "card_style", "standard");
+    const cardPadding = getText(spacing, "card_padding", "normal");
+    const headingScale = getText(typography, "heading_scale", "normal");
+    return {
+      primary,
+      surface,
+      text,
+      muted: rgba(text, 0.68),
+      border: rgba(primary, 0.16),
+      softPrimary: rgba(primary, 0.08),
+      heroGradient: `linear-gradient(135deg, ${primary}, ${rgba(primary, 0.84)} 64%, ${rgba(primary, 0.64)})`,
+      radius: corners === "sharp" || cardStyle === "sharp" ? "6px" : corners === "pill" ? "26px" : "18px",
+      radiusLarge: corners === "sharp" || cardStyle === "sharp" ? "8px" : corners === "pill" ? "30px" : "26px",
+      shadow: shadows === "none" ? "none" : shadows === "strong" ? "0 24px 70px rgba(12,38,64,.28)" : "0 14px 42px rgba(12,38,64,.14)",
+      cardPadding: cardPadding === "generous" ? "28px" : cardPadding === "compact" ? "16px" : "22px",
+      headingSize: headingScale === "compact" ? "clamp(28px,4vw,42px)" : "clamp(32px,4vw,50px)",
+    };
+  }
+
+  function formatPlainText(value) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    return text.split(/\n{2,}/).map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join("");
+  }
+
+  function buildCss(config) {
+    return `
+      .syncetc-docs-page{width:100%;margin:0;padding:0;color:${config.text};font-family:Arial,Helvetica,sans-serif;box-sizing:border-box}.syncetc-docs-page *{box-sizing:border-box}
+      .syncetc-docs-shell{background:${rgba(config.surface,.94)};border:1px solid ${config.border};border-radius:${config.radiusLarge};box-shadow:${config.shadow};overflow:hidden;backdrop-filter:blur(8px)}
+      .syncetc-docs-hero{padding:32px;background:${config.heroGradient};color:#fff}.syncetc-docs-eyebrow{display:inline-flex;margin-bottom:12px;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.24);font-size:12px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}.syncetc-docs-hero h1{margin:0;font-size:${config.headingSize};line-height:1.05;font-weight:900;letter-spacing:-.04em}.syncetc-docs-hero p{max-width:820px;margin:14px 0 0;color:rgba(255,255,255,.9);font-size:16px;line-height:1.65}
+      .syncetc-docs-main{padding:26px;background:linear-gradient(180deg,${rgba(config.primary,.07)},${rgba(config.surface,.9)})}.syncetc-docs-intro{margin-bottom:20px;padding:${config.cardPadding};border:1px solid ${config.border};border-radius:${config.radius};background:${rgba(config.surface,.9)}}.syncetc-docs-intro h2{margin:0 0 9px;color:${config.primary};font-size:24px}.syncetc-docs-intro p{margin:0;color:${config.muted};line-height:1.6}
+      .syncetc-docs-groups{display:grid;gap:18px}.syncetc-docs-group{padding:${config.cardPadding};border:1px solid ${config.border};border-radius:${config.radius};background:${rgba(config.surface,.94)}}.syncetc-docs-group h2{margin:0 0 12px;color:${config.primary};font-size:22px}.syncetc-docs-list{display:grid;gap:10px}.syncetc-doc-card{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:14px;border:1px solid ${config.border};border-radius:${config.radius};background:#fff}.syncetc-doc-card h3{margin:0 0 5px;color:${config.text};font-size:17px}.syncetc-doc-card p{margin:0;color:${config.muted};font-size:13px;line-height:1.5}.syncetc-doc-meta{margin-top:7px;color:${config.muted};font-size:12px}.syncetc-doc-button{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:8px 14px;border-radius:999px;background:${config.primary};color:#fff!important;text-decoration:none;font-weight:900;font-size:13px;white-space:nowrap}.syncetc-docs-note{margin-top:20px;padding:16px 18px;border-radius:${config.radius};border:1px solid ${config.border};background:${rgba(config.primary,.06)};color:${config.muted};font-size:13px;line-height:1.55}.syncetc-docs-empty{padding:22px;border:1px dashed ${config.border};border-radius:${config.radius};background:#fff;color:${config.muted};text-align:center;font-weight:800}@media(max-width:720px){.syncetc-docs-main,.syncetc-docs-hero{padding:20px}.syncetc-doc-card{grid-template-columns:1fr}.syncetc-doc-button{width:100%}}
+    `;
+  }
+
+  function groupByCategory(docs) {
+    return (Array.isArray(docs) ? docs : []).reduce((acc, doc) => {
+      const key = cleanText(doc.category || "General") || "General";
+      (acc[key] ||= []).push(doc);
+      return acc;
+    }, {});
+  }
+
+  function formatDate(value) {
+    if (!value) return "";
+    try { return new Date(value).toLocaleDateString(); } catch (_) { return ""; }
+  }
+
+  function documentsHtml(payload, config) {
+    const settings = payload.page_settings || {};
+    const content = getJson(settings, "content_json");
+    const options = getJson(settings, "options_json");
+    const docs = Array.isArray(payload.documents) ? payload.documents : [];
+    const label = getText(content, "docs_label", getText(content, "hero_eyebrow", "Documents"));
+    const title = getText(content, "docs_title", getText(content, "hero_title", settings.title || "Documents & Resources"));
+    const intro = getText(content, "docs_intro", getText(content, "hero_intro", settings.intro_text || "Published documents and resources available for public viewing."));
+    const helpTitle = getText(content, "docs_help_title", "Available Resources");
+    const helpBody = getText(content, "docs_help_body", "Download the current published version of each public document below.");
+    const emptyMessage = getText(content, "docs_empty_message", "No public documents are available right now.");
+    const note = getText(content, "docs_note", getText(content, "note_body", ""));
+    const grouped = groupByCategory(docs);
+    const categories = Object.keys(grouped).sort();
+
+    return `
+      <section class="syncetc-docs-page" data-syncetc-documents-version="${escapeHtml(VERSION)}">
+        <div class="syncetc-docs-shell">
+          <header class="syncetc-docs-hero">
+            ${hasText(label) ? `<div class="syncetc-docs-eyebrow">${escapeHtml(label)}</div>` : ""}
+            ${hasText(title) ? `<h1>${escapeHtml(title)}</h1>` : ""}
+            ${hasText(intro) ? `<p>${escapeHtml(intro)}</p>` : ""}
+          </header>
+          <main class="syncetc-docs-main">
+            ${getBool(options, "show_docs_intro", true) !== false && (hasText(helpTitle) || hasText(helpBody)) ? `<section class="syncetc-docs-intro">${hasText(helpTitle) ? `<h2>${escapeHtml(helpTitle)}</h2>` : ""}${formatPlainText(helpBody)}</section>` : ""}
+            ${categories.length ? `<div class="syncetc-docs-groups">${categories.map((category) => `<section class="syncetc-docs-group"><h2>${escapeHtml(category)}</h2><div class="syncetc-docs-list">${grouped[category].map((doc) => `<article class="syncetc-doc-card"><div><h3>${escapeHtml(doc.title || doc.original_file_name || "Document")}</h3>${hasText(doc.description) ? `<p>${escapeHtml(doc.description)}</p>` : ""}<div class="syncetc-doc-meta">${escapeHtml(doc.original_file_name || "file")} ${doc.version_number ? `• v${escapeHtml(doc.version_number)}` : ""} ${doc.published_at ? `• published ${escapeHtml(formatDate(doc.published_at))}` : ""}</div></div>${doc.signed_url ? `<a class="syncetc-doc-button" href="${escapeHtml(doc.signed_url)}" target="_blank" rel="noopener">Download</a>` : `<span class="syncetc-doc-meta">Unavailable</span>`}</article>`).join("")}</div></section>`).join("")}</div>` : `<div class="syncetc-docs-empty">${escapeHtml(emptyMessage)}</div>`}
+            ${getBool(options, "show_docs_note", true) !== false && hasText(note) ? `<div class="syncetc-docs-note">${formatPlainText(note)}</div>` : ""}
+          </main>
+        </div>
+      </section>`;
+  }
+
+  async function fetchPayload(root) {
+    const body = {
+      action: "get_documents_page",
+      organization_key: root.dataset.organizationKey || root.dataset.customerKey || "test-customer-1",
+      site_key: root.dataset.siteKey || "primary",
+      page_key: root.dataset.pageKey || "documents",
+      render_mode: root.dataset.renderMode || "public",
+    };
+    const edgeUrl = root.dataset.edgeUrl || DEFAULT_EDGE_URL;
+    const response = await fetch(edgeUrl, { method: "POST", headers: { "Content-Type": "application/json", "apikey": SUPABASE_PUBLISHABLE_KEY }, body: JSON.stringify(body) });
+    const payload = await response.json().catch(() => ({ ok: false, message: "Invalid JSON response." }));
+    if (!response.ok || payload.ok === false) throw new Error(payload.message || payload.error || "Documents page could not load.");
+    return payload;
+  }
+
+  function renderError(root, error) {
+    const message = error instanceof Error ? error.message : String(error);
+    root.innerHTML = `<div class="syncetc-public-error"><strong>Documents page error:</strong> ${escapeHtml(message)}</div>`;
+  }
+
+  async function boot() {
+    const root = document.querySelector(ROOT_SELECTOR);
+    if (!root) return;
+    root.innerHTML = `<div class="syncetc-public-error">Loading documents…</div>`;
+    try {
+      const payload = await fetchPayload(root);
+      const config = styleConfig(payload);
+      const bodyHtml = documentsHtml(payload, config);
+      const extraCss = buildCss(config);
+      if (window.SyncEtcPublicShell && typeof window.SyncEtcPublicShell.render === "function") {
+        window.SyncEtcPublicShell.render({ root, payload, activePageKey: payload.page?.page_key || "documents", extraCss, bodyHtml });
+      } else {
+        root.innerHTML = `<style>${extraCss}</style>${bodyHtml}`;
+      }
+    } catch (error) {
+      console.error("Documents page failed", error);
+      renderError(root, error);
+    }
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
+})();

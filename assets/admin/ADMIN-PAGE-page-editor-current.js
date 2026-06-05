@@ -7,7 +7,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-004-D";
+  const VERSION = "2026-06-05-005";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -406,6 +406,14 @@
     addIfElement(content, "gallery_title", "se-gallery-title");
     addIfElement(content, "gallery_intro", "se-gallery-intro");
 
+    addIfElement(content, "docs_label", "se-docs-label");
+    addIfElement(content, "docs_title", "se-docs-title");
+    addIfElement(content, "docs_intro", "se-docs-intro");
+    addIfElement(content, "docs_help_title", "se-docs-help-title");
+    addIfElement(content, "docs_help_body", "se-docs-help-body");
+    addIfElement(content, "docs_empty_message", "se-docs-empty-message");
+    addIfElement(content, "docs_note", "se-docs-note");
+
     addIfElement(content, "history_label", "se-history-label");
     addIfElement(content, "history_title", "se-history-title");
     addIfElement(content, "history_body", "se-history-body");
@@ -468,6 +476,8 @@
     addCheckedIfElement(options, "show_photo_captions", "se-show-photo-captions");
     addCheckedIfElement(options, "show_photo_credit", "se-show-photo-credit");
     addCheckedIfElement(options, "show_featured_first", "se-show-featured-first");
+    addCheckedIfElement(options, "show_docs_intro", "se-show-docs-intro");
+    addCheckedIfElement(options, "show_docs_note", "se-show-docs-note");
 
     addCheckedIfElement(options, "show_history_card", "se-show-history-card");
     addCheckedIfElement(options, "show_membership_card", "se-show-membership-card");
@@ -707,6 +717,7 @@
     const isAircraftPage = templateKey === "aircraft";
     const isGalleryPage = templateKey === "gallery";
     const isInfoPage = templateKey === "info";
+    const isDocumentsPage = templateKey === "documents" || templateKey === "resources";
 
     const editor = getEl("se-editor-fields");
     if (!editor) return;
@@ -927,6 +938,34 @@
       </section>
     `;
 
+    const documentsHtml = `
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Documents / Resources Page Copy</h2>
+        <p class="se-subtitle">Structured document records and uploaded versions are managed in Documents Admin. These fields control public page copy only.</p>
+        <label class="se-field"><span class="se-label">Section Label</span><input id="se-docs-label" class="se-input" type="text" value="${escapeHtml(content.docs_label || "Documents")}"></label>
+        <label class="se-field"><span class="se-label">Page Title</span><input id="se-docs-title" class="se-input" type="text" value="${escapeHtml(content.docs_title || content.hero_title || settings.title || "Documents & Resources")}"></label>
+        <label class="se-field"><span class="se-label">Page Intro</span><textarea id="se-docs-intro" class="se-input se-textarea">${escapeHtml(content.docs_intro || content.hero_intro || settings.intro_text || "")}</textarea></label>
+      </section>
+
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Intro / Empty State / Note</h2>
+        <label class="se-field"><span class="se-label">Intro Card Title</span><input id="se-docs-help-title" class="se-input" type="text" value="${escapeHtml(content.docs_help_title || "Available Resources")}"></label>
+        <label class="se-field"><span class="se-label">Intro Card Body</span><textarea id="se-docs-help-body" class="se-input se-textarea">${escapeHtml(content.docs_help_body || "Download the current published version of each available public document below.")}</textarea></label>
+        <label class="se-field"><span class="se-label">Empty State Message</span><textarea id="se-docs-empty-message" class="se-input se-textarea">${escapeHtml(content.docs_empty_message || "No public documents are available right now.")}</textarea></label>
+        <label class="se-field"><span class="se-label">Note / Disclaimer</span><textarea id="se-docs-note" class="se-input se-textarea">${escapeHtml(content.docs_note || content.note_body || "")}</textarea></label>
+      </section>
+
+      <section class="se-card se-inner-card">
+        <h2 class="se-section-title">Documents Module</h2>
+        <p class="se-subtitle">Use Documents Admin to create document records, upload new versions, approve/publish files, and control public/member/admin visibility. Public page shows only public + published documents.</p>
+        <div class="se-two-col">
+          <label class="se-check"><input id="se-show-docs-intro" type="checkbox" ${checkAttr(options.show_docs_intro !== false)}><span>Show intro card when filled</span></label>
+          <label class="se-check"><input id="se-show-docs-note" type="checkbox" ${checkAttr(options.show_docs_note !== false)}><span>Show note strip when filled</span></label>
+        </div>
+      </section>
+
+`;
+
     const aircraftHtml = `
       <section class="se-card se-inner-card">
         <h2 class="se-section-title">Aircraft Hero Stats</h2>
@@ -977,7 +1016,7 @@
       </section>
     `;
 
-    editor.innerHTML = pageIdentityHtml + heroHtml + (isAircraftPage ? aircraftHtml : isHomePage ? homeHtml : isGalleryPage ? galleryHtml : isInfoPage ? infoHtml : genericHtml);
+    editor.innerHTML = pageIdentityHtml + heroHtml + (isAircraftPage ? aircraftHtml : isHomePage ? homeHtml : isGalleryPage ? galleryHtml : isInfoPage ? infoHtml : isDocumentsPage ? documentsHtml : genericHtml);
 
     isHydrating = true;
     bindDirtyWithin(editor);

@@ -1,11 +1,11 @@
 // ADMIN-PAGE-access-admin-current.js
-// Internal Version: 2026-06-06-001
-// Purpose: Platform/corporate admin tool for linking Supabase Auth users to people, organizations, memberships, roles, and permissions.
+// Internal Version: 2026-06-06-002
+// Purpose: Platform Access Tools for bootstrapping/troubleshooting login, person, organization affiliation, role, and permission links.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-06-001";
+  const VERSION = "2026-06-06-002";
   const ROOT_ID = "syncetc-access-admin-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -21,11 +21,16 @@
   let roles = [];
   let memberships = [];
   let selectedOrgId = "";
+  let backend = null;
+  let globalMessage = `Version ${VERSION}`;
+  let globalKind = "";
+  let actionMessages = {};
+  let busyButtons = new Set();
 
   const $ = (id) => document.getElementById(id);
-  const esc = (v) => String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#039;");
-  const clean = (v) => String(v ?? "").replace(/\s+/g," ").trim();
+  const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
   const emailNorm = (v) => clean(v).toLowerCase();
+  const esc = (v) => String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#039;");
 
   function loadScript(src) {
     return new Promise((resolve, reject) => {
@@ -45,6 +50,63 @@
     return supabaseClient;
   }
 
+  function setGlobal(message, kind = "") {
+    globalMessage = message || `Version ${VERSION}`;
+    globalKind = kind;
+    const el = $("access-status");
+    if (el) {
+      el.textContent = globalMessage;
+      el.className = `access-pill ${kind}`;
+    }
+  }
+
+  function setActionMessage(key, message, kind = "") {
+    actionMessages[key] = { message, kind };
+    const el = $(`access-action-${key}`);
+    if (el) {
+      el.textContent = message || "";
+      el.className = `access-action-message ${kind}`;
+    }
+  }
+
+  function setBackend(data) {
+    backend = data || null;
+    const el = $("access-backend");
+    if (el) el.textContent = JSON.stringify(backend || {}, null, 2);
+  }
+
+  function actionMarkup(key) {
+    const item = actionMessages[key] || {};
+    return `<div id="access-action-${esc(key)}" class="access-action-message ${esc(item.kind || "")}">${esc(item.message || "")}</div>`;
+  }
+
+  async function runButton(buttonId, messageKey, workingText, fn) {
+    const btn = $(buttonId);
+    const original = btn ? btn.textContent : "";
+    try {
+      if (btn) {
+        busyButtons.add(buttonId);
+        btn.disabled = true;
+        btn.textContent = workingText || "Working…";
+      }
+      setActionMessage(messageKey, workingText || "Working…", "info");
+      const result = await fn();
+      return result;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      setActionMessage(messageKey, msg, "warn");
+      setGlobal(msg, "warn");
+      setBackend({ ok: false, message: msg });
+      throw error;
+    } finally {
+      if (btn) {
+        busyButtons.delete(buttonId);
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    }
+  }
+
   async function refreshAuth() {
     await ensureSupabase();
     const { data } = await supabaseClient.auth.getSession();
@@ -59,18 +121,32 @@
 
   async function login() {
     await ensureSupabase();
-    const email = $("access-email").value;
-    const password = $("access-password").value;
+    const email = emailNorm($("access-email")?.value);
+    const password = $("access-password")?.value || "";
+    if (!email || !password) throw new Error("Enter email and password.");
     const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
     if (error) throw error;
     await refreshAuth();
+    setGlobal(`Logged in as ${email}`, "ok");
   }
 
   async function logout() {
     await ensureSupabase();
     await supabaseClient.auth.signOut();
-    token = ""; userEmail = ""; organizations = []; people = []; memberships = [];
+    token = ""; userEmail = ""; organizations = []; people = []; memberships = []; backend = null;
+    setGlobal("Logged out.", "ok");
     render();
+  }
+
+  async function sendPasswordReset(email, key = "auth") {
+    await ensureSupabase();
+    const target = emailNorm(email);
+    if (!target) throw new Error("Enter an email address first.");
+    const redirectTo = `${window.location.origin}/password-reset`;
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(target, { redirectTo });
+    if (error) throw error;
+    setActionMessage(key, `Password reset email requested for ${target}.`, "ok");
+    setGlobal("Password reset email requested.", "ok");
   }
 
   async function call(action, payload = {}) {
@@ -86,9 +162,19 @@
     return json;
   }
 
-  function setBackend(data) { const el = $("access-backend"); if (el) el.textContent = JSON.stringify(data, null, 2); }
-  function setStatus(message, kind = "") { const el = $("access-status"); if (el) { el.textContent = message || ""; el.className = `access-pill ${kind}`; } }
-  function orgLabel(o) { return `${o.display_name || o.legal_name || o.organization_key || "Organization"} (${o.organization_key || o.organization_id})`; }
+  function orgLabel(o) {
+    return `${o.display_name || o.legal_name || o.organization_key || "Organization"} (${o.organization_key || o.organization_id})`;
+  }
+
+  function preferredStatuses(list) {
+    const order = ["active", "pending", "invited", "applicant", "inactive", "suspended", "expelled", "former", "archived"];
+    return [...list].sort((a, b) => {
+      const ai = order.indexOf(a.status_key);
+      const bi = order.indexOf(b.status_key);
+      if (ai !== -1 || bi !== -1) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+      return (a.sort_order || 999) - (b.sort_order || 999) || String(a.label || "").localeCompare(String(b.label || ""));
+    });
+  }
 
   async function loadInitial() {
     const orgRes = await call("platform_list_organizations");
@@ -100,7 +186,7 @@
   async function loadOptions() {
     if (!selectedOrgId) return;
     const res = await call("platform_list_role_status_options", { organization_id: selectedOrgId });
-    statuses = res.statuses || [];
+    statuses = preferredStatuses(res.statuses || []);
     roles = res.roles || [];
   }
 
@@ -120,48 +206,71 @@
   }
 
   async function savePersonMembership() {
-    const primaryEmail = emailNorm($("access-person-email").value);
-    const displayName = clean($("access-person-name").value);
-    if (!primaryEmail && !displayName) throw new Error("Enter at least a person email or display name.");
-    const personRes = await call("platform_upsert_person", { primary_email: primaryEmail, display_name: displayName });
-    const person = personRes.person;
-
-    let linkRes = null;
-    if (primaryEmail) linkRes = await call("platform_link_auth_user_by_email", { email: primaryEmail, display_name: displayName });
-
+    if (!selectedOrgId) throw new Error("Select an organization first.");
+    const email = emailNorm($("access-person-email")?.value);
+    const displayName = clean($("access-person-name")?.value);
+    if (!email && !displayName) throw new Error("Enter at least an email or display name.");
+    const statusKey = $("access-status-key")?.value || "active";
     const roleKeys = selectedRoleKeys();
-    if (!roleKeys.length) throw new Error("Select at least one role.");
-    const statusKey = $("access-status-key").value || "full-member";
-    await call("platform_upsert_membership", {
+
+    const personRes = await call("platform_upsert_person", { primary_email: email, display_name: displayName });
+    const person = personRes.person;
+    if (!person?.person_id) throw new Error("Person save did not return a person_id.");
+
+    const linkRes = email ? await call("platform_link_auth_user_by_email", { primary_email: email, display_name: displayName }) : { linked: false };
+
+    const memberRes = await call("platform_upsert_membership", {
       organization_id: selectedOrgId,
       person_id: person.person_id,
       status_key: statusKey,
       role_keys: roleKeys,
-      title: $("access-member-title").value,
-      member_number: $("access-member-number").value
+      title: $("access-member-title")?.value || "",
+      member_number: $("access-member-number")?.value || ""
     });
 
     await loadPeople();
     await loadMemberships();
     render();
-    setStatus(linkRes && linkRes.linked === false ? "Person/membership saved. Auth user not found yet; have them sign up, then link again." : "Person, link, and membership saved.", "ok");
+
+    if (linkRes && linkRes.linked === false) {
+      setActionMessage("person", "Person and organization affiliation saved. No login account is linked yet. Use Account Tools to send an invite/reset or have the user create an account, then link again.", "warn");
+      setGlobal("Person saved; login not linked yet.", "warn");
+    } else {
+      setActionMessage("person", "Person, login link, and organization affiliation saved.", "ok");
+      setGlobal("Person and access saved.", "ok");
+    }
+    return memberRes;
   }
 
   async function seedSelfOrgAdmin() {
     if (!selectedOrgId) throw new Error("Select an organization first.");
     await call("platform_seed_self_as_org_admin", { organization_id: selectedOrgId });
+    await loadOptions();
     await loadMemberships();
     render();
-    setStatus("You are seeded as organization admin for this organization.", "ok");
+    setActionMessage("seed", "You are now seeded as organization admin for the selected organization. Confirm it in the memberships table below.", "ok");
+    setGlobal("Organization admin test access saved.", "ok");
+  }
+
+  async function sendInvite() {
+    const email = emailNorm($("access-auth-email")?.value || $("access-person-email")?.value);
+    const res = await call("platform_invite_auth_user_by_email", { email });
+    if (res.already_exists) {
+      setActionMessage("auth", res.message || "Login already exists. Use password reset if needed.", "warn");
+      setGlobal("Login already exists.", "warn");
+    } else {
+      setActionMessage("auth", res.message || `Invitation requested for ${email}.`, "ok");
+      setGlobal("Invitation requested.", "ok");
+    }
   }
 
   function renderLogin() {
     return `
       <section class="access-card access-login-card">
         <div>
-          <div class="access-eyebrow">Platform Access</div>
-          <h1>Access Admin</h1>
-          <p>Link Supabase Auth users to people, organizations, membership statuses, and roles.</p>
+          <div class="access-eyebrow">Platform Access Tools</div>
+          <h1>Platform Access Tools</h1>
+          <p>Internal SyncEtc tools for bootstrapping and diagnosing the single-login access model. This is not the everyday customer roster or application workflow.</p>
         </div>
         ${token ? `
           <div class="access-auth-row">
@@ -172,51 +281,83 @@
             <input id="access-email" type="email" placeholder="Platform admin email">
             <input id="access-password" type="password" placeholder="Password">
             <button class="access-btn" id="access-login">Log in</button>
+          </div>
+          <div class="access-login-actions">
+            <button class="access-link-btn" id="access-login-reset" type="button">Send password reset email</button>
+            <a class="access-link-btn" href="/password-reset">Open password reset page</a>
           </div>`}
       </section>`;
   }
 
+  function roleCheckboxes() {
+    return roles.map((r) => {
+      const checked = r.role_key === "member" || r.role_key === "user";
+      const label = r.role_key === "member" ? "User / Member" : r.label;
+      return `<label class="access-check"><input type="checkbox" name="access-role" value="${esc(r.role_key)}" ${checked ? "checked" : ""}> <span><strong>${esc(label)}</strong><small>${esc(r.role_key)}</small></span></label>`;
+    }).join("");
+  }
+
   function renderApp() {
-    if (!token) return `<div class="access-card"><strong>Login required.</strong> This page is for platform admins.</div>`;
+    if (!token) return `<div class="access-card"><strong>Login required.</strong> This page is for platform admins. Use one Supabase Auth login; roles decide what the user can access after login.</div>`;
     return `
+      <section class="access-card access-note">
+        <h2>What this page is</h2>
+        <p><strong>Purpose:</strong> internal platform troubleshooting and bootstrapping. You should not manually enter every customer user here.</p>
+        <p>Normal future flows should be: Apply Now → applicant/person record; roster/customer-admin import → people records; invite/sign-up → Supabase Auth login; one login → user dashboard or organization-admin dashboard based on permissions.</p>
+      </section>
+
       <section class="access-grid">
         <div class="access-card">
-          <div class="access-card-head">
-            <h2>Organization</h2>
-            <button class="access-btn small secondary" id="access-refresh">Refresh</button>
-          </div>
+          <div class="access-card-head"><h2>Organization context</h2><button class="access-btn small secondary" id="access-refresh">Refresh</button></div>
           <select id="access-org-select">
             ${organizations.map((o) => `<option value="${esc(o.organization_id)}" ${String(o.organization_id) === selectedOrgId ? "selected" : ""}>${esc(orgLabel(o))}</option>`).join("")}
           </select>
-          <div class="access-help">The customer/member access model is organization-scoped. One person may belong to many organizations.</div>
+          <div class="access-help">All roles/statuses are organization-scoped. One person can belong to multiple organizations.</div>
           <button class="access-btn" id="access-seed-self">Seed myself as organization admin</button>
+          ${actionMarkup("seed")}
         </div>
 
         <div class="access-card">
-          <h2>Create/link person</h2>
+          <h2>Account tools</h2>
           <label>Email</label>
-          <input id="access-person-email" type="email" placeholder="member@example.com">
+          <input id="access-auth-email" type="email" placeholder="user@example.com">
+          <div class="access-button-row">
+            <button class="access-btn" id="access-send-reset">Send password reset</button>
+            <button class="access-btn secondary" id="access-send-invite">Send sign-up/invite</button>
+          </div>
+          <div class="access-help">Password reset works for existing Supabase Auth users. Invite/sign-up is for users who do not have a login yet, subject to Supabase Auth email settings.</div>
+          ${actionMarkup("auth")}
+        </div>
+      </section>
+
+      <section class="access-grid">
+        <div class="access-card">
+          <h2>Create/link person and organization affiliation</h2>
+          <label>Email</label>
+          <input id="access-person-email" type="email" placeholder="user@example.com">
           <label>Display name</label>
           <input id="access-person-name" type="text" placeholder="Jane Smith">
           <div class="access-two">
-            <div><label>Status</label><select id="access-status-key">${statuses.map((s) => `<option value="${esc(s.status_key)}">${esc(s.label)} (${esc(s.status_key)})</option>`).join("")}</select></div>
-            <div><label>Member #</label><input id="access-member-number" type="text" placeholder="Optional"></div>
+            <div><label>Status</label><select id="access-status-key">${statuses.map((s) => `<option value="${esc(s.status_key)}" ${s.status_key === "active" ? "selected" : ""}>${esc(s.label)} (${esc(s.status_key)})</option>`).join("")}</select></div>
+            <div><label>Reference #</label><input id="access-member-number" type="text" placeholder="Optional"></div>
           </div>
           <label>Title / note</label>
-          <input id="access-member-title" type="text" placeholder="Board Member, Instructor, Treasurer, etc.">
-          <div class="access-role-box">
-            ${roles.map((r) => `<label class="access-check"><input type="checkbox" name="access-role" value="${esc(r.role_key)}" ${r.role_key === "member" ? "checked" : ""}> <span><strong>${esc(r.label)}</strong><small>${esc(r.role_key)}</small></span></label>`).join("")}
-          </div>
-          <button class="access-btn" id="access-save-person">Save person + membership</button>
-          <div class="access-help">If a Supabase Auth user already exists with this email, the account is linked. If not, the person/membership is ready and can be linked after first login.</div>
+          <input id="access-member-title" type="text" placeholder="President, Treasurer, Instructor, Manager, etc.">
+          <div class="access-role-box">${roleCheckboxes()}</div>
+          <button class="access-btn" id="access-save-person">Save person + organization affiliation</button>
+          <div class="access-help">If the email already has a Supabase Auth login, this will link it. If not, the person/affiliation is saved and can be linked after sign-up.</div>
+          ${actionMarkup("person")}
+        </div>
+
+        <div class="access-card">
+          <div class="access-card-head"><h2>People search</h2><button class="access-btn small secondary" id="access-search-people-btn">Search</button></div>
+          <input id="access-person-search" type="text" placeholder="Search people by name/email">
+          <div class="access-people-list">${people.slice(0, 25).map((p) => `<div class="access-person-row"><strong>${esc(p.display_name || "(No name)")}</strong><span>${esc(p.primary_email || "")}</span></div>`).join("")}</div>
         </div>
       </section>
 
       <section class="access-card">
-        <div class="access-card-head">
-          <h2>Memberships for selected organization</h2>
-          <span class="access-pill">${memberships.length} rows</span>
-        </div>
+        <div class="access-card-head"><h2>Affiliations for selected organization</h2><span class="access-pill">${memberships.length} rows</span></div>
         <div class="access-table-wrap">
           <table class="access-table">
             <thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Roles</th><th>Permissions</th></tr></thead>
@@ -224,23 +365,17 @@
               <tr>
                 <td>${esc(m.display_name || "")}</td>
                 <td>${esc(m.email || m.primary_email || "")}</td>
-                <td><span class="access-pill ${m.can_view_member_portal ? "ok" : "warn"}">${esc(m.membership_status_label || m.membership_status_key || "")}</span></td>
+                <td><span class="access-pill ${m.membership_status_key === "expelled" ? "danger" : m.can_view_member_portal ? "ok" : "warn"}">${esc(m.membership_status_label || m.membership_status_key || "")}</span></td>
                 <td>${(m.role_keys || []).map((r) => `<span class="access-mini">${esc(r)}</span>`).join(" ")}</td>
-                <td class="access-perms">${(m.permission_keys || []).slice(0, 10).map((p) => `<span>${esc(p)}</span>`).join(" ")}${(m.permission_keys || []).length > 10 ? " …" : ""}</td>
+                <td class="access-perms">${(m.permission_keys || []).slice(0, 12).map((p) => `<span>${esc(p)}</span>`).join(" ")}${(m.permission_keys || []).length > 12 ? " …" : ""}</td>
               </tr>`).join("")}</tbody>
           </table>
         </div>
       </section>
 
       <section class="access-card">
-        <div class="access-card-head"><h2>People search</h2><button class="access-btn small secondary" id="access-search-people-btn">Search</button></div>
-        <input id="access-person-search" type="text" placeholder="Search people by name/email">
-        <div class="access-people-list">${people.slice(0, 25).map((p) => `<div class="access-person-row"><strong>${esc(p.display_name || "(No name)")}</strong><span>${esc(p.primary_email || "")}</span></div>`).join("")}</div>
-      </section>
-
-      <section class="access-card">
         <h2>Backend results</h2>
-        <pre id="access-backend" class="access-backend"></pre>
+        <pre id="access-backend" class="access-backend">${esc(JSON.stringify(backend || {}, null, 2))}</pre>
       </section>`;
   }
 
@@ -249,22 +384,25 @@
     if (!root) return;
     root.innerHTML = `
       <style>
-        .access-wrap{max-width:1180px;margin:26px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:#172033}.access-card{background:rgba(255,255,255,.94);border:1px solid rgba(18,54,90,.16);border-radius:22px;box-shadow:0 10px 28px rgba(12,38,64,.12);padding:20px;margin:16px 0}.access-login-card{background:linear-gradient(135deg,#12365a,#2f80c4);color:#fff}.access-login-card h1{color:#fff;margin:6px 0}.access-login-card p{color:rgba(255,255,255,.88)}.access-eyebrow{display:inline-flex;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}.access-grid{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:16px}.access-card h2{margin:0 0 12px;color:#0b2744}.access-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.access-login-grid{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:center}.access-auth-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.access-two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.access-wrap input,.access-wrap select{width:100%;min-height:42px;border:1px solid rgba(18,54,90,.22);border-radius:12px;padding:10px 12px;margin:5px 0 12px;background:#fff;color:#172033}.access-wrap label{display:block;font-size:12px;font-weight:900;color:#24435f}.access-btn{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:9px 15px;border-radius:999px;border:1px solid #12365a;background:#12365a;color:#fff;font-weight:900;cursor:pointer;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}.access-btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(12,38,64,.18);background:#0b2744}.access-btn.secondary{background:#fff;color:#12365a}.access-btn.small{min-height:32px;font-size:12px;padding:7px 12px}.access-pill{display:inline-flex;align-items:center;border-radius:999px;padding:5px 10px;background:#eaf5ff;color:#12365a;font-size:12px;font-weight:900}.access-pill.ok{background:#e7f6ec;color:#14532d}.access-pill.warn{background:#fff7ec;color:#8a4d00}.access-help{font-size:13px;color:#5d6b78;line-height:1.45;margin:8px 0 12px}.access-role-box{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:8px 0 14px}.access-check{display:flex!important;gap:8px;align-items:flex-start;padding:9px;border:1px solid rgba(18,54,90,.14);border-radius:12px;background:#f8fbfe}.access-check input{width:auto!important;min-height:auto!important;margin:2px 0 0!important}.access-check small{display:block;color:#5d6b78;margin-top:3px}.access-table-wrap{overflow:auto;border:1px solid rgba(18,54,90,.12);border-radius:14px}.access-table{width:100%;border-collapse:collapse;font-size:13px}.access-table th,.access-table td{padding:10px;border-bottom:1px solid rgba(18,54,90,.10);text-align:left;vertical-align:top}.access-table th{background:#eef6ff;color:#12365a}.access-mini{display:inline-flex;border-radius:999px;background:#eef6ff;color:#12365a;padding:3px 7px;margin:2px;font-size:11px;font-weight:800}.access-perms span{display:inline-block;color:#4d6378;font-size:11px;margin:2px 5px 2px 0}.access-person-row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid rgba(18,54,90,.08)}.access-backend{min-height:120px;max-height:320px;overflow:auto;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font-size:12px}.access-status-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}@media(max-width:850px){.access-grid,.access-login-grid,.access-two,.access-role-box{grid-template-columns:1fr}}
+        .access-wrap{max-width:1180px;margin:26px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:#172033}.access-card{background:rgba(255,255,255,.94);border:1px solid rgba(18,54,90,.16);border-radius:22px;box-shadow:0 10px 28px rgba(12,38,64,.12);padding:20px;margin:16px 0}.access-login-card{background:linear-gradient(135deg,#12365a,#2f80c4);color:#fff}.access-login-card h1{color:#fff;margin:6px 0}.access-login-card p{color:rgba(255,255,255,.88)}.access-eyebrow{display:inline-flex;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}.access-note{border-left:7px solid #12365a}.access-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.access-card h2{margin:0 0 12px;color:#0b2744}.access-card p{color:#294968;line-height:1.5}.access-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.access-login-grid{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:center}.access-login-actions,.access-button-row,.access-auth-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.access-two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.access-wrap input,.access-wrap select{width:100%;min-height:42px;border:1px solid rgba(18,54,90,.22);border-radius:12px;padding:10px 12px;margin:5px 0 12px;background:#fff;color:#172033}.access-wrap label{display:block;font-size:12px;font-weight:900;color:#24435f}.access-btn{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:9px 15px;border-radius:999px;border:1px solid #12365a;background:#12365a;color:#fff;font-weight:900;cursor:pointer;transition:transform .15s ease,box-shadow .15s ease,background .15s ease,opacity .15s ease}.access-btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(12,38,64,.18);background:#0b2744}.access-btn[disabled]{opacity:.62;cursor:wait;transform:none}.access-btn.secondary{background:#fff;color:#12365a}.access-btn.small{min-height:32px;font-size:12px;padding:7px 12px}.access-link-btn{border:none;background:transparent;color:#fff;text-decoration:underline;font-weight:800;cursor:pointer;padding:4px}.access-pill{display:inline-flex;align-items:center;border-radius:999px;padding:5px 10px;background:#eaf5ff;color:#12365a;font-size:12px;font-weight:900}.access-pill.ok{background:#e7f6ec;color:#14532d}.access-pill.warn{background:#fff7ec;color:#8a4d00}.access-pill.danger{background:#fee2e2;color:#991b1b}.access-action-message{display:none;margin-top:10px;padding:11px 13px;border-radius:13px;font-size:13px;font-weight:800;line-height:1.4}.access-action-message.info,.access-action-message.ok,.access-action-message.warn{display:block}.access-action-message.info{background:#eaf5ff;color:#12365a;border:1px solid rgba(18,54,90,.16)}.access-action-message.ok{background:#e7f6ec;color:#14532d;border:1px solid rgba(20,83,45,.18)}.access-action-message.warn{background:#fff7ec;color:#8a4d00;border:1px solid rgba(138,77,0,.24)}.access-help{font-size:13px;color:#5d6b78;line-height:1.45;margin:8px 0 12px}.access-role-box{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:8px 0 14px}.access-check{display:flex!important;gap:8px;align-items:flex-start;padding:9px;border:1px solid rgba(18,54,90,.14);border-radius:12px;background:#f8fbfe}.access-check input{width:auto!important;min-height:auto!important;margin:2px 0 0!important}.access-check small{display:block;color:#5d6b78;margin-top:3px}.access-table-wrap{overflow:auto;border:1px solid rgba(18,54,90,.12);border-radius:14px}.access-table{width:100%;border-collapse:collapse;font-size:13px}.access-table th,.access-table td{padding:10px;border-bottom:1px solid rgba(18,54,90,.10);text-align:left;vertical-align:top}.access-table th{background:#eef6ff;color:#12365a}.access-mini{display:inline-flex;border-radius:999px;background:#eef6ff;color:#12365a;padding:3px 7px;margin:2px;font-size:11px;font-weight:800}.access-perms span{display:inline-block;color:#4d6378;font-size:11px;margin:2px 5px 2px 0}.access-person-row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid rgba(18,54,90,.08)}.access-backend{min-height:120px;max-height:320px;overflow:auto;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font-size:12px}.access-status-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}@media(max-width:850px){.access-grid,.access-login-grid,.access-two,.access-role-box{grid-template-columns:1fr}}
       </style>
       <div class="access-wrap">
         ${renderLogin()}
-        <div class="access-status-row"><span id="access-status" class="access-pill">Version ${VERSION}</span></div>
+        <div class="access-status-row"><span id="access-status" class="access-pill ${esc(globalKind)}">${esc(globalMessage)}</span></div>
         ${renderApp()}
       </div>`;
 
-    $("access-login")?.addEventListener("click", () => login().catch((e) => setStatus(e.message, "warn")));
-    $("access-logout")?.addEventListener("click", () => logout().catch((e) => setStatus(e.message, "warn")));
-    $("access-refresh")?.addEventListener("click", () => loadInitial().then(render).catch((e) => setStatus(e.message, "warn")));
+    $("access-login")?.addEventListener("click", () => runButton("access-login", "login", "Logging in…", login).catch(() => {}));
+    $("access-login-reset")?.addEventListener("click", () => runButton("access-login-reset", "login", "Requesting reset…", () => sendPasswordReset($("access-email")?.value, "login")).catch(() => {}));
+    $("access-logout")?.addEventListener("click", () => runButton("access-logout", "login", "Logging out…", logout).catch(() => {}));
+    $("access-refresh")?.addEventListener("click", () => runButton("access-refresh", "seed", "Refreshing…", async () => { await loadInitial(); render(); setActionMessage("seed", "Refreshed.", "ok"); }).catch(() => {}));
     $("access-org-select")?.addEventListener("change", async (e) => { selectedOrgId = e.target.value; await loadOptions(); await loadMemberships(); render(); });
-    $("access-seed-self")?.addEventListener("click", () => seedSelfOrgAdmin().catch((e) => setStatus(e.message, "warn")));
-    $("access-save-person")?.addEventListener("click", () => savePersonMembership().catch((e) => setStatus(e.message, "warn")));
-    $("access-search-people-btn")?.addEventListener("click", () => loadPeople().then(render).catch((e) => setStatus(e.message, "warn")));
+    $("access-seed-self")?.addEventListener("click", () => runButton("access-seed-self", "seed", "Saving access…", seedSelfOrgAdmin).catch(() => {}));
+    $("access-save-person")?.addEventListener("click", () => runButton("access-save-person", "person", "Saving person…", savePersonMembership).catch(() => {}));
+    $("access-send-reset")?.addEventListener("click", () => runButton("access-send-reset", "auth", "Sending reset…", () => sendPasswordReset($("access-auth-email")?.value, "auth")).catch(() => {}));
+    $("access-send-invite")?.addEventListener("click", () => runButton("access-send-invite", "auth", "Sending invite…", sendInvite).catch(() => {}));
+    $("access-search-people-btn")?.addEventListener("click", () => runButton("access-search-people-btn", "person", "Searching…", async () => { await loadPeople(); render(); setActionMessage("person", "People search refreshed.", "ok"); }).catch(() => {}));
   }
 
-  document.addEventListener("DOMContentLoaded", () => refreshAuth().catch((e) => { render(); setStatus(e.message, "warn"); }));
+  document.addEventListener("DOMContentLoaded", () => refreshAuth().catch((e) => { render(); setGlobal(e.message, "warn"); }));
 })();

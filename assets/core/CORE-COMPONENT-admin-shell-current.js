@@ -7,7 +7,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-003";
+  const VERSION = "2026-06-06-004";
   const SHELL_ID = "syncetc-admin-shell";
   const LOGO_URL = "https://bxywokidhgppmlzyqvem.supabase.co/storage/v1/object/public/core-assets/SyncEtc-logo-compact.png";
 
@@ -16,6 +16,11 @@
       label: "Customer Builder",
       href: "/customer-builder",
       match: "/customer-builder"
+    },
+    {
+      label: "Access Admin",
+      href: "/access-admin",
+      match: "/access-admin"
     },
     {
       label: "Page Setup",

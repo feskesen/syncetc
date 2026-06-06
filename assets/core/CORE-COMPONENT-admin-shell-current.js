@@ -1,5 +1,5 @@
 // CORE-COMPONENT-admin-shell-current.js
-// Internal Version: 2026-06-06-006-A
+// Internal Version: 2026-06-06-006-B
 // Purpose: Shared SyncEtc admin shell header with logo and admin navigation bubbles.
 // Logo source: Supabase Storage public core-assets bucket.
 // Live filename is stable. Track versions internally, in Git history, and in local saved copies.
@@ -7,7 +7,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-06-006-A";
+  const VERSION = "2026-06-06-006-B";
   const SHELL_ID = "syncetc-admin-shell";
   const LOGO_URL = "https://bxywokidhgppmlzyqvem.supabase.co/storage/v1/object/public/core-assets/SyncEtc-logo-compact.png";
 
@@ -259,8 +259,10 @@
           border-radius: 999px;
           background: #ffffff;
           color: #1f2a44;
+          min-width: 112px;
           padding: 8px 12px;
           font-size: 13px;
+          text-align: center;
           font-weight: 800;
           line-height: 1;
           text-decoration: none;
@@ -304,6 +306,7 @@
           #${SHELL_ID} .se-shell-pill {
             font-size: 12px;
             min-height: 32px;
+            min-width: auto;
             padding: 7px 10px;
           }
         }

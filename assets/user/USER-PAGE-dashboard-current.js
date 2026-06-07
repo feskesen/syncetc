@@ -1,11 +1,11 @@
 // USER-PAGE-dashboard-current.js
-// Internal Version: 2026-06-07-015-A
+// Internal Version: 2026-06-07-016-A
 // Purpose: Signed-in User Dashboard foundation. Uses one Supabase Auth login, organization access context, separated lifecycle/class/stage fields, and organization style inheritance.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-015-A";
+  const VERSION = "2026-06-07-016-A";
   const ROOT_IDS = ["syncetc-user-dashboard-root", "syncetc-member-dashboard-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -27,7 +27,11 @@
   const clean = (v) => String(v ?? "").replace(/\s+/g," ").trim();
   const emailNorm = (v) => clean(v).toLowerCase();
 
-  function rootEl() { return ROOT_IDS.map((id) => document.getElementById(id)).find(Boolean); }
+  function rootEl() {
+    let root = ROOT_IDS.map((id) => document.getElementById(id)).find(Boolean);
+    if (!root) { root = document.createElement("div"); root.id = ROOT_IDS[0]; document.body.appendChild(root); }
+    return root;
+  }
   function selectedAccess() { return access.find((row) => String(row.organization_id) === String(selectedOrgId)) || access[0] || null; }
 
   function loadScript(src) {
@@ -280,6 +284,10 @@
 
   window.addEventListener("syncetc:portal-organization-change", (event) => {
     handleOrganizationChange(event.detail?.organization_id || event.detail?.organizationId);
+  });
+
+  window.addEventListener("syncetc:portal-auth-changed", () => {
+    refreshAuth().catch((e) => { backend = { ok:false, message:e.message || String(e) }; render(); });
   });
 
   document.addEventListener("DOMContentLoaded", () => refreshAuth().catch((e) => { backend = { ok:false, message:e.message }; render(); }));

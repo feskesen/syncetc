@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-dashboard-current.js
-// Internal Version: 2026-06-07-015-A
+// Internal Version: 2026-06-07-016-A
 // Purpose: Organization-admin dashboard foundation. Same Supabase Auth login as user dashboard; permissions decide organization-admin access; organization style inherited after access context resolves.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-015-A";
+  const VERSION = "2026-06-07-016-A";
   const ROOT_ID = "syncetc-organization-admin-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -74,7 +74,7 @@
   }
 
   function render() {
-    const root = document.getElementById(ROOT_ID); if (!root) return;
+    let root = document.getElementById(ROOT_ID); if (!root) { root = document.createElement("div"); root.id = ROOT_ID; document.body.appendChild(root); }
     const cfg = styleConfig(selectedRow());
     root.innerHTML = `
       <style>
@@ -107,6 +107,10 @@
     try { await loadAdminDashboard(); setMessage("Organization loaded.", "ok"); }
     catch (err) { backend = { ok:false, message:err.message || String(err) }; setMessage(err.message || String(err), "warn"); }
     render();
+  });
+
+  window.addEventListener("syncetc:portal-auth-changed", () => {
+    refreshAuth().catch((e) => { backend = { ok:false, message:e.message || String(e) }; render(); });
   });
 
   document.addEventListener("DOMContentLoaded", () => refreshAuth().catch((e) => { backend = { ok:false, message:e.message }; render(); }));

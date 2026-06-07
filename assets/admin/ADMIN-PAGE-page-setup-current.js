@@ -1,5 +1,5 @@
 // ADMIN-PAGE-page-setup-current.js
-// Internal Version: 2026-06-07-015-A
+// Internal Version: 2026-06-07-016-A
 // Purpose: Page Setup v4 stability repair. Customer page activation, publish/draft, show/hide nav, and clearer build/customer-page status.
 // Uses core-admin-action backend actions.
 // Actions used: list_customers, list_templates, list_customer_pages, enable_customer_page, update_customer_page, archive_customer_page, recover_customer_page.
@@ -7,7 +7,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-015-A";
+  const VERSION = "2026-06-07-016-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;

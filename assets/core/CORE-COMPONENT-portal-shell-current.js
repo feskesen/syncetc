@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-07-013-A
+// Internal Version: 2026-06-07-015-A
 // Purpose: Shared portal shell for signed-in user and organization-admin pages. Page links are permission-aware and Page Setup-aware.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-013-A";
+  const VERSION = "2026-06-07-015-A";
   const SHELL_ID = "syncetc-portal-shell";
   const FOOTER_ID = "syncetc-portal-footer";
 

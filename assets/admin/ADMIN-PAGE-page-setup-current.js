@@ -1,13 +1,13 @@
 // ADMIN-PAGE-page-setup-current.js
-// Internal Version: 2026-06-07-014-A
-// Purpose: Page Setup v4. Customer page activation, publish/draft, show/hide nav, and clearer build/customer-page status.
+// Internal Version: 2026-06-07-015-A
+// Purpose: Page Setup v4 stability repair. Customer page activation, publish/draft, show/hide nav, and clearer build/customer-page status.
 // Uses core-admin-action backend actions.
 // Actions used: list_customers, list_templates, list_customer_pages, enable_customer_page, update_customer_page, archive_customer_page, recover_customer_page.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-014-A";
+  const VERSION = "2026-06-07-015-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -750,8 +750,9 @@
         .se-badge.warn{background:#fff0d9;color:#8a5200;}
         .se-badge.ok{background:#edf7ed;color:#265c2b;}
         .se-controls{display:grid;grid-template-columns:1fr 1fr auto auto auto;gap:10px;align-items:end;}
-        .se-layout{display:grid;grid-template-columns:390px minmax(0,1fr);gap:14px;align-items:start;}
-        .se-sidebar{position:sticky;top:76px;}
+        .se-layout{display:grid;grid-template-columns:390px minmax(0,1fr);gap:14px;align-items:start;height:calc(100vh - 210px);min-height:620px;overflow:hidden;}
+        .se-sidebar{position:relative;top:auto;height:100%;overflow-y:auto;overscroll-behavior:contain;padding-right:4px;}
+        .se-main-panel{min-width:0;height:100%;overflow-y:auto;overscroll-behavior:contain;padding-right:4px;}
         .se-field{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
         .se-label{font-size:13px;font-weight:800;color:#26344d;}
         .se-input,.se-select{width:100%;border:1px solid #c7d2e2;border-radius:10px;padding:10px 11px;font-size:14px;background:#fff;color:#172033;}
@@ -807,7 +808,7 @@
         .se-template-actions{margin-top:auto;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;align-items:center;}
         .se-empty{border:1px dashed #c7d2e2;border-radius:12px;padding:16px;color:#5d6b82;background:#fbfcfe;}
         .se-auth-gate{display:block;}
-        @media(max-width:1180px){.se-layout{grid-template-columns:1fr;}.se-sidebar{position:relative;top:auto;}.se-controls,.se-filter-row,.se-summary,.se-guide{grid-template-columns:1fr;}.se-template-grid{grid-template-columns:1fr;}.se-page-row{flex-direction:column;}.se-page-actions{max-width:none;justify-content:flex-start;}}
+        @media(max-width:1180px){.se-layout{grid-template-columns:1fr;height:auto;min-height:0;overflow:visible;}.se-sidebar,.se-main-panel{position:relative;top:auto;height:auto;max-height:none;overflow:visible;}.se-controls,.se-filter-row,.se-summary,.se-guide{grid-template-columns:1fr;}.se-template-grid{grid-template-columns:1fr;}.se-page-row{flex-direction:column;}.se-page-actions{max-width:none;justify-content:flex-start;}}
       </style>
 
       <main class="se-wrap">
@@ -861,7 +862,7 @@
             </section>
           </aside>
 
-          <section>
+          <section class="se-main-panel">
             <section id="se-summary" class="se-summary"></section>
 
             <section class="se-card">

@@ -1,11 +1,11 @@
 // USER-PAGE-roster-current.js
-// Internal Version: 2026-06-07-013-A
+// Internal Version: 2026-06-07-015-A
 // Purpose: Logged-in user-facing organization roster. Read-only, organization-branded, privacy-filtered member directory.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-013-A";
+  const VERSION = "2026-06-07-015-A";
   const ROOT_IDS = ["syncetc-user-roster-root", "syncetc-member-roster-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -106,7 +106,10 @@
     const { data } = await supabaseClient.auth.getSession();
     token = data?.session?.access_token || "";
     email = data?.session?.user?.email || "";
-    if (token) await loadAccessAndRoster();
+    if (token) {
+      try { await loadAccessAndRoster(); }
+      catch (e) { backend = { ok:false, message:e.message || String(e) }; setMessage(e.message || String(e), "warn"); }
+    }
     setShellState();
     render();
   }

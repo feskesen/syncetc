@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-dashboard-current.js
-// Internal Version: 2026-06-07-013-A
+// Internal Version: 2026-06-07-015-A
 // Purpose: Organization-admin dashboard foundation. Same Supabase Auth login as user dashboard; permissions decide organization-admin access; organization style inherited after access context resolves.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-013-A";
+  const VERSION = "2026-06-07-015-A";
   const ROOT_ID = "syncetc-organization-admin-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -19,6 +19,7 @@
   let adminAccess = null;
   let selectedOrgId = "";
   let backend = null;
+  let platformAdmin = false;
   let message = `Version ${VERSION}`;
   let messageKind = "";
 
@@ -42,7 +43,7 @@
   function setShellState() { const row = selectedRow(); window.SyncEtcPortalShell?.setState?.({ authenticated: Boolean(token), email, mode: "org-admin", organizationName: row?.organization_name || "", organizationKey: row?.organization_key || "", styleProfile: row?.style_profile || null, accessRow: row || null, organizationOptions: adminRows(), selectedOrganizationId: selectedOrgId, platformAdmin }); }
   function setMessage(text, kind = "") { message = text || `Version ${VERSION}`; messageKind = kind; render(); }
 
-  async function refreshAuth() { await ensureSupabase(); const { data } = await supabaseClient.auth.getSession(); token = data?.session?.access_token || ""; email = data?.session?.user?.email || ""; if (token) await loadAccess(); setShellState(); render(); }
+  async function refreshAuth() { await ensureSupabase(); const { data } = await supabaseClient.auth.getSession(); token = data?.session?.access_token || ""; email = data?.session?.user?.email || ""; if (token) { try { await loadAccess(); } catch (e) { backend = { ok:false, message:e.message || String(e) }; setMessage(e.message || String(e), "warn"); } } setShellState(); render(); }
   async function login() { await ensureSupabase(); const e = emailNorm($("orgadm-email")?.value); const p = $("orgadm-password")?.value || ""; if (!e || !p) throw new Error("Enter email and password."); const { error } = await supabaseClient.auth.signInWithPassword({ email: e, password: p }); if (error) throw error; await refreshAuth(); setMessage(`Logged in as ${e}`, "ok"); }
   async function signUp() { await ensureSupabase(); const e = emailNorm($("orgadm-email")?.value); const p = $("orgadm-password")?.value || ""; if (!e || !p) throw new Error("Enter email and a password to create an account."); if (p.length < 8) throw new Error("Password should be at least 8 characters."); const { error } = await supabaseClient.auth.signUp({ email: e, password: p, options: { emailRedirectTo: `${window.location.origin}/organization-admin` } }); if (error) throw error; setMessage("Account request submitted. Check email if confirmation is required, then log in.", "ok"); }
   async function resetPassword() { await ensureSupabase(); const e = emailNorm($("orgadm-email")?.value); if (!e) throw new Error("Enter your email first."); const { error } = await supabaseClient.auth.resetPasswordForEmail(e, { redirectTo: `${window.location.origin}/password-reset` }); if (error) throw error; setMessage("Password reset email requested. Check your inbox.", "ok"); }

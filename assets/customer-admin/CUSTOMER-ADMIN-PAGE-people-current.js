@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-07-017-A
+// Internal Version: 2026-06-07-019-A
 // Purpose: Organization Admin People & Access page. Customer-facing people search, roster, and editor.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-017-A";
+  const VERSION = "2026-06-07-019-A";
   const ROOT_ID = "syncetc-organization-people-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -638,5 +638,15 @@
     refreshAuth().catch((e) => { backend = { ok:false, message:e.message || String(e) }; render(); });
   });
 
-  document.addEventListener("DOMContentLoaded", () => refreshAuth().catch((e) => { backend = { ok:false, message:e.message }; render(); }));
+  function bootOrganizationPeople() {
+    refreshAuth().catch((e) => {
+      backend = { ok:false, message:e?.message || String(e) };
+      authChecked = true;
+      try { setShellState(); } catch {}
+      render();
+    });
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bootOrganizationPeople);
+  else bootOrganizationPeople();
 })();

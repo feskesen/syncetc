@@ -1,11 +1,11 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-07-018-A
+// Internal Version: 2026-06-07-019-A
 // Purpose: Public page shell using the same organization header model as the portal shell.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-018-A";
+  const VERSION = "2026-06-07-019-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";

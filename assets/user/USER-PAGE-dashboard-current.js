@@ -1,11 +1,11 @@
 // USER-PAGE-dashboard-current.js
-// Internal Version: 2026-06-07-017-A
+// Internal Version: 2026-06-07-019-A
 // Purpose: Signed-in User Dashboard foundation. Uses one Supabase Auth login, organization access context, separated lifecycle/class/stage fields, and organization style inheritance.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-017-A";
+  const VERSION = "2026-06-07-019-A";
   const ROOT_IDS = ["syncetc-user-dashboard-root", "syncetc-member-dashboard-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -305,5 +305,15 @@
     refreshAuth().catch((e) => { backend = { ok:false, message:e.message || String(e) }; render(); });
   });
 
-  document.addEventListener("DOMContentLoaded", () => refreshAuth().catch((e) => { backend = { ok:false, message:e.message }; render(); }));
+  function bootUserDashboard() {
+    refreshAuth().catch((e) => {
+      backend = { ok:false, message:e?.message || String(e) };
+      authChecked = true;
+      try { setShellState(); } catch {}
+      render();
+    });
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bootUserDashboard);
+  else bootUserDashboard();
 })();

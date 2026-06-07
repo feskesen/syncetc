@@ -1,11 +1,11 @@
 // AUTH-PAGE-login-current.js
-// Internal Version: 2026-06-07-017-A
+// Internal Version: 2026-06-07-019-A
 // Purpose: Simple shared login page for /login route. Uses Supabase Auth and sends users to the portal after login.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-017-A";
+  const VERSION = "2026-06-07-019-A";
   const ROOT_ID = "syncetc-login-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -138,5 +138,14 @@
     $("login-logout")?.addEventListener("click", () => run("login-logout", "Logging out…", logout));
   }
 
-  document.addEventListener("DOMContentLoaded", () => refreshAuth().catch((e) => { message = e.message || String(e); messageKind = "warn"; render(); }));
+  function bootLoginPage() {
+    refreshAuth().catch((e) => {
+      message = e?.message || String(e);
+      messageKind = "warn";
+      render();
+    });
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bootLoginPage);
+  else bootLoginPage();
 })();

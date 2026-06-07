@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-07-018-A
+// Internal Version: 2026-06-07-019-A
 // Purpose: Shared portal shell with tiered navigation, organization context, inline login/logout, and no blue pre-style flash.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-018-A";
+  const VERSION = "2026-06-07-019-A";
   const SHELL_ID = "syncetc-portal-shell";
   const FOOTER_ID = "syncetc-portal-footer";
   const LOGIN_MODAL_ID = "syncetc-portal-login-modal";
@@ -336,6 +336,12 @@
     renderFooter(cfg);
   }
 
-  window.SyncEtcPortalShell = { setState, render, version: VERSION, openLogin: openLoginModal, logout: shellLogout };
-  document.addEventListener("DOMContentLoaded", () => { syncShellAuth().catch(() => render()); });
+  window.SyncEtcPortalShell = { setState, render, version: VERSION, openLogin: openLoginModal, logout: shellLogout, syncAuth: syncShellAuth };
+
+  function bootPortalShell() {
+    syncShellAuth().catch(() => render());
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bootPortalShell);
+  else bootPortalShell();
 })();

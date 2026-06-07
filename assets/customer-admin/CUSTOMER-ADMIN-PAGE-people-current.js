@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-07-007-A
+// Internal Version: 2026-06-07-007-B
 // Purpose: Organization Admin People & Access page. Customer-facing people search, roster, and editor.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-007-A";
+  const VERSION = "2026-06-07-007-B";
   const ROOT_ID = "syncetc-organization-people-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -45,6 +45,7 @@
   let backend = null;
   let debounceTimer = null;
   let fieldErrors = {};
+  let dirty = false;
 
   const $ = (id) => document.getElementById(id);
   const esc = (v) => String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#039;");
@@ -102,7 +103,7 @@
     const text = getText(colors,"text","#172033");
     const corners = getText(effects,"corners","soft");
     const width = getText(spacing,"page_width",getText(layout,"default_width","wide"));
-    return { primary, secondary, surface, text, muted: rgba(text,.68), border: rgba(primary,.16), soft: rgba(primary,.08), strongSoft: rgba(primary,.14), shadow: `0 14px 42px ${rgba(primary,.14)}`, radius: corners === "sharp" ? "8px" : corners === "pill" ? "30px" : "22px", pageWidth: width === "narrow" ? "900px" : width === "normal" ? "1060px" : "1240px" };
+    return { primary, secondary, surface, text, muted: rgba(text,.68), border: rgba(primary,.16), soft: rgba(primary,.08), strongSoft: rgba(primary,.14), shadow: `0 14px 42px ${rgba(primary,.14)}`, radius: corners === "sharp" ? "8px" : corners === "pill" ? "30px" : "22px", pageWidth: width === "narrow" ? "900px" : width === "normal" ? "1060px" : "1180px" };
   }
   function cssVars(cfg) { return `--people-primary:${cfg.primary};--people-secondary:${cfg.secondary};--people-surface:${cfg.surface};--people-text:${cfg.text};--people-muted:${cfg.muted};--people-border:${cfg.border};--people-soft:${cfg.soft};--people-strong-soft:${cfg.strongSoft};--people-shadow:${cfg.shadow};--people-radius:${cfg.radius};--people-page-width:${cfg.pageWidth};`; }
 
@@ -112,6 +113,11 @@
   }
 
   function setMessage(text, kind = "") { message = text || `Version ${VERSION}`; messageKind = kind; render(); }
+  function setDirty(value = true) { dirty = Boolean(value); }
+  function confirmDiscard() {
+    if (!dirty) return true;
+    return confirm("You have unsaved changes. Leave without saving?");
+  }
 
   async function refreshAuth() {
     await ensureSupabase();
@@ -144,7 +150,7 @@
     await loadAccess();
     setMessage("Logged in.", "ok");
   }
-  async function logout() { await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; setShellState(); render(); }
+  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; setShellState(); render(); }
   async function resetOwnPassword() { await ensureSupabase(); const loginEmail = clean($("people-login-email")?.value || email).toLowerCase(); if (!loginEmail) throw new Error("Enter email first."); const { error } = await supabaseClient.auth.resetPasswordForEmail(loginEmail, { redirectTo: "https://syncetc.webflow.io/password-reset" }); if (error) throw error; setMessage("Password reset email requested.", "ok"); }
 
   async function runButton(id, label, fn) {
@@ -341,8 +347,8 @@
     const root = document.getElementById(ROOT_ID); if (!root) return;
     const cfg = styleConfig(selectedRow());
     root.innerHTML = `<style>
-      .people-wrap{${cssVars(cfg)}max-width:var(--people-page-width);margin:24px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:var(--people-text)}.people-wrap *{box-sizing:border-box}.people-card{background:rgba(255,255,255,.96);border:1px solid var(--people-border);border-radius:var(--people-radius);box-shadow:var(--people-shadow);padding:20px;margin:16px 0}.people-hero{background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.78)});color:#fff}.people-hero h1{margin:8px 0;color:#fff;font-size:clamp(30px,4vw,46px);letter-spacing:-.035em}.people-hero p{color:rgba(255,255,255,.9);max-width:900px}.people-eyebrow{display:inline-flex;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}.people-auth,.people-login,.people-toolbar-actions,.people-editor-actions,.people-pill-row,.people-role-list{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.people-login{display:grid;grid-template-columns:1fr 1fr auto auto;gap:10px;margin-top:14px}.people-login input,.people-search-wrap input,.people-field input,.people-field select,.people-field textarea,#people-org-select{width:100%;border:1px solid var(--people-border);border-radius:14px;background:#fff;color:var(--people-text);padding:12px 13px;font:inherit;min-height:44px}.people-field textarea{min-height:112px;resize:vertical}.people-btn,.people-icon-btn,.people-filter,.people-link-btn{border:0;border-radius:999px;background:var(--people-primary);color:#fff;font-weight:900;padding:11px 15px;cursor:pointer;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}.people-btn:hover,.people-filter:hover,.people-person-card:hover{transform:translateY(-1px)}.people-btn.secondary{background:var(--people-strong-soft);color:var(--people-primary)}.people-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-btn:disabled{opacity:.55;cursor:not-allowed;transform:none}.people-link-btn{background:transparent;color:#fff;text-decoration:underline;padding:8px}.people-message{margin-top:14px;padding:11px 13px;border-radius:14px;background:rgba(255,255,255,.12);font-weight:800}.people-message.ok{background:rgba(16,185,129,.18)}.people-message.warn,.people-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:14px;padding:11px 13px}.people-context-single{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);padding:9px 12px;border-radius:999px;font-weight:900}.people-context-single span{opacity:.82}.muted{color:var(--people-muted)}.people-finder-top,.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}.people-finder h2,.people-editor h2{margin:0}.people-finder p{margin:.3rem 0 0}.people-search-wrap{position:relative;margin:16px 0 12px}.people-search-wrap input{padding-right:46px;font-size:16px}.people-icon-btn{position:absolute;right:6px;top:6px;width:32px;height:32px;padding:0;background:var(--people-soft);color:var(--people-primary)}.people-filters{display:flex;gap:8px;flex-wrap:wrap}.people-filter{background:var(--people-soft);color:var(--people-primary);padding:9px 12px}.people-filter.active{background:var(--people-primary);color:#fff}.people-filter strong{margin-left:6px}.people-results-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin:14px 0 10px}.people-compact-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;max-height:300px;overflow:auto;padding:2px 2px 6px}.people-person-card{text-align:left;border:1px solid var(--people-border);border-radius:18px;background:#fff;color:var(--people-text);padding:10px 12px;min-height:76px;display:grid;grid-template-columns:1.3fr 1.5fr;gap:3px 10px;align-content:center;cursor:pointer;box-shadow:0 6px 18px ${rgba(cfg.primary,.06)}}.people-person-card.selected{border-color:var(--people-primary);background:var(--people-soft);box-shadow:0 0 0 3px var(--people-strong-soft)}.person-name{font-weight:950;font-size:15px}.person-meta,.person-contact,.person-role{font-size:12px;color:var(--people-muted);line-height:1.25}.person-role{font-weight:800;color:var(--people-primary)}.person-contact{text-align:right}.people-empty-row{border:1px dashed var(--people-border);border-radius:16px;padding:20px;text-align:center;color:var(--people-muted)}.people-empty{min-height:220px;display:grid;align-content:center;text-align:center}.people-editor{width:100%}.people-editor-head{border-bottom:1px solid var(--people-border);padding-bottom:14px;margin-bottom:12px}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}details{border:1px solid var(--people-border);border-radius:18px;background:#fff;margin:12px 0;overflow:hidden}summary{padding:15px 16px;font-size:16px;font-weight:950;cursor:pointer;background:linear-gradient(180deg,#fff,var(--people-soft))}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:16px}.people-field{display:grid;gap:6px;font-weight:850}.people-field span{font-size:13px}.people-field small{font-weight:600;color:var(--people-muted);line-height:1.35}.people-field-wide{grid-column:1/-1}.field-error{color:#b91c1c!important;font-weight:900!important}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;padding:16px 16px 0}.primary-pick{min-height:44px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:14px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:16px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:11px 12px;border:1px solid var(--people-border);border-radius:14px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font-size:12px;max-height:260px;overflow:auto}@media(max-width:900px){.people-form-grid,.people-check-grid{grid-template-columns:1fr 1fr}.people-login{grid-template-columns:1fr}.people-toolbar-actions,.people-editor-actions{width:100%}.people-btn{flex:1}.phone-grid{grid-template-columns:1fr}.primary-pick{justify-content:flex-start;padding:0 12px}.people-compact-list{grid-template-columns:1fr;max-height:360px}}@media(max-width:640px){.people-form-grid,.people-check-grid{grid-template-columns:1fr}.people-btn{width:100%}}@media print{#syncetc-portal-shell,.people-hero,.people-finder,.people-editor,.people-message{display:none!important}.people-wrap{max-width:none;margin:0;padding:0}.people-card{box-shadow:none;border:none}}
-    </style><div class="people-wrap"><section class="people-card people-hero"><div class="people-eyebrow">Organization Admin</div><h1>People & Access</h1><p>Search the full people pool, manage members and applicants, keep contact information current, and handle safe access updates from one place.</p>${renderLogin()}<div style="margin-top:12px">${renderOrgSelector()}</div><div class="people-message ${esc(messageKind)}">${esc(message)}</div></section>${renderContent()}<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify(backend || {}, null, 2))}</pre></details></div>`;
+      .people-wrap{${cssVars(cfg)}max-width:var(--people-page-width);margin:24px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:var(--people-text)}.people-wrap *{box-sizing:border-box}.people-card{background:rgba(255,255,255,.96);border:1px solid var(--people-border);border-radius:var(--people-radius);box-shadow:var(--people-shadow);padding:20px;margin:16px 0}.people-hero{background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.78)});color:#fff}.people-hero h1{margin:8px 0;color:#fff;font-size:clamp(30px,4vw,46px);letter-spacing:-.035em}.people-hero p{color:rgba(255,255,255,.9);max-width:900px}.people-eyebrow{display:inline-flex;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}.people-auth,.people-login,.people-toolbar-actions,.people-editor-actions,.people-pill-row,.people-role-list{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.people-login{display:grid;grid-template-columns:1fr 1fr auto auto;gap:10px;margin-top:14px}.people-login input,.people-search-wrap input,.people-field input,.people-field select,.people-field textarea,#people-org-select{width:100%;border:1px solid var(--people-border);border-radius:14px;background:#fff;color:var(--people-text);padding:12px 13px;font:inherit;min-height:44px}.people-field textarea{min-height:112px;resize:vertical}.people-btn,.people-icon-btn,.people-filter,.people-link-btn{border:0;border-radius:999px;background:var(--people-primary);color:#fff;font-weight:900;padding:11px 15px;cursor:pointer;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}.people-btn:hover,.people-filter:hover,.people-person-card:hover{transform:translateY(-1px)}.people-btn.secondary{background:var(--people-strong-soft);color:var(--people-primary)}.people-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-btn:disabled{opacity:.55;cursor:not-allowed;transform:none}.people-link-btn{background:transparent;color:#fff;text-decoration:underline;padding:8px}.people-message{margin-top:14px;padding:11px 13px;border-radius:14px;background:rgba(255,255,255,.12);font-weight:800}.people-message.ok{background:rgba(16,185,129,.18)}.people-message.warn,.people-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:14px;padding:11px 13px}.people-context-single{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);padding:9px 12px;border-radius:999px;font-weight:900}.people-context-single span{opacity:.82}.muted{color:var(--people-muted)}.people-finder-top,.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}.people-finder h2,.people-editor h2{margin:0}.people-finder p{margin:.3rem 0 0}.people-search-wrap{position:relative;margin:16px 0 12px}.people-search-wrap input{padding-right:46px;font-size:16px}.people-icon-btn{position:absolute;right:6px;top:6px;width:32px;height:32px;padding:0;background:var(--people-soft);color:var(--people-primary)}.people-filters{display:flex;gap:8px;flex-wrap:wrap}.people-filter{background:var(--people-soft);color:var(--people-primary);padding:9px 12px}.people-filter.active{background:var(--people-primary);color:#fff}.people-filter strong{margin-left:6px}.people-results-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin:14px 0 10px}.people-compact-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;max-height:300px;overflow:auto;padding:2px 2px 6px}.people-person-card{text-align:left;border:1px solid var(--people-border);border-radius:18px;background:#fff;color:var(--people-text);padding:10px 12px;min-height:76px;display:grid;grid-template-columns:1.3fr 1.5fr;gap:3px 10px;align-content:center;cursor:pointer;box-shadow:0 6px 18px ${rgba(cfg.primary,.06)}}.people-person-card.selected{border-color:var(--people-primary);background:var(--people-soft);box-shadow:0 0 0 3px var(--people-strong-soft)}.person-name{font-weight:950;font-size:15px}.person-meta,.person-contact,.person-role{font-size:12px;color:var(--people-muted);line-height:1.25}.person-role{font-weight:800;color:var(--people-primary)}.person-contact{text-align:right}.people-empty-row{border:1px dashed var(--people-border);border-radius:16px;padding:20px;text-align:center;color:var(--people-muted)}.people-empty{min-height:220px;display:grid;align-content:center;text-align:center}.people-editor{width:100%}.people-editor-head{border-bottom:1px solid var(--people-border);padding-bottom:14px;margin-bottom:12px}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}details{border:1px solid var(--people-border);border-radius:18px;background:#fff;margin:12px 0;overflow:hidden}summary{padding:15px 16px;font-size:16px;font-weight:950;cursor:pointer;background:linear-gradient(180deg,#fff,var(--people-soft))}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:16px}.people-field{display:grid;gap:6px;font-weight:850}.people-field span{font-size:13px}.people-field small{font-weight:600;color:var(--people-muted);line-height:1.35}.people-field-wide{grid-column:1/-1}.field-error{color:#b91c1c!important;font-weight:900!important}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;padding:16px 16px 0}.primary-pick{min-height:44px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:14px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:16px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:11px 12px;border:1px solid var(--people-border);border-radius:14px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font-size:12px;max-height:260px;overflow:auto}@media(max-width:900px){.people-form-grid,.people-check-grid{grid-template-columns:1fr 1fr}.people-login{grid-template-columns:1fr}.people-toolbar-actions,.people-editor-actions{width:100%}.people-btn{flex:1}.phone-grid{grid-template-columns:1fr}.primary-pick{justify-content:flex-start;padding:0 12px}.people-compact-list{grid-template-columns:1fr;max-height:360px}}@media(max-width:640px){.people-form-grid,.people-check-grid{grid-template-columns:1fr}.people-btn{width:100%}}@media print{#syncetc-portal-shell,.people-hero,.people-finder,.people-editor,.people-message{display:none!important}.people-wrap{max-width:none;margin:0;padding:0}.people-card{box-shadow:none;border:none}}
+    </style><div class="people-wrap"><section class="people-card people-hero"><div class="people-eyebrow">Organization Admin</div><h1>People & Access</h1><p>Search the full people pool, manage members and applicants, keep contact information current, and handle safe access updates from one place.</p>${renderLogin()}<div style="margin-top:12px">${renderOrgSelector()}</div><div class="people-message ${esc(messageKind)}">${esc(message)}</div></section>${renderContent()}<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify(backend || {}, null, 2))}</pre></details><footer class="people-footer">People &amp; Access · Version ${esc(VERSION)} · <a href="/organization-admin">Organization Admin</a></footer></div>`;
     bindEvents();
   }
 
@@ -350,13 +356,13 @@
     $("people-login")?.addEventListener("click", () => runButton("people-login", "Logging in…", login));
     $("people-logout")?.addEventListener("click", () => runButton("people-logout", "Logging out…", logout));
     $("people-reset-own")?.addEventListener("click", () => runButton("people-reset-own", "Sending…", resetOwnPassword));
-    $("people-org-select")?.addEventListener("change", async (e) => { selectedOrgId = e.target.value; adminAccess = null; selected = null; try { await loadOrgContext(); setMessage("Organization loaded.", "ok"); } catch (err) { setMessage(err.message || String(err), "warn"); } render(); });
+    $("people-org-select")?.addEventListener("change", async (e) => { if (!confirmDiscard()) { e.target.value = selectedOrgId; return; } setDirty(false); selectedOrgId = e.target.value; adminAccess = null; selected = null; try { await loadOrgContext(); setMessage("Organization loaded.", "ok"); } catch (err) { setMessage(err.message || String(err), "warn"); } render(); });
     $("people-search")?.addEventListener("input", (e) => { clearTimeout(debounceTimer); debounceTimer = setTimeout(() => { search = e.target.value || ""; render(); }, 350); });
     $("people-clear-search")?.addEventListener("click", () => { search = ""; render(); });
-    document.querySelectorAll(".people-filter").forEach((btn) => btn.addEventListener("click", () => { filter = btn.getAttribute("data-filter") || "all"; render(); }));
-    document.querySelectorAll("[data-open]").forEach((btn) => btn.addEventListener("click", () => { const id = btn.getAttribute("data-open"); selected = people.find((p) => p.membership_id === id) || null; fieldErrors = {}; render(); }));
-    $("people-new")?.addEventListener("click", () => { selected = blankPerson(); fieldErrors = {}; render(); });
-    $("people-refresh")?.addEventListener("click", () => runButton("people-refresh", "Refreshing…", async () => { await loadOrgContext(); setMessage("Refreshed.", "ok"); }));
+    document.querySelectorAll(".people-filter").forEach((btn) => btn.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); filter = btn.getAttribute("data-filter") || "all"; render(); }));
+    document.querySelectorAll("[data-open]").forEach((btn) => btn.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); const id = btn.getAttribute("data-open"); selected = people.find((p) => p.membership_id === id) || null; fieldErrors = {}; render(); }));
+    $("people-new")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); selected = blankPerson(); fieldErrors = {}; render(); });
+    $("people-refresh")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); runButton("people-refresh", "Refreshing…", async () => { await loadOrgContext(); setMessage("Refreshed.", "ok"); }); });
     $("people-export")?.addEventListener("click", exportCsv);
     $("people-print")?.addEventListener("click", () => window.print());
     $("people-save")?.addEventListener("click", () => runButton("people-save", "Saving…", saveSelected));
@@ -364,6 +370,10 @@
     $("people-reset-password")?.addEventListener("click", () => runButton("people-reset-password", "Sending…", sendPasswordReset));
     $("people-archive")?.addEventListener("click", () => runButton("people-archive", "Archiving…", archiveSelected));
     $("people-restore")?.addEventListener("click", () => runButton("people-restore", "Restoring…", restoreSelected));
+    document.querySelectorAll(".people-editor input, .people-editor select, .people-editor textarea").forEach((el) => {
+      el.addEventListener("input", () => setDirty(true));
+      el.addEventListener("change", () => setDirty(true));
+    });
   }
 
   function blankPerson() {
@@ -421,6 +431,7 @@
     payload.confirm_restrictive = restrictive;
     const res = await call("organization_save_person", payload);
     selected = res.person || selected;
+    setDirty(false);
     await loadPeople();
     if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
     fieldErrors = {};
@@ -444,6 +455,7 @@
     if (!selected?.membership_id) throw new Error("Select a person first.");
     if (!confirm("Archive this person's organization affiliation? They will disappear from normal People views, but can be restored from the Archived filter.")) return;
     const res = await call("organization_archive_membership", { organization_id: selectedOrgId, membership_id: selected.membership_id, person_id: selected.person_id });
+    setDirty(false);
     await loadPeople();
     selected = res.person || null;
     setMessage("Membership archived.", "ok");
@@ -452,6 +464,7 @@
   async function restoreSelected() {
     if (!selected?.membership_id) throw new Error("Select a person first.");
     const res = await call("organization_restore_membership", { organization_id: selectedOrgId, membership_id: selected.membership_id, person_id: selected.person_id });
+    setDirty(false);
     await loadPeople();
     selected = res.person || people.find((p) => p.membership_id === selected.membership_id) || null;
     setMessage("Membership restored.", "ok");
@@ -469,6 +482,12 @@
     a.download = `people-${selectedRow()?.organization_key || "organization"}.csv`;
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   }
+
+  window.addEventListener("beforeunload", (event) => {
+    if (!dirty) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
 
   document.addEventListener("DOMContentLoaded", () => refreshAuth().catch((e) => { backend = { ok:false, message:e.message }; render(); }));
 })();

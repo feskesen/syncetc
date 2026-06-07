@@ -1,11 +1,11 @@
 // USER-PAGE-dashboard-current.js
-// Internal Version: 2026-06-07-012-A
+// Internal Version: 2026-06-07-013-A
 // Purpose: Signed-in User Dashboard foundation. Uses one Supabase Auth login, organization access context, separated lifecycle/class/stage fields, and organization style inheritance.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-012-A";
+  const VERSION = "2026-06-07-013-A";
   const ROOT_IDS = ["syncetc-user-dashboard-root", "syncetc-member-dashboard-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -17,6 +17,7 @@
   let email = "";
   let access = [];
   let selectedOrgId = "";
+  let platformAdmin = false;
   let backend = null;
   let message = `Version ${VERSION}`;
   let messageKind = "";
@@ -88,6 +89,7 @@
       organizations: access.map((a) => ({ id: a.organization_id, name: a.organization_name, key: a.organization_key })),
       styleProfile: row?.style_profile || null,
       accessRow: row || null,
+      platformAdmin,
     });
   }
 
@@ -153,6 +155,7 @@
 
   async function loadAccess() {
     const res = await call("get_user_dashboard", selectedOrgId ? { organization_id: selectedOrgId } : {});
+    platformAdmin = Boolean(res.platform_admin);
     access = res.access || [];
     if (!selectedOrgId && access[0]) selectedOrgId = String(access[0].organization_id);
     setShellState();

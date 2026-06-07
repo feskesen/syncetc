@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-07-012-A
+// Internal Version: 2026-06-07-013-A
 // Purpose: Organization Admin People & Access page. Customer-facing people search, roster, and editor.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-012-A";
+  const VERSION = "2026-06-07-013-A";
   const ROOT_ID = "syncetc-organization-people-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -34,6 +34,7 @@
   let allAccess = [];
   let adminAccess = null;
   let selectedOrgId = "";
+  let platformAdmin = false;
   let options = { statuses: [], membership_classes: [], application_stages: [], roles: [] };
   let people = [];
   let pageConfig = null;
@@ -122,6 +123,7 @@
       organizationOptions: rows.map((r) => ({ organization_id: r.organization_id, organization_name: r.organization_name, organization_key: r.organization_key })),
       styleProfile: row?.style_profile || null,
       accessRow: row || null,
+      platformAdmin,
     });
   }
 
@@ -175,6 +177,7 @@
 
   async function loadAccess() {
     const res = await call("get_my_access");
+    platformAdmin = Boolean(res.platform_admin);
     allAccess = res.access || [];
     if (!selectedOrgId && adminRows()[0]) selectedOrgId = String(adminRows()[0].organization_id);
     if (selectedOrgId) await loadOrgContext();

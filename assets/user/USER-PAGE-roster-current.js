@@ -1,11 +1,11 @@
 // USER-PAGE-roster-current.js
-// Internal Version: 2026-06-07-012-A
+// Internal Version: 2026-06-07-013-A
 // Purpose: Logged-in user-facing organization roster. Read-only, organization-branded, privacy-filtered member directory.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-012-A";
+  const VERSION = "2026-06-07-013-A";
   const ROOT_IDS = ["syncetc-user-roster-root", "syncetc-member-roster-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -17,6 +17,7 @@
   let email = "";
   let access = [];
   let selectedOrgId = "";
+  let platformAdmin = false;
   let roster = [];
   let summary = { total: 0, membership_classes: {} };
   let pageConfig = null;
@@ -94,6 +95,7 @@
       organizations: access.map((a) => ({ id: a.organization_id, name: a.organization_name, key: a.organization_key })),
       styleProfile: row?.style_profile || null,
       accessRow: row || null,
+      platformAdmin,
     });
   }
 
@@ -147,6 +149,7 @@
 
   async function loadAccessAndRoster() {
     const dash = await call("get_user_dashboard", selectedOrgId ? { organization_id: selectedOrgId } : {});
+    platformAdmin = Boolean(dash.platform_admin);
     access = dash.access || [];
     if (!selectedOrgId && access[0]) selectedOrgId = String(access[0].organization_id);
     setShellState();

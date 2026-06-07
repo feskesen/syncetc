@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-07-016-A
+// Internal Version: 2026-06-07-017-A
 // Purpose: Organization Admin People & Access page. Customer-facing people search, roster, and editor.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-016-A";
+  const VERSION = "2026-06-07-017-A";
   const ROOT_ID = "syncetc-organization-people-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -31,6 +31,7 @@
   let supabaseClient = null;
   let token = "";
   let email = "";
+  let authChecked = false;
   let allAccess = [];
   let adminAccess = null;
   let selectedOrgId = "";
@@ -55,6 +56,9 @@
   const key = (v) => clean(v).toLowerCase().replace(/[^a-z0-9_.:-]+/g,"-").replace(/-+/g,"-").replace(/^-|-$/g,"");
   const obj = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
   const arr = (v) => Array.isArray(v) ? v : [];
+  function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+  function shouldWaitForSession() { try { return window.sessionStorage.getItem("syncetc_just_logged_in") === "1"; } catch { return false; } }
+  function clearJustLoggedIn() { try { window.sessionStorage.removeItem("syncetc_just_logged_in"); } catch {} }
   const bool = (v) => v === true;
   const unique = (rows) => Array.from(new Set(arr(rows).map(key).filter(Boolean)));
   const hasPerm = (row, p) => arr(row?.permission_keys).includes(p);
@@ -128,6 +132,16 @@
   }
 
   function setMessage(text, kind = "") { message = text || `Version ${VERSION}`; messageKind = kind; render(); }
+  async function getStableSession() {
+    const attempts = shouldWaitForSession() ? 14 : 3;
+    for (let i = 0; i < attempts; i += 1) {
+      const { data } = await supabaseClient.auth.getSession();
+      if (data?.session?.access_token) { clearJustLoggedIn(); return data.session; }
+      if (i < attempts - 1) await sleep(150);
+    }
+    clearJustLoggedIn();
+    return null;
+  }
   function setDirty(value = true) { dirty = Boolean(value); }
   function confirmDiscard() {
     if (!dirty) return true;
@@ -136,13 +150,12 @@
 
   async function refreshAuth() {
     await ensureSupabase();
-    const { data } = await supabaseClient.auth.getSession();
-    token = data?.session?.access_token || "";
-    email = data?.session?.user?.email || "";
-    if (token) {
-      try { await loadAccess(); }
-      catch (e) { backend = { ok:false, message:e.message || String(e) }; setMessage(e.message || String(e), "warn"); }
-    }
+    const session = await getStableSession();
+    token = session?.access_token || "";
+    email = session?.user?.email || "";
+    if (!token) { allAccess = []; adminAccess = null; selectedOrgId = ""; platformAdmin = false; people = []; selected = null; backend = null; }
+    else { try { await loadAccess(); } catch (e) { backend = { ok:false, message:e.message || String(e) }; authChecked = true; setShellState(); setMessage(e.message || String(e), "warn"); return; } }
+    authChecked = true;
     setShellState();
     render();
   }
@@ -163,12 +176,13 @@
     if (!loginEmail || !password) throw new Error("Enter email and password.");
     const { data, error } = await supabaseClient.auth.signInWithPassword({ email: loginEmail, password });
     if (error) throw error;
+    try { window.sessionStorage.setItem("syncetc_just_logged_in", "1"); } catch {}
     token = data?.session?.access_token || "";
     email = data?.user?.email || loginEmail;
-    await loadAccess();
+    await refreshAuth();
     setMessage("Logged in.", "ok");
   }
-  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; setShellState(); render(); }
+  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; authChecked = true; setShellState(); render(); }
   async function resetOwnPassword() { await ensureSupabase(); const loginEmail = clean($("people-login-email")?.value || email).toLowerCase(); if (!loginEmail) throw new Error("Enter email first."); const { error } = await supabaseClient.auth.resetPasswordForEmail(loginEmail, { redirectTo: "https://syncetc.webflow.io/password-reset" }); if (error) throw error; setMessage("Password reset email requested.", "ok"); }
 
   async function runButton(id, label, fn) {
@@ -397,6 +411,7 @@
   }
 
   function renderContent() {
+    if (!authChecked) return `<section class="people-card"><h2>Checking login…</h2><p>Please wait while SyncEtc confirms your session.</p></section>`;
     if (!token) return `<section class="people-card"><h2>Login required</h2><p>This page uses the same login as the User Dashboard.</p>${renderLogin()}</section>`;
     const rows = adminRows();
     if (!rows.length) return `<section class="people-card"><h2>No organization admin access</h2><p>Your account is signed in, but it does not have organization-admin permission.</p></section>`;

@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-07-016-A
+// Internal Version: 2026-06-07-017-A
 // Purpose: Shared portal shell with tiered navigation, organization context, inline login/logout, and no blue pre-style flash.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-016-A";
+  const VERSION = "2026-06-07-017-A";
   const SHELL_ID = "syncetc-portal-shell";
   const FOOTER_ID = "syncetc-portal-footer";
   const LOGIN_MODAL_ID = "syncetc-portal-login-modal";
@@ -22,6 +22,7 @@
   let loginMessage = "";
   let loginMessageKind = "";
   let authSyncStarted = false;
+  let authListenerStarted = false;
 
   let state = {
     authenticated: false,
@@ -64,7 +65,22 @@
     if (shellSupabaseClient) return shellSupabaseClient;
     if (!window.supabase) await loadScript(SUPABASE_JS);
     shellSupabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    startAuthListener();
     return shellSupabaseClient;
+  }
+
+  function startAuthListener() {
+    if (authListenerStarted || !shellSupabaseClient?.auth?.onAuthStateChange) return;
+    authListenerStarted = true;
+    shellSupabaseClient.auth.onAuthStateChange((event, session) => {
+      if (!["SIGNED_IN", "SIGNED_OUT", "TOKEN_REFRESHED", "USER_UPDATED"].includes(event)) return;
+      const nextAuth = Boolean(session?.access_token);
+      const nextEmail = session?.user?.email || "";
+      const changed = nextAuth !== state.authenticated || nextEmail !== state.email;
+      state = { ...state, authenticated: nextAuth, email: nextEmail || state.email, shellAuthChecked: true };
+      render();
+      if (changed) window.dispatchEvent(new CustomEvent("syncetc:portal-auth-changed", { detail: { authenticated: nextAuth, email: nextEmail } }));
+    });
   }
 
   function setState(next = {}) {
@@ -234,6 +250,7 @@
     if (!email || !password) throw new Error("Enter email and password.");
     const { error } = await client.auth.signInWithPassword({ email, password });
     if (error) throw error;
+    try { window.sessionStorage.setItem("syncetc_just_logged_in", "1"); } catch {}
     closeLoginModal();
     await syncShellAuth(true);
     window.dispatchEvent(new CustomEvent("syncetc:portal-auth-changed", { detail: { authenticated: true, email } }));
@@ -258,15 +275,21 @@
   async function syncShellAuth(skipRender = false) {
     if (authSyncStarted && !skipRender) return;
     authSyncStarted = true;
+    const wasAuthenticated = state.authenticated;
+    const wasEmail = state.email;
+    let sessionEmail = "";
     try {
       const client = await ensureShellSupabase();
       const { data } = await client.auth.getSession();
-      const sessionEmail = data?.session?.user?.email || "";
+      sessionEmail = data?.session?.user?.email || "";
       state = { ...state, authenticated: Boolean(data?.session?.access_token), email: sessionEmail || state.email, shellAuthChecked: true };
     } catch {
       state = { ...state, shellAuthChecked: true };
     }
     if (!skipRender) render();
+    if (state.authenticated !== wasAuthenticated || state.email !== wasEmail) {
+      window.dispatchEvent(new CustomEvent("syncetc:portal-auth-changed", { detail: { authenticated: state.authenticated, email: sessionEmail || state.email } }));
+    }
   }
 
   function render() {

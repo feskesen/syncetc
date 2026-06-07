@@ -1,11 +1,11 @@
 // USER-PAGE-dashboard-current.js
-// Internal Version: 2026-06-07-016-A
+// Internal Version: 2026-06-07-017-A
 // Purpose: Signed-in User Dashboard foundation. Uses one Supabase Auth login, organization access context, separated lifecycle/class/stage fields, and organization style inheritance.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-016-A";
+  const VERSION = "2026-06-07-017-A";
   const ROOT_IDS = ["syncetc-user-dashboard-root", "syncetc-member-dashboard-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -19,6 +19,7 @@
   let selectedOrgId = "";
   let platformAdmin = false;
   let backend = null;
+  let authChecked = false;
   let message = `Version ${VERSION}`;
   let messageKind = "";
 
@@ -98,16 +99,28 @@
   }
 
   function setMessage(text, kind = "") { message = text || `Version ${VERSION}`; messageKind = kind; render(); }
+  function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+  function shouldWaitForSession() { try { return window.sessionStorage.getItem("syncetc_just_logged_in") === "1"; } catch { return false; } }
+  function clearJustLoggedIn() { try { window.sessionStorage.removeItem("syncetc_just_logged_in"); } catch {} }
+  async function getStableSession() {
+    const attempts = shouldWaitForSession() ? 14 : 3;
+    for (let i = 0; i < attempts; i += 1) {
+      const { data } = await supabaseClient.auth.getSession();
+      if (data?.session?.access_token) { clearJustLoggedIn(); return data.session; }
+      if (i < attempts - 1) await sleep(150);
+    }
+    clearJustLoggedIn();
+    return null;
+  }
 
   async function refreshAuth() {
     await ensureSupabase();
-    const { data } = await supabaseClient.auth.getSession();
-    token = data?.session?.access_token || "";
-    email = data?.session?.user?.email || "";
-    if (token) {
-      try { await loadAccess(); }
-      catch (e) { backend = { ok:false, message:e.message || String(e) }; setMessage(e.message || String(e), "warn"); }
-    }
+    const session = await getStableSession();
+    token = session?.access_token || "";
+    email = session?.user?.email || "";
+    if (!token) { access = []; selectedOrgId = ""; platformAdmin = false; backend = null; }
+    else { try { await loadAccess(); } catch (e) { backend = { ok:false, message:e.message || String(e) }; authChecked = true; setShellState(); setMessage(e.message || String(e), "warn"); return; } }
+    authChecked = true;
     setShellState();
     render();
   }
@@ -119,6 +132,7 @@
     if (!e || !p) throw new Error("Enter email and password.");
     const { error } = await supabaseClient.auth.signInWithPassword({ email: e, password: p });
     if (error) throw error;
+    try { window.sessionStorage.setItem("syncetc_just_logged_in", "1"); } catch {}
     await refreshAuth();
     setMessage(`Logged in as ${e}`, "ok");
   }
@@ -200,6 +214,7 @@
   }
 
   function renderDashboard() {
+    if (!authChecked) return `<div class="user-card"><h2>Checking login…</h2><p>Please wait while SyncEtc confirms your session.</p></div>`;
     if (!token) return `<div class="user-card"><h2>Login required</h2><p>Use one login for user access and organization-admin access. The system will show what this account is allowed to see after login.</p>${renderLogin()}</div>`;
     if (!access.length) return `<div class="user-card"><h2>No organization access found</h2><p>Your login is valid, but this account is not yet linked to an active organization affiliation.</p><p>If you just created an account, ask the organization or platform admin to link your login email to your person record.</p></div>`;
     const row = selectedAccess();

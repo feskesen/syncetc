@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-dashboard-current.js
-// Internal Version: 2026-06-07-017-A
+// Internal Version: 2026-06-07-016-A
 // Purpose: Organization-admin dashboard foundation. Same Supabase Auth login as user dashboard; permissions decide organization-admin access; organization style inherited after access context resolves.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-017-A";
+  const VERSION = "2026-06-07-016-A";
   const ROOT_ID = "syncetc-organization-admin-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -15,7 +15,6 @@
   let supabaseClient = null;
   let token = "";
   let email = "";
-  let authChecked = false;
   let access = [];
   let adminAccess = null;
   let selectedOrgId = "";
@@ -28,9 +27,6 @@
   const esc = (v) => String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#039;");
   const clean = (v) => String(v ?? "").replace(/\s+/g," ").trim();
   const emailNorm = (v) => clean(v).toLowerCase();
-  function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
-  function shouldWaitForSession() { try { return window.sessionStorage.getItem("syncetc_just_logged_in") === "1"; } catch { return false; } }
-  function clearJustLoggedIn() { try { window.sessionStorage.removeItem("syncetc_just_logged_in"); } catch {} }
   const obj = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
   const adminRows = () => access.filter((row) => row.is_organization_admin || obj(row.capabilities).can_view_organization_admin || (row.permission_keys || []).includes("organization.admin.open") || (row.permission_keys || []).includes("organization.view_admin"));
   const selectedRow = () => adminAccess || adminRows().find((r) => String(r.organization_id) === selectedOrgId) || adminRows()[0] || null;
@@ -46,22 +42,12 @@
 
   function setShellState() { const row = selectedRow(); window.SyncEtcPortalShell?.setState?.({ authenticated: Boolean(token), email, mode: "org-admin", organizationName: row?.organization_name || "", organizationKey: row?.organization_key || "", styleProfile: row?.style_profile || null, accessRow: row || null, organizationOptions: adminRows(), selectedOrganizationId: selectedOrgId, platformAdmin }); }
   function setMessage(text, kind = "") { message = text || `Version ${VERSION}`; messageKind = kind; render(); }
-  async function getStableSession() {
-    const attempts = shouldWaitForSession() ? 14 : 3;
-    for (let i = 0; i < attempts; i += 1) {
-      const { data } = await supabaseClient.auth.getSession();
-      if (data?.session?.access_token) { clearJustLoggedIn(); return data.session; }
-      if (i < attempts - 1) await sleep(150);
-    }
-    clearJustLoggedIn();
-    return null;
-  }
 
-  async function refreshAuth() { await ensureSupabase(); const session = await getStableSession(); token = session?.access_token || ""; email = session?.user?.email || ""; if (!token) { access = []; adminAccess = null; selectedOrgId = ""; platformAdmin = false; backend = null; } else { try { await loadAccess(); } catch (e) { backend = { ok:false, message:e.message || String(e) }; authChecked = true; setShellState(); setMessage(e.message || String(e), "warn"); return; } } authChecked = true; setShellState(); render(); }
-  async function login() { await ensureSupabase(); const e = emailNorm($("orgadm-email")?.value); const p = $("orgadm-password")?.value || ""; if (!e || !p) throw new Error("Enter email and password."); const { error } = await supabaseClient.auth.signInWithPassword({ email: e, password: p }); if (error) throw error; try { window.sessionStorage.setItem("syncetc_just_logged_in", "1"); } catch {} await refreshAuth(); setMessage(`Logged in as ${e}`, "ok"); }
+  async function refreshAuth() { await ensureSupabase(); const { data } = await supabaseClient.auth.getSession(); token = data?.session?.access_token || ""; email = data?.session?.user?.email || ""; if (token) { try { await loadAccess(); } catch (e) { backend = { ok:false, message:e.message || String(e) }; setMessage(e.message || String(e), "warn"); } } setShellState(); render(); }
+  async function login() { await ensureSupabase(); const e = emailNorm($("orgadm-email")?.value); const p = $("orgadm-password")?.value || ""; if (!e || !p) throw new Error("Enter email and password."); const { error } = await supabaseClient.auth.signInWithPassword({ email: e, password: p }); if (error) throw error; await refreshAuth(); setMessage(`Logged in as ${e}`, "ok"); }
   async function signUp() { await ensureSupabase(); const e = emailNorm($("orgadm-email")?.value); const p = $("orgadm-password")?.value || ""; if (!e || !p) throw new Error("Enter email and a password to create an account."); if (p.length < 8) throw new Error("Password should be at least 8 characters."); const { error } = await supabaseClient.auth.signUp({ email: e, password: p, options: { emailRedirectTo: `${window.location.origin}/organization-admin` } }); if (error) throw error; setMessage("Account request submitted. Check email if confirmation is required, then log in.", "ok"); }
   async function resetPassword() { await ensureSupabase(); const e = emailNorm($("orgadm-email")?.value); if (!e) throw new Error("Enter your email first."); const { error } = await supabaseClient.auth.resetPasswordForEmail(e, { redirectTo: `${window.location.origin}/password-reset` }); if (error) throw error; setMessage("Password reset email requested. Check your inbox.", "ok"); }
-  async function logout() { await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; access = []; adminAccess = null; selectedOrgId = ""; backend = null; authChecked = true; setShellState(); render(); }
+  async function logout() { await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; access = []; adminAccess = null; selectedOrgId = ""; backend = null; setShellState(); render(); }
   async function call(action, payload = {}) { if (!token) throw new Error("Log in first."); const res = await fetch(EDGE_URL, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ action, ...payload }) }); const json = await res.json().catch(() => ({})); backend = json; if (!res.ok || json.ok === false) throw new Error(json.message || json.error || `Action failed: ${action}`); return json; }
   async function loadAccess() { const res = await call("get_my_access"); platformAdmin = Boolean(res.platform_admin); access = res.access || []; if (!selectedOrgId && adminRows()[0]) selectedOrgId = String(adminRows()[0].organization_id); if (selectedOrgId) await loadAdminDashboard(); setShellState(); }
   async function loadAdminDashboard() { if (!selectedOrgId) return; const res = await call("get_organization_admin_dashboard", { organization_id: selectedOrgId }); adminAccess = res.access || null; setShellState(); }
@@ -75,7 +61,6 @@
   function moduleCard(label, permission, row) { const caps = obj(row.capabilities); const peopleEnabled = Boolean(portalPage(row, "organization-people")); const map = { events: caps.can_manage_events, documents: caps.can_manage_documents, gallery: caps.can_manage_gallery, roster: (caps.can_manage_people || caps.can_manage_applicants) && peopleEnabled, assets: caps.can_manage_assets, access: caps.can_manage_access, settings: caps.can_manage_settings }; const ok = Boolean(map[permission]); return `<span class="${ok ? "ok" : "off"}">${esc(label)}</span>`; }
 
   function renderDashboard() {
-    if (!authChecked) return `<div class="orgadm-card"><h2>Checking login…</h2><p>Please wait while SyncEtc confirms your session.</p></div>`;
     if (!token) return `<div class="orgadm-card"><h2>Login required</h2><p>This page uses the same Supabase Auth login as the User Dashboard. The backend decides whether the logged-in user has organization-admin access.</p>${renderLogin()}</div>`;
     const rows = adminRows();
     if (!rows.length) return `<div class="orgadm-card"><h2>No organization admin access</h2><p>Your account is signed in but does not have organization-admin permissions for any organization.</p><p>If you believe this is wrong, have a platform admin check your person/organization affiliation, lifecycle status, roles, and permissions.</p></div>`;

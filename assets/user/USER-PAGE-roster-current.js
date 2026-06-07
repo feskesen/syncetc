@@ -1,11 +1,11 @@
 // USER-PAGE-roster-current.js
-// Internal Version: 2026-06-07-017-A
+// Internal Version: 2026-06-07-016-A
 // Purpose: Logged-in user-facing organization roster. Read-only, organization-branded, privacy-filtered member directory.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-017-A";
+  const VERSION = "2026-06-07-016-A";
   const ROOT_IDS = ["syncetc-user-roster-root", "syncetc-member-roster-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -30,7 +30,6 @@
   let message = `Version ${VERSION}`;
   let messageKind = "";
   let backend = null;
-  let authChecked = false;
 
   const $ = (id) => document.getElementById(id);
   const esc = (v) => String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#039;");
@@ -106,28 +105,16 @@
   }
 
   function setMessage(text, kind = "") { message = text || `Version ${VERSION}`; messageKind = kind; render(); }
-  function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
-  function shouldWaitForSession() { try { return window.sessionStorage.getItem("syncetc_just_logged_in") === "1"; } catch { return false; } }
-  function clearJustLoggedIn() { try { window.sessionStorage.removeItem("syncetc_just_logged_in"); } catch {} }
-  async function getStableSession() {
-    const attempts = shouldWaitForSession() ? 14 : 3;
-    for (let i = 0; i < attempts; i += 1) {
-      const { data } = await supabaseClient.auth.getSession();
-      if (data?.session?.access_token) { clearJustLoggedIn(); return data.session; }
-      if (i < attempts - 1) await sleep(150);
-    }
-    clearJustLoggedIn();
-    return null;
-  }
 
   async function refreshAuth() {
     await ensureSupabase();
-    const session = await getStableSession();
-    token = session?.access_token || "";
-    email = session?.user?.email || "";
-    if (!token) { access = []; selectedOrgId = ""; platformAdmin = false; roster = []; summary = { total: 0, membership_classes: {} }; pageConfig = null; }
-    else { try { await loadAccessAndRoster(); } catch (e) { backend = { ok:false, message:e.message || String(e) }; authChecked = true; setShellState(); setMessage(e.message || String(e), "warn"); return; } }
-    authChecked = true;
+    const { data } = await supabaseClient.auth.getSession();
+    token = data?.session?.access_token || "";
+    email = data?.session?.user?.email || "";
+    if (token) {
+      try { await loadAccessAndRoster(); }
+      catch (e) { backend = { ok:false, message:e.message || String(e) }; setMessage(e.message || String(e), "warn"); }
+    }
     setShellState();
     render();
   }
@@ -139,7 +126,6 @@
     if (!e || !p) throw new Error("Enter email and password.");
     const { error } = await supabaseClient.auth.signInWithPassword({ email: e, password: p });
     if (error) throw error;
-    try { window.sessionStorage.setItem("syncetc_just_logged_in", "1"); } catch {}
     await refreshAuth();
     setMessage(`Logged in as ${e}`, "ok");
   }
@@ -147,7 +133,7 @@
   async function logout() {
     await ensureSupabase();
     await supabaseClient.auth.signOut();
-    token = ""; email = ""; access = []; selectedOrgId = ""; roster = []; expanded = new Set(); authChecked = true;
+    token = ""; email = ""; access = []; selectedOrgId = ""; roster = []; expanded = new Set();
     setShellState(); render();
   }
 
@@ -196,7 +182,6 @@
   }
 
   function loginCard() {
-    if (!authChecked) return `<div class="roster-card"><h2>Checking login…</h2><p>Please wait while SyncEtc confirms your session.</p></div>`;
     return `<div class="roster-card"><h2>Login required</h2><p>This roster contains private organization information. Log in with your organization account.</p><div class="roster-login"><input id="roster-email" type="email" placeholder="Email"><input id="roster-password" type="password" placeholder="Password"><button id="roster-login" class="roster-btn">Log in</button><button id="roster-reset" class="roster-btn secondary">Forgot password?</button></div></div>`;
   }
 
@@ -301,6 +286,25 @@
 
   function printRoster() {
     const rows = filteredRows();
+    const org = selectedAccess()?.organization_name || "Organization";
+    const generated = new Date().toLocaleString();
+    const htmlRows = rows.map((row) => {
+      const a = obj(row.address);
+      const address = [a.address1, a.address2, [a.city, a.state].filter(Boolean).join(", ") + (a.zip ? ` ${a.zip}` : "")].filter((v) => clean(v)).map(esc).join("<br>");
+      return `<tr><td><strong>${esc(row.display_name)}</strong>${row.title ? `<br><small>${esc(row.title)}</small>` : ""}</td><td>${esc(row.membership_class_label || "")}</td><td>${row.phone ? esc(row.phone) : ""}</td><td>${row.email ? esc(row.email) : ""}</td><td>${address}</td></tr>`;
+    }).join("");
+    const printHtml = `<!doctype html><html><head><title>${esc(org)} Roster</title><style>body{font-family:Arial,Helvetica,sans-serif;margin:24px;color:#111827}h1{margin:0 0 4px}p{margin:0 0 16px;color:#4b5563}table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid #d1d5db;padding:7px 8px;text-align:left;vertical-align:top}th{background:#f3f4f6}small{color:#6b7280}.notice{font-weight:700;color:#374151;margin:12px 0}@media print{button{display:none}}</style></head><body><h1>${esc(org)} Roster</h1><p>Generated ${esc(generated)} · ${esc(rows.length)} active roster entries · current filter/search only</p><div class="notice">Private organization information. Use only for organization purposes.</div><table><thead><tr><th>Name</th><th>Type</th><th>Phone</th><th>Email</th><th>Address</th></tr></thead><tbody>${htmlRows || `<tr><td colspan="5">No roster entries match the current filter.</td></tr>`}</tbody></table><script>window.addEventListener('load',()=>setTimeout(()=>window.print(),100));<\/script></body></html>`;
+    const win = window.open("", "_blank");
+    if (!win) { window.print(); return; }
+    win.document.open();
+    win.document.write(printHtml);
+    win.document.close();
+    setMessage("Printable roster opened.", "ok");
+  }
+
+
+  function printRoster() {
+    const rows = filteredRows();
     const title = clean(pageConfig?.title) || "Roster";
     const org = clean(selectedAccess()?.organization_name || "Organization");
     const filterLabel = rosterFilter === "all" ? "All roster entries" : rosterFilter.replace(/^class:/, "Class: ");
@@ -318,13 +322,12 @@
   }
 
   function renderContent() {
-    if (!authChecked) return `<div class="roster-card"><h2>Checking login…</h2><p>One moment while SyncEtc checks your browser session.</p></div>`;
     if (!token) return loginCard();
     if (!access.length) return `<div class="roster-card"><h2>No organization access found</h2><p>Your login is valid, but it is not linked to an active organization affiliation.</p></div>`;
     const row = selectedAccess();
     if (!obj(row.capabilities).can_view_roster) return `<div class="roster-card"><h2>Roster unavailable</h2><p>This organization has not granted roster access to this account.</p></div>`;
     const rows = filteredRows();
-    return `<div class="roster-card roster-note">Roster contains private organization information. Use only for organization purposes.</div>${renderSummary(rows)}${renderFilters()}<div class="roster-search-panel"><div class="roster-search-wrap"><input id="roster-search" type="search" value="${esc(searchDraft)}" placeholder="Search by name, phone, email, city, role, class…" aria-label="Search roster"><button id="roster-clear" class="roster-clear ${searchDraft ? "show" : ""}" type="button">×</button></div><div class="roster-search-count">Showing ${esc(rows.length)} of ${esc(roster.length)}</div></div>${roster.some((r) => arr(r.aviation_pills).length) ? `<div class="roster-legend"><span><strong>CFI</strong> = Club instructor</span><span><strong>IFR</strong> = Instrument rated</span><span><strong>NIGHT</strong> = Club night checkout</span></div>` : ""}<div class="roster-list">${renderRows(rows)}</div>`;
+    return `<div class="roster-card roster-note">Roster contains private organization information. Use only for organization purposes.</div><div class="roster-card roster-export-note"><strong>Export for Excel:</strong> Downloads a tab-separated file. Excel can open it, and the rows can also be copied and pasted into a spreadsheet more cleanly than comma-separated text.</div>${renderSummary(rows)}${renderFilters()}<div class="roster-search-panel"><div class="roster-search-wrap"><input id="roster-search" type="search" value="${esc(searchDraft)}" placeholder="Search by name, phone, email, city, role, class…" aria-label="Search roster"><button id="roster-clear" class="roster-clear ${searchDraft ? "show" : ""}" type="button">×</button></div><div class="roster-search-count">Showing ${esc(rows.length)} of ${esc(roster.length)}</div></div>${roster.some((r) => arr(r.aviation_pills).length) ? `<div class="roster-legend"><span><strong>CFI</strong> = Club instructor</span><span><strong>IFR</strong> = Instrument rated</span><span><strong>NIGHT</strong> = Club night checkout</span></div>` : ""}<div class="roster-list">${renderRows(rows)}</div>`;
   }
 
   function render() {

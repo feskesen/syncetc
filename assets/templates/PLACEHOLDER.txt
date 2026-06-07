@@ -1,1 +1,0 @@
-Template renderer files go here.

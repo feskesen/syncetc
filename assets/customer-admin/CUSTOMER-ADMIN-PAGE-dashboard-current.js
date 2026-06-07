@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-dashboard-current.js
-// Internal Version: 2026-06-06-004-A
+// Internal Version: 2026-06-06-005-A
 // Purpose: Organization-admin dashboard foundation. Same Supabase Auth login as user dashboard; permissions decide organization-admin access; organization style inherited after access context resolves.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-06-004-A";
+  const VERSION = "2026-06-06-005-A";
   const ROOT_ID = "syncetc-organization-admin-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -64,7 +64,7 @@
     const row = selectedRow();
     return `
       <div class="orgadm-card"><div class="orgadm-card-head"><h2>Organization Admin Context</h2><button class="orgadm-btn small secondary" id="orgadm-refresh">Refresh</button></div><select id="orgadm-org-select">${rows.map((a) => `<option value="${esc(a.organization_id)}" ${String(a.organization_id) === selectedOrgId ? "selected" : ""}>${esc(a.organization_name)} (${esc(a.organization_key)})</option>`).join("")}</select></div>
-      <div class="orgadm-grid"><div class="orgadm-card"><h2>${esc(row.organization_name)}</h2><div class="orgadm-pill-list">${badge(row.lifecycle_status_label || row.membership_status_label)}${badge(row.membership_class_label)}${badge(row.application_stage_label)}${(row.role_labels || row.role_keys || []).map((r) => badge(r)).join(" ")}</div><p><strong>Admin access:</strong> Allowed</p><p class="orgadm-help">Organization-branded customer-side admin shell. Platform-only diagnostic panels should stay in Platform Access Tools, not here.</p></div><div class="orgadm-card"><h2>Organization-admin modules</h2><div class="orgadm-actions">${moduleCard("Events", "events", row)}${moduleCard("Documents", "documents", row)}${moduleCard("Gallery", "gallery", row)}${moduleCard("Roster / People", "roster", row)}${moduleCard("Assets", "assets", row)}${moduleCard("Access", "access", row)}${moduleCard("Settings / Look & Feel", "settings", row)}</div><p class="orgadm-help">This page proves the organization-admin gate. Full module dashboards should use the same access context.</p></div></div>
+      <div class="orgadm-grid"><div class="orgadm-card"><h2>${esc(row.organization_name)}</h2><div class="orgadm-pill-list">${badge(row.lifecycle_status_label || row.membership_status_label)}${badge(row.membership_class_label)}${badge(row.application_stage_label)}${(row.role_labels || row.role_keys || []).map((r) => badge(r)).join(" ")}</div><p><strong>Admin access:</strong> Allowed</p><p class="orgadm-help">Organization-branded customer-side admin shell. Platform-only diagnostic panels should stay in Platform Access Tools, not here.</p></div><div class="orgadm-card"><h2>Organization-admin modules</h2><div class="orgadm-actions">${moduleCard("Events", "events", row)}${moduleCard("Documents", "documents", row)}${moduleCard("Gallery", "gallery", row)}${moduleCard("Roster / People", "roster", row)}${moduleCard("Assets", "assets", row)}${moduleCard("Access", "access", row)}${moduleCard("Settings / Look & Feel", "settings", row)}</div>${obj(row.capabilities).can_manage_people || obj(row.capabilities).can_manage_applicants || (row.permission_keys || []).includes("people.view_roster") ? `<p><a class="orgadm-btn secondary" href="/organization-people">Open People & Access</a></p>` : ""}<p class="orgadm-help">Customer-side tools use this same access context. Platform-only diagnostic panels stay in Platform Access Tools.</p></div></div>
       <details class="orgadm-card"><summary>Effective permissions</summary><div class="orgadm-permissions">${(row.permission_keys || []).map((p) => `<span>${esc(p)}</span>`).join("")}</div></details>`;
   }
 

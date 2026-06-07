@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-06-004-A
+// Internal Version: 2026-06-06-005-A
 // Purpose: Shared shell for signed-in user and organization-admin pages. Uses one Supabase Auth login; roles decide access; organization pages inherit selected organization style after access resolves.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-06-004-A";
+  const VERSION = "2026-06-06-005-A";
   const SHELL_ID = "syncetc-portal-shell";
 
   function esc(v) { return String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#039;"); }
@@ -54,7 +54,7 @@
           <a href="/calendar">Calendar</a>
           <a href="/documents">Documents</a>
           <a href="/user-dashboard">User Dashboard</a>
-          ${adminVisible ? `<a href="/organization-admin">Organization Admin</a>` : ""}
+          ${adminVisible ? `<a href="/organization-admin">Organization Admin</a><a href="/organization-people">People</a>` : ""}
           <span class="portal-shell-pill ${state.authenticated ? "ok" : "warn"}">${state.authenticated ? esc(state.email) : "Not logged in"}</span>
         </nav>
       </div>`;

@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-07-017-A
+// Internal Version: 2026-06-07-018-A
 // Purpose: Shared portal shell with tiered navigation, organization context, inline login/logout, and no blue pre-style flash.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-017-A";
+  const VERSION = "2026-06-07-018-A";
   const SHELL_ID = "syncetc-portal-shell";
   const FOOTER_ID = "syncetc-portal-footer";
   const LOGIN_MODAL_ID = "syncetc-portal-login-modal";
@@ -153,8 +153,15 @@
     return "public";
   }
 
+  function normalizeHrefForKey(keyValue, href) {
+    const k = key(keyValue);
+    const h = clean(href);
+    if (k === "home") return "/";
+    return h || (k ? `/${k}` : "#");
+  }
+
   function makeLink(keyValue, href, label, order) {
-    return { key: key(keyValue), href: clean(href), label: clean(label), order: Number(order || 100) };
+    return { key: key(keyValue), href: normalizeHrefForKey(keyValue, href), label: clean(label), order: Number(order || 100) };
   }
 
   function dedupeLinks(links) {
@@ -179,6 +186,8 @@
       if (zone === "member" && rosterVisible) memberLinks.push(makeLink(page.key, page.path, navLabelForPage(page), orderIndex(MEMBER_ORDER, page.key, page.sort)));
       if (zone === "admin" && adminVisible) adminLinks.push(makeLink(page.key, page.path, navLabelForPage(page), orderIndex(ADMIN_ORDER, page.key, page.sort)));
     }
+
+    publicLinks.push(makeLink("home", "/", "Home", orderIndex(PUBLIC_ORDER, "home", 1)));
 
     if (state.authenticated) memberLinks.push(makeLink("user-dashboard", "/user-dashboard", "Dashboard", orderIndex(MEMBER_ORDER, "user-dashboard", 5)));
     if (adminVisible) adminLinks.push(makeLink("organization-admin", "/organization-admin", "Admin Dashboard", orderIndex(ADMIN_ORDER, "organization-admin", 5)));
@@ -301,7 +310,7 @@
     const brandText = clean(state.organizationName) ? state.organizationName : `SyncEtc ${modeLabel}`;
     const initials = clean(state.organizationName || "S").slice(0, 1).toUpperCase() || "S";
     const caps = obj(obj(state.accessRow).capabilities);
-    const adminVisible = state.mode === "org-admin" || Boolean(obj(state.accessRow).is_organization_admin || caps.can_view_organization_admin);
+    const adminVisible = Boolean(state.platformAdmin || obj(state.accessRow).is_organization_admin || caps.can_view_organization_admin);
     const rosterVisible = state.authenticated && Boolean(caps.can_view_roster || adminVisible || state.platformAdmin) && portalPages().some((page) => key(page.key) === "roster");
     const groups = navGroups(adminVisible, rosterVisible);
 

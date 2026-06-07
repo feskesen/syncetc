@@ -1,11 +1,11 @@
 // USER-PAGE-dashboard-current.js
-// Internal Version: 2026-06-06-004-A
+// Internal Version: 2026-06-07-009-A
 // Purpose: Signed-in User Dashboard foundation. Uses one Supabase Auth login, organization access context, separated lifecycle/class/stage fields, and organization style inheritance.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-06-004-A";
+  const VERSION = "2026-06-07-009-A";
   const ROOT_IDS = ["syncetc-user-dashboard-root", "syncetc-member-dashboard-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -84,6 +84,8 @@
       mode: "user",
       organizationName: row?.organization_name || "",
       organizationKey: row?.organization_key || "",
+      selectedOrganizationId: selectedOrgId || row?.organization_id || "",
+      organizations: access.map((a) => ({ id: a.organization_id, name: a.organization_name, key: a.organization_key })),
       styleProfile: row?.style_profile || null,
       accessRow: row || null,
     });
@@ -178,20 +180,17 @@
   function yesNo(value) { return value ? "Yes" : "No"; }
 
   function renderLogin() {
-    if (token) return `<div class="user-auth"><span class="user-pill ok">Logged in as ${esc(email)}</span><button id="user-logout" class="user-btn secondary">Log out</button></div>`;
+    if (token) return "";
     return `<div class="user-login"><input id="user-email" type="email" placeholder="Email"><input id="user-password" type="password" placeholder="Password"><button id="user-login" class="user-btn">Log in</button><button id="user-signup" class="user-btn secondary">Create account</button><button id="user-reset" class="user-link-btn" type="button">Forgot password?</button></div>`;
   }
 
   function renderDashboard() {
-    if (!token) return `<div class="user-card"><h2>Login required</h2><p>Use one login for user access and organization-admin access. The system will show what this account is allowed to see after login.</p></div>`;
+    if (!token) return `<div class="user-card"><h2>Login required</h2><p>Use one login for user access and organization-admin access. The system will show what this account is allowed to see after login.</p>${renderLogin()}</div>`;
     if (!access.length) return `<div class="user-card"><h2>No organization access found</h2><p>Your login is valid, but this account is not yet linked to an active organization affiliation.</p><p>If you just created an account, ask the organization or platform admin to link your login email to your person record.</p></div>`;
     const row = selectedAccess();
     const caps = obj(row.capabilities);
     return `
-      <div class="user-card">
-        <div class="user-card-head"><h2>My Organizations</h2><button id="user-refresh" class="user-btn small secondary">Refresh</button></div>
-        <select id="user-org-select">${access.map((a) => `<option value="${esc(a.organization_id)}" ${String(a.organization_id) === selectedOrgId ? "selected" : ""}>${esc(a.organization_name)} (${esc(a.organization_key)})</option>`).join("")}</select>
-      </div>
+      <div class="user-card"><div class="user-card-head"><h2>Current organization</h2><button id="user-refresh" class="user-btn small secondary">Refresh</button></div><p class="user-help">Use the organization selector in the header to switch context.</p></div>
       <div class="user-grid">
         <div class="user-card">
           <h2>${esc(row.organization_name)}</h2>
@@ -231,7 +230,7 @@
         .user-wrap{${cssVars(cfg)}max-width:var(--user-page-width);margin:24px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:var(--user-text)}.user-card{background:rgba(255,255,255,.94);border:1px solid var(--user-border);border-radius:var(--user-radius);box-shadow:var(--user-shadow);padding:20px;margin:16px 0}.user-hero{background:linear-gradient(135deg,var(--user-primary),${rgba(cfg.primary,.78)});color:#fff}.user-hero h1{margin:8px 0;color:#fff}.user-hero p{color:rgba(255,255,255,.88)}.user-eyebrow{display:inline-flex;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}.user-login{display:grid;grid-template-columns:1fr 1fr auto auto auto;gap:10px;align-items:center}.user-auth{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.user-wrap input,.user-wrap select{width:100%;min-height:42px;border:1px solid var(--user-border);border-radius:12px;padding:10px 12px;background:#fff;color:var(--user-text)}.user-btn{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:9px 15px;border-radius:999px;border:1px solid var(--user-primary);background:var(--user-primary);color:#fff;font-weight:900;cursor:pointer}.user-btn:hover{filter:brightness(.92);transform:translateY(-1px)}.user-btn[disabled]{opacity:.62;cursor:wait;transform:none}.user-btn.secondary{background:#fff;color:var(--user-primary)}.user-btn.small{min-height:32px;font-size:12px;padding:7px 12px}.user-link-btn{border:none;background:transparent;color:#fff;text-decoration:underline;font-weight:900;cursor:pointer}.user-pill,.user-mini{display:inline-flex;align-items:center;border-radius:999px;padding:5px 10px;background:var(--user-soft);color:var(--user-primary);font-size:12px;font-weight:900;margin:2px}.user-pill.ok,.user-action-list .ok{background:#e7f6ec;color:#14532d}.user-action-list .off{background:#f3f4f6;color:#6b7280}.user-pill-list{display:flex;gap:5px;flex-wrap:wrap;margin:10px 0}.user-message{display:inline-flex;margin-top:12px;border-radius:14px;padding:10px 12px;font-size:13px;font-weight:900}.user-message.ok{background:#e7f6ec;color:#14532d}.user-message.warn,.user-warning{background:#fff7ec;color:#8a4d00;border-radius:12px;padding:10px 12px}.user-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.user-card-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.user-action-list{display:flex;flex-wrap:wrap;gap:8px}.user-action-list span,.user-permissions span{display:inline-flex;border-radius:999px;background:var(--user-soft);color:var(--user-primary);padding:6px 9px;margin:3px;font-size:12px;font-weight:800}.user-help{color:var(--user-muted);font-size:13px;line-height:1.45}.user-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font-size:12px;max-height:260px;overflow:auto}details summary{cursor:pointer;font-weight:900;color:var(--user-primary)}@media(max-width:920px){.user-login,.user-grid{grid-template-columns:1fr}}
       </style>
       <div class="user-wrap">
-        <section class="user-card user-hero"><div class="user-eyebrow">User Access</div><h1>User Dashboard</h1><p>One login, organization-aware access, and organization-branded portal styling.</p>${renderLogin()}<div class="user-message ${esc(messageKind)}">${esc(message)}</div></section>
+        <section class="user-card user-hero"><div class="user-eyebrow">User Access</div><h1>User Dashboard</h1><p>One login, organization-aware access, and organization-branded portal styling.</p><div class="user-message ${esc(messageKind)}">${esc(message)}</div></section>
         ${renderDashboard()}
         <details class="user-card"><summary>Backend result</summary><pre class="user-backend">${esc(JSON.stringify(backend || {}, null, 2))}</pre></details>
       </div>`;
@@ -240,8 +239,34 @@
     $("user-reset")?.addEventListener("click", () => runButton("user-reset", "Sending…", resetPassword));
     $("user-logout")?.addEventListener("click", () => runButton("user-logout", "Logging out…", logout));
     $("user-refresh")?.addEventListener("click", () => runButton("user-refresh", "Refreshing…", async () => { await loadAccess(); setMessage("Refreshed.", "ok"); render(); }));
-    $("user-org-select")?.addEventListener("change", (e) => { selectedOrgId = e.target.value; setShellState(); render(); });
   }
+
+  window.addEventListener("syncetc:portal-logout-request", () => {
+    if (!token) return;
+    logout().catch((e) => { backend = { ok:false, message:e.message || String(e) }; setMessage(e.message || String(e), "warn"); });
+  });
+
+  window.addEventListener("syncetc:portal-login-request", () => {
+    render();
+    setTimeout(() => $("user-email")?.focus(), 0);
+  });
+
+  async function handleOrganizationChange(nextOrgId) {
+    nextOrgId = String(nextOrgId || "");
+    if (!nextOrgId || nextOrgId === selectedOrgId) return;
+    selectedOrgId = nextOrgId;
+    try { await loadAccess(); setMessage("Organization loaded.", "ok"); }
+    catch (e) { backend = { ok:false, message:e.message || String(e) }; setMessage(e.message || String(e), "warn"); }
+    render();
+  }
+
+  window.addEventListener("syncetc:portal-organization-change-request", (event) => {
+    handleOrganizationChange(event.detail?.organizationId || event.detail?.organization_id);
+  });
+
+  window.addEventListener("syncetc:portal-organization-change", (event) => {
+    handleOrganizationChange(event.detail?.organization_id || event.detail?.organizationId);
+  });
 
   document.addEventListener("DOMContentLoaded", () => refreshAuth().catch((e) => { backend = { ok:false, message:e.message }; render(); }));
 })();

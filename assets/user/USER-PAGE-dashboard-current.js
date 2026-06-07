@@ -1,11 +1,11 @@
 // USER-PAGE-dashboard-current.js
-// Internal Version: 2026-06-07-011-A
+// Internal Version: 2026-06-07-012-A
 // Purpose: Signed-in User Dashboard foundation. Uses one Supabase Auth login, organization access context, separated lifecycle/class/stage fields, and organization style inheritance.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-011-A";
+  const VERSION = "2026-06-07-012-A";
   const ROOT_IDS = ["syncetc-user-dashboard-root", "syncetc-member-dashboard-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -179,6 +179,11 @@
 
   function yesNo(value) { return value ? "Yes" : "No"; }
 
+  function portalPage(row, pageKey) {
+    return (Array.isArray(row?.portal_pages) ? row.portal_pages : []).find((page) => clean(page.page_key || page.template_key) === pageKey && page.show_in_nav !== false) || null;
+  }
+  function pagePath(page, fallback) { return clean(page?.path || (page?.page_slug ? `/${String(page.page_slug).replace(/^\/+/, "")}` : "")) || fallback; }
+
   function renderLogin() {
     if (token) return "";
     return `<div class="user-login"><input id="user-email" type="email" placeholder="Email"><input id="user-password" type="password" placeholder="Password"><button id="user-login" class="user-btn">Log in</button><button id="user-signup" class="user-btn secondary">Create account</button><button id="user-reset" class="user-link-btn" type="button">Forgot password?</button></div>`;
@@ -189,6 +194,8 @@
     if (!access.length) return `<div class="user-card"><h2>No organization access found</h2><p>Your login is valid, but this account is not yet linked to an active organization affiliation.</p><p>If you just created an account, ask the organization or platform admin to link your login email to your person record.</p></div>`;
     const row = selectedAccess();
     const caps = obj(row.capabilities);
+    const rosterPage = portalPage(row, "roster");
+    const rosterAllowed = Boolean(caps.can_view_roster && rosterPage);
     return `
       <div class="user-card"><div class="user-card-head"><h2>Current organization</h2><button id="user-refresh" class="user-btn small secondary">Refresh</button></div><p class="user-help">Use the organization selector in the header to switch context.</p></div>
       <div class="user-grid">
@@ -210,7 +217,7 @@
           <h2>Available user areas</h2>
           <div class="user-action-list">
             <span class="${caps.can_view_user_dashboard ? "ok" : "off"}">Profile</span>
-            ${caps.can_view_roster ? `<a class="ok" href="/roster">Roster</a>` : `<span class="off">Roster</span>`}
+            ${rosterAllowed ? `<a class="ok" href="${esc(pagePath(rosterPage, "/roster"))}">Roster</a>` : `<span class="off">Roster</span>`}
             <span class="${caps.can_view_member_documents ? "ok" : "off"}">Documents</span>
             <span class="${caps.can_rsvp_when_event_allows ? "ok" : "off"}">Events / RSVP</span>
             <span class="${caps.can_submit_gallery ? "ok" : "off"}">Gallery Submission</span>

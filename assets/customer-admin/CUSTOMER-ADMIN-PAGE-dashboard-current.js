@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-dashboard-current.js
-// Internal Version: 2026-06-07-009-A
+// Internal Version: 2026-06-07-012-A
 // Purpose: Organization-admin dashboard foundation. Same Supabase Auth login as user dashboard; permissions decide organization-admin access; organization style inherited after access context resolves.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-009-A";
+  const VERSION = "2026-06-07-012-A";
   const ROOT_ID = "syncetc-organization-admin-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -39,7 +39,7 @@
   function styleConfig(row) { const profile = obj(row?.style_profile); const colors = obj(profile.colors_json); const effects = obj(profile.effects_json); const spacing = obj(profile.spacing_json); const layout = obj(profile.layout_json); const primary = getText(colors,"brand_primary","#1f4f82"); const secondary = getText(colors,"brand_secondary","#eef3f8"); const surface = getText(colors,"surface","#ffffff"); const text = getText(colors,"text","#172033"); const corners = getText(effects,"corners","soft"); const width = getText(spacing,"page_width",getText(layout,"default_width","wide")); return { primary, secondary, surface, text, muted: rgba(text,.68), border: rgba(primary,.16), soft: rgba(primary,.08), shadow: `0 14px 42px ${rgba(primary,.14)}`, radius: corners === "sharp" ? "8px" : corners === "pill" ? "30px" : "22px", pageWidth: width === "narrow" ? "880px" : width === "normal" ? "1040px" : "1180px" }; }
   function cssVars(cfg) { return `--org-primary:${cfg.primary};--org-secondary:${cfg.secondary};--org-surface:${cfg.surface};--org-text:${cfg.text};--org-muted:${cfg.muted};--org-border:${cfg.border};--org-soft:${cfg.soft};--org-shadow:${cfg.shadow};--org-radius:${cfg.radius};--org-page-width:${cfg.pageWidth};`; }
 
-  function setShellState() { const row = selectedRow(); window.SyncEtcPortalShell?.setState?.({ authenticated: Boolean(token), email, mode: "org-admin", organizationName: row?.organization_name || "", organizationKey: row?.organization_key || "", selectedOrganizationId: selectedOrgId || row?.organization_id || "", organizations: adminRows().map((a) => ({ id: a.organization_id, name: a.organization_name, key: a.organization_key })), styleProfile: row?.style_profile || null, accessRow: row || null }); }
+  function setShellState() { const row = selectedRow(); window.SyncEtcPortalShell?.setState?.({ authenticated: Boolean(token), email, mode: "org-admin", organizationName: row?.organization_name || "", organizationKey: row?.organization_key || "", styleProfile: row?.style_profile || null, accessRow: row || null, organizationOptions: adminRows(), selectedOrganizationId: selectedOrgId }); }
   function setMessage(text, kind = "") { message = text || `Version ${VERSION}`; messageKind = kind; render(); }
 
   async function refreshAuth() { await ensureSupabase(); const { data } = await supabaseClient.auth.getSession(); token = data?.session?.access_token || ""; email = data?.session?.user?.email || ""; if (token) await loadAccess(); setShellState(); render(); }
@@ -54,17 +54,21 @@
 
   function renderLogin() { if (token) return ""; return `<div id="syncetc-page-login" class="orgadm-login"><input id="orgadm-email" type="email" placeholder="Email"><input id="orgadm-password" type="password" placeholder="Password"><button id="orgadm-login" class="orgadm-btn">Log in</button><button id="orgadm-signup" class="orgadm-btn secondary">Create account</button><button id="orgadm-reset" class="orgadm-link-btn" type="button">Forgot password?</button></div>`; }
   function badge(value, cls="") { return value ? `<span class="orgadm-mini ${esc(cls)}">${esc(value)}</span>` : ""; }
+  function portalPage(row, pageKey) { return (Array.isArray(row?.portal_pages) ? row.portal_pages : []).find((page) => clean(page.page_key || page.template_key) === pageKey && page.show_in_nav !== false) || null; }
+  function pagePath(page, fallback) { return clean(page?.path || (page?.page_slug ? `/${String(page.page_slug).replace(/^\/+/, "")}` : "")) || fallback; }
 
-  function moduleCard(label, permission, row) { const caps = obj(row.capabilities); const map = { events: caps.can_manage_events, documents: caps.can_manage_documents, gallery: caps.can_manage_gallery, roster: caps.can_manage_people, assets: caps.can_manage_assets, access: caps.can_manage_access, settings: caps.can_manage_settings }; const ok = Boolean(map[permission]); return `<span class="${ok ? "ok" : "off"}">${esc(label)}</span>`; }
+  function moduleCard(label, permission, row) { const caps = obj(row.capabilities); const peopleEnabled = Boolean(portalPage(row, "organization-people")); const map = { events: caps.can_manage_events, documents: caps.can_manage_documents, gallery: caps.can_manage_gallery, roster: (caps.can_manage_people || caps.can_manage_applicants) && peopleEnabled, assets: caps.can_manage_assets, access: caps.can_manage_access, settings: caps.can_manage_settings }; const ok = Boolean(map[permission]); return `<span class="${ok ? "ok" : "off"}">${esc(label)}</span>`; }
 
   function renderDashboard() {
     if (!token) return `<div class="orgadm-card"><h2>Login required</h2><p>This page uses the same Supabase Auth login as the User Dashboard. The backend decides whether the logged-in user has organization-admin access.</p>${renderLogin()}</div>`;
     const rows = adminRows();
     if (!rows.length) return `<div class="orgadm-card"><h2>No organization admin access</h2><p>Your account is signed in but does not have organization-admin permissions for any organization.</p><p>If you believe this is wrong, have a platform admin check your person/organization affiliation, lifecycle status, roles, and permissions.</p></div>`;
     const row = selectedRow();
+    const peoplePage = portalPage(row, "organization-people");
+    const peopleAllowed = Boolean(peoplePage && (obj(row.capabilities).can_manage_people || obj(row.capabilities).can_manage_applicants || (row.permission_keys || []).includes("people.view_roster")));
     return `
-      <div class="orgadm-card"><div class="orgadm-card-head"><h2>Organization Admin Context</h2><button class="orgadm-btn small secondary" id="orgadm-refresh">Refresh</button></div><p class="orgadm-help">Use the organization selector in the header to switch context.</p></div>
-      <div class="orgadm-grid"><div class="orgadm-card"><h2>${esc(row.organization_name)}</h2><div class="orgadm-pill-list">${badge(row.lifecycle_status_label || row.membership_status_label)}${badge(row.membership_class_label)}${badge(row.application_stage_label)}${(row.role_labels || row.role_keys || []).map((r) => badge(r)).join(" ")}</div><p><strong>Admin access:</strong> Allowed</p><p class="orgadm-help">Organization-branded customer-side admin shell. Platform-only diagnostic panels should stay in Platform Access Tools, not here.</p></div><div class="orgadm-card"><h2>Organization-admin modules</h2><div class="orgadm-actions">${moduleCard("Events", "events", row)}${moduleCard("Documents", "documents", row)}${moduleCard("Gallery", "gallery", row)}${moduleCard("Roster / People", "roster", row)}${moduleCard("Assets", "assets", row)}${moduleCard("Access", "access", row)}${moduleCard("Settings / Look & Feel", "settings", row)}</div>${obj(row.capabilities).can_manage_people || obj(row.capabilities).can_manage_applicants || (row.permission_keys || []).includes("people.view_roster") ? `<p><a class="orgadm-btn secondary" href="/organization-people">Open People & Access</a></p>` : ""}<p class="orgadm-help">Customer-side tools use this same access context. Platform-only diagnostic panels stay in Platform Access Tools.</p></div></div>
+      <div class="orgadm-card"><div class="orgadm-card-head"><div><h2>Current organization</h2><p class="orgadm-help">Change organizations from the header when your account has access to more than one.</p></div><button class="orgadm-btn small secondary" id="orgadm-refresh">Refresh</button></div></div>
+      <div class="orgadm-grid"><div class="orgadm-card"><h2>${esc(row.organization_name)}</h2><div class="orgadm-pill-list">${badge(row.lifecycle_status_label || row.membership_status_label)}${badge(row.membership_class_label)}${badge(row.application_stage_label)}${(row.role_labels || row.role_keys || []).map((r) => badge(r)).join(" ")}</div><p><strong>Admin access:</strong> Allowed</p><p class="orgadm-help">Organization-branded customer-side admin shell. Platform-only diagnostic panels should stay in Platform Access Tools, not here.</p></div><div class="orgadm-card"><h2>Organization-admin modules</h2><div class="orgadm-actions">${moduleCard("Events", "events", row)}${moduleCard("Documents", "documents", row)}${moduleCard("Gallery", "gallery", row)}${moduleCard("Roster / People", "roster", row)}${moduleCard("Assets", "assets", row)}${moduleCard("Access", "access", row)}${moduleCard("Settings / Look & Feel", "settings", row)}</div>${peopleAllowed ? `<p><a class="orgadm-btn secondary" href="${esc(pagePath(peoplePage, "/organization-people"))}">Open People & Access</a></p>` : ""}<p class="orgadm-help">Customer-side tools use this same access context. Platform-only diagnostic panels stay in Platform Access Tools.</p></div></div>
       <details class="orgadm-card"><summary>Effective permissions</summary><div class="orgadm-permissions">${(row.permission_keys || []).map((p) => `<span>${esc(p)}</span>`).join("")}</div></details>`;
   }
 
@@ -81,6 +85,7 @@
     $("orgadm-reset")?.addEventListener("click", () => runButton("orgadm-reset", "Sending…", resetPassword));
     $("orgadm-logout")?.addEventListener("click", () => runButton("orgadm-logout", "Logging out…", logout));
     $("orgadm-refresh")?.addEventListener("click", () => runButton("orgadm-refresh", "Refreshing…", async () => { await loadAccess(); setMessage("Refreshed.", "ok"); render(); }));
+    $("orgadm-org-select")?.addEventListener("change", async (e) => { selectedOrgId = e.target.value; adminAccess = null; try { await loadAdminDashboard(); } catch (err) { backend = { ok:false, message:err.message }; setMessage(err.message, "warn"); } render(); });
   }
 
   window.addEventListener("syncetc:portal-logout-request", () => {
@@ -94,17 +99,7 @@
   });
 
   window.addEventListener("syncetc:portal-organization-change", async (event) => {
-    const nextOrgId = String(event.detail?.organization_id || "");
-    if (!nextOrgId || nextOrgId === selectedOrgId) return;
-    selectedOrgId = nextOrgId;
-    adminAccess = null;
-    try { await loadAdminDashboard(); setMessage("Organization loaded.", "ok"); }
-    catch (err) { backend = { ok:false, message:err.message || String(err) }; setMessage(err.message || String(err), "warn"); }
-    render();
-  });
-
-  window.addEventListener("syncetc:portal-organization-change-request", async (event) => {
-    const nextOrgId = String(event.detail?.organizationId || "");
+    const nextOrgId = clean(event.detail?.organization_id);
     if (!nextOrgId || nextOrgId === selectedOrgId) return;
     selectedOrgId = nextOrgId;
     adminAccess = null;

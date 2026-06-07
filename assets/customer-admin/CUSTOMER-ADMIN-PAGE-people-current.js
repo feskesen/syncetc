@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-07-010-A
+// Internal Version: 2026-06-07-012-A
 // Purpose: Organization Admin People & Access page. Customer-facing people search, roster, and editor.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-010-A";
+  const VERSION = "2026-06-07-012-A";
   const ROOT_ID = "syncetc-organization-people-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -36,6 +36,7 @@
   let selectedOrgId = "";
   let options = { statuses: [], membership_classes: [], application_stages: [], roles: [] };
   let people = [];
+  let pageConfig = null;
   let selected = null;
   let search = "";
   let filter = "all";
@@ -193,6 +194,7 @@
   async function loadPeople() {
     if (!selectedOrgId) return;
     const res = await call("organization_list_people", { organization_id: selectedOrgId, include_archived: true, filter: "all" });
+    pageConfig = res.page || null;
     people = res.people || [];
     if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
   }
@@ -341,7 +343,7 @@
     const filters = [
       ["all","All People"],["active","Active"],["applicants","Applicants"],["waitlist","Waitlist"],["onboarding","Onboarding"],["former","Former"],["restricted","Suspended / Expelled"],["admins","Admins"],["board","Board"],["managers","Managers"],["users","Users / Members"],["non-member","Non-members"],["no-login","No Login"],["archived","Archived"]
     ];
-    return `<section class="people-card people-finder"><div class="people-finder-top"><div><h2>Find a person</h2><p class="muted">Search all people, including members, applicants, onboarding users, and former records.</p></div><div class="people-toolbar-actions"><button id="people-new" class="people-btn">New person</button><button id="people-export" class="people-btn secondary">CSV export</button><button id="people-print" class="people-btn secondary">Print / PDF</button><button id="people-refresh" class="people-btn secondary">Refresh</button></div></div><div class="people-search-wrap"><input id="people-search" value="${esc(search)}" placeholder="Search names, emails, phones, roles, member numbers…"><button id="people-clear-search" class="people-icon-btn" title="Clear">×</button></div><div class="people-filters">${filters.map(([f,label]) => `<button class="people-filter ${filter===f ? "active" : ""}" data-filter="${esc(f)}">${esc(label)} <strong>${c[f] || 0}</strong></button>`).join("")}</div><div class="people-results-head"><strong>${rows.length} ${rows.length === 1 ? "person" : "people"}</strong><span class="muted">Click anywhere on a card to edit.</span></div><div class="people-compact-list">${rows.length ? rows.map(renderPersonCard).join("") : `<div class="people-empty-row">No people match this search.</div>`}</div></section>`;
+    return `<section class="people-card people-finder"><div class="people-finder-top"><div><h2>Find a person</h2><p class="muted">Search all people, including members, applicants, onboarding users, and former records.</p></div><div class="people-toolbar-actions"><button id="people-new" class="people-btn">New person</button><button id="people-export" class="people-btn secondary">Export for Excel</button><button id="people-print" class="people-btn secondary">Print / PDF</button><button id="people-refresh" class="people-btn secondary">Refresh</button></div></div><div class="people-search-wrap"><input id="people-search" value="${esc(search)}" placeholder="Search names, emails, phones, roles, member numbers…"><button id="people-clear-search" class="people-icon-btn" title="Clear">×</button></div><div class="people-filters">${filters.map(([f,label]) => `<button class="people-filter ${filter===f ? "active" : ""}" data-filter="${esc(f)}">${esc(label)} <strong>${c[f] || 0}</strong></button>`).join("")}</div><div class="people-results-head"><strong>${rows.length} ${rows.length === 1 ? "person" : "people"}</strong><span class="muted">Click anywhere on a card to edit.</span></div><div class="people-compact-list">${rows.length ? rows.map(renderPersonCard).join("") : `<div class="people-empty-row">No people match this search.</div>`}</div></section>`;
   }
 
   function renderPersonCard(p) {
@@ -400,7 +402,7 @@
     const cfg = styleConfig(selectedRow());
     root.innerHTML = `<style>
       .people-wrap{${cssVars(cfg)}max-width:var(--people-page-width);margin:24px auto 24px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:var(--people-text)}.people-wrap *{box-sizing:border-box}.people-card{background:rgba(255,255,255,.96);border:1px solid var(--people-border);border-radius:var(--people-radius);box-shadow:var(--people-shadow);padding:20px;margin:16px 0}.people-hero{background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.78)});color:#fff}.people-hero h1{margin:8px 0;color:#fff;font-size:clamp(30px,4vw,46px);letter-spacing:-.035em}.people-hero p{color:rgba(255,255,255,.9);max-width:900px}.people-eyebrow{display:inline-flex;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}.people-auth,.people-login,.people-toolbar-actions,.people-editor-actions,.people-pill-row,.people-role-list{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.people-login{display:grid;grid-template-columns:1fr 1fr auto auto;gap:10px;margin-top:14px}.people-login input,.people-search-wrap input,.people-field input,.people-field select,.people-field textarea,#people-org-select{width:100%;border:1px solid var(--people-border);border-radius:14px;background:#fff;color:var(--people-text);padding:12px 13px;font:inherit;min-height:44px}.people-field textarea{min-height:112px;resize:vertical}.people-field input[readonly],.people-field input:disabled,.people-field select:disabled{background:#f8fafc;color:var(--people-muted);cursor:not-allowed}.people-btn,.people-icon-btn,.people-filter,.people-link-btn{border:0;border-radius:999px;background:var(--people-primary);color:#fff;font-weight:900;padding:11px 15px;cursor:pointer;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}.people-btn:hover,.people-filter:hover,.people-person-card:hover{transform:translateY(-1px)}.people-btn.secondary{background:var(--people-strong-soft);color:var(--people-primary)}.people-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-btn:disabled{opacity:.55;cursor:not-allowed;transform:none}.people-link-btn{background:transparent;color:var(--people-primary);text-decoration:underline;padding:8px}.people-message{margin-top:14px;padding:11px 13px;border-radius:14px;background:rgba(255,255,255,.12);font-weight:800}.people-message.ok{background:rgba(16,185,129,.18)}.people-message.warn,.people-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:14px;padding:11px 13px}.people-context-single{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);padding:9px 12px;border-radius:999px;font-weight:900}.people-context-single span{opacity:.82}.muted{color:var(--people-muted)}.people-finder-top,.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}.people-finder h2,.people-editor h2{margin:0}.people-finder p{margin:.3rem 0 0}.people-search-wrap{position:relative;margin:16px 0 12px}.people-search-wrap input{padding-right:46px;font-size:16px}.people-icon-btn{position:absolute;right:6px;top:6px;width:32px;height:32px;padding:0;background:var(--people-soft);color:var(--people-primary)}.people-filters{display:flex;gap:8px;flex-wrap:wrap}.people-filter{background:var(--people-soft);color:var(--people-primary);padding:9px 12px}.people-filter.active{background:var(--people-primary);color:#fff}.people-filter strong{margin-left:6px}.people-results-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin:14px 0 10px}.people-compact-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;max-height:300px;overflow:auto;padding:2px 2px 6px}.people-person-card{text-align:left;border:1px solid var(--people-border);border-radius:18px;background:#fff;color:var(--people-text);padding:10px 12px;min-height:76px;display:grid;grid-template-columns:1.3fr 1.5fr;gap:3px 10px;align-content:center;cursor:pointer;box-shadow:0 6px 18px ${rgba(cfg.primary,.06)}}.people-person-card.selected{border-color:var(--people-primary);background:var(--people-soft);box-shadow:0 0 0 3px var(--people-strong-soft)}.person-name{font-weight:950;font-size:15px}.person-meta,.person-contact,.person-role{font-size:12px;color:var(--people-muted);line-height:1.25}.person-role{font-weight:800;color:var(--people-primary)}.person-contact{text-align:right}.people-empty-row{border:1px dashed var(--people-border);border-radius:16px;padding:20px;text-align:center;color:var(--people-muted)}.people-empty{min-height:220px;display:grid;align-content:center;text-align:center}.people-editor{width:100%}.people-editor-head{border-bottom:1px solid var(--people-border);padding-bottom:14px;margin-bottom:12px}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}details{border:1px solid var(--people-border);border-radius:18px;background:#fff;margin:12px 0;overflow:hidden}summary{padding:15px 16px;font-size:16px;font-weight:950;cursor:pointer;background:linear-gradient(180deg,#fff,var(--people-soft))}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:16px;align-items:start}.people-access-status-grid{padding-bottom:8px}.people-affiliation-grid{padding-top:8px;border-top:1px solid var(--people-border)}.people-field{display:grid;gap:6px;font-weight:850}.people-field span{font-size:13px}.people-field small{font-weight:600;color:var(--people-muted);line-height:1.35}.people-field-wide{grid-column:1/-1}.field-error{color:#b91c1c!important;font-weight:900!important}.people-field input[readonly],.people-field.disabled-field input,.people-field.disabled-field select{background:#f8fafc;color:var(--people-muted)}.people-field.disabled-field{opacity:.72}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;padding:16px 16px 0}.primary-pick{min-height:44px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:14px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:16px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:11px 12px;border:1px solid var(--people-border);border-radius:14px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font-size:12px;max-height:260px;overflow:auto}@media(max-width:900px){.people-form-grid,.people-check-grid{grid-template-columns:1fr 1fr}.people-login{grid-template-columns:1fr}.people-toolbar-actions,.people-editor-actions{width:100%}.people-btn{flex:1}.phone-grid{grid-template-columns:1fr}.primary-pick{justify-content:flex-start;padding:0 12px}.people-compact-list{grid-template-columns:1fr;max-height:360px}}@media(max-width:640px){.people-form-grid,.people-check-grid{grid-template-columns:1fr}.people-btn{width:100%}}@media print{#syncetc-portal-shell,.people-hero,.people-finder,.people-editor,.people-message{display:none!important}.people-wrap{max-width:none;margin:0;padding:0}.people-card{box-shadow:none;border:none}}
-    </style><div class="people-wrap"><section class="people-card people-hero"><div class="people-eyebrow">Organization Admin</div><h1>People & Access</h1><p>Search the full people pool, manage members and applicants, keep contact information current, and handle safe access updates from one place.</p><div class="people-message ${esc(messageKind)}">${esc(message)}</div></section>${renderContent()}<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify(backend || {}, null, 2))}</pre></details></div>`;
+    </style><div class="people-wrap"><section class="people-card people-hero"><div class="people-eyebrow">Organization Admin</div><h1>${esc(clean(pageConfig?.title) || "People & Access")}</h1><p>${esc(clean(pageConfig?.intro_text) || "Search the full people pool, manage members and applicants, keep contact information current, and handle safe access updates from one place.")}</p><div class="people-message ${esc(messageKind)}">${esc(message)}</div></section>${renderContent()}<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify(backend || {}, null, 2))}</pre></details></div>`;
     bindEvents();
   }
 
@@ -533,17 +535,23 @@
     setMessage("Membership restored.", "ok");
   }
 
+  function tsvCell(v) { return String(v ?? "").replace(/\t/g, " ").replace(/\r?\n/g, " ").trim(); }
   function exportCsv() {
     const rows = filteredPeople();
-    const headers = ["Name","Email","Phone","Member Number","Status","Class","Stage","Roles","Title"];
-    const csvRows = [headers.join(",")];
-    rows.forEach((p) => { const vals = [p.display_name,p.email,p.phone,p.member_number,p.lifecycle_status_label,p.membership_class_label,p.application_stage_label,arr(p.role_labels).join("; "),p.title].map((v) => `"${String(v ?? "").replace(/"/g,'""')}"`); csvRows.push(vals.join(",")); });
-    const blob = new Blob([csvRows.join("\n")], { type: "text/csv;charset=utf-8" });
+    const headers = ["Name","Email","Phone","Member Number","Status","Class","Stage","Roles","Title","Affiliation Start","Affiliation End","End Reason"];
+    const tsvRows = [headers.join("\t")];
+    rows.forEach((p) => {
+      const settings = obj(p.membership_settings_json);
+      const vals = [p.display_name,p.email,p.phone,p.member_number,p.lifecycle_status_label,p.membership_class_label,p.application_stage_label,arr(p.role_labels).join("; "),p.title,String(p.joined_at || "").slice(0,10),String(p.left_at || "").slice(0,10),settings.end_reason || ""];
+      tsvRows.push(vals.map(tsvCell).join("\t"));
+    });
+    const blob = new Blob([tsvRows.join("\r\n")], { type: "text/tab-separated-values;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `people-${selectedRow()?.organization_key || "organization"}.csv`;
+    a.download = `people-${selectedRow()?.organization_key || "organization"}.tsv`;
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    setMessage("Excel export created.", "ok");
   }
 
   window.addEventListener("syncetc:portal-logout-request", () => {
@@ -564,6 +572,7 @@
     selectedOrgId = nextOrgId;
     adminAccess = null;
     selected = null;
+    pageConfig = null;
     try { await loadOrgContext(); setMessage("Organization loaded.", "ok"); }
     catch (err) { setMessage(err.message || String(err), "warn"); }
     render();

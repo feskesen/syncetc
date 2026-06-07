@@ -1,11 +1,11 @@
 // USER-PAGE-roster-current.js
-// Internal Version: 2026-06-07-011-A
+// Internal Version: 2026-06-07-012-A
 // Purpose: Logged-in user-facing organization roster. Read-only, organization-branded, privacy-filtered member directory.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-011-A";
+  const VERSION = "2026-06-07-012-A";
   const ROOT_IDS = ["syncetc-user-roster-root", "syncetc-member-roster-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -19,8 +19,10 @@
   let selectedOrgId = "";
   let roster = [];
   let summary = { total: 0, membership_classes: {} };
+  let pageConfig = null;
   let expanded = new Set();
   let searchDraft = "";
+  let rosterFilter = "all";
   let searchTerm = "";
   let searchTimer = null;
   let message = `Version ${VERSION}`;
@@ -150,7 +152,7 @@
     setShellState();
     const row = selectedAccess();
     if (row && obj(row.capabilities).can_view_roster) await loadRoster();
-    else { roster = []; summary = { total: 0, membership_classes: {} }; }
+    else { roster = []; summary = { total: 0, membership_classes: {} }; pageConfig = null; }
   }
 
   async function loadRoster() {
@@ -158,6 +160,7 @@
     const res = await call("organization_list_roster", { organization_id: selectedOrgId });
     roster = res.people || [];
     summary = res.summary || { total: roster.length, membership_classes: {} };
+    pageConfig = res.page || null;
   }
 
   async function runButton(id, label, fn) {
@@ -171,16 +174,36 @@
     return `<div class="roster-card"><h2>Login required</h2><p>This roster contains private organization information. Log in with your organization account.</p><div class="roster-login"><input id="roster-email" type="email" placeholder="Email"><input id="roster-password" type="password" placeholder="Password"><button id="roster-login" class="roster-btn">Log in</button><button id="roster-reset" class="roster-btn secondary">Forgot password?</button></div></div>`;
   }
 
+  function rowMatchesFilter(row) {
+    const filter = clean(rosterFilter || "all").toLowerCase();
+    if (filter === "all" || !filter) return true;
+    if (filter.startsWith("class:")) return clean(row.membership_class_key || row.membership_class_label).toLowerCase() === filter.slice(6);
+    if (filter === "board") return arr(row.role_keys).map(clean).includes("board-member") || /board|president|treas|secretary|officer/i.test(clean(row.title));
+    if (filter === "cfi" || filter === "ifr" || filter === "night") return arr(row.aviation_pills).map((pill) => clean(pill).toLowerCase()).includes(filter);
+    return true;
+  }
+
   function filteredRows() {
     const q = clean(searchTerm).toLowerCase();
-    if (!q) return roster;
-    return roster.filter((r) => clean(r.search_text).toLowerCase().includes(q));
+    return roster.filter((r) => (!q || clean(r.search_text).toLowerCase().includes(q)) && rowMatchesFilter(r));
   }
 
   function visibleSummary(rows) {
     const counts = {};
     rows.forEach((r) => { const label = clean(r.membership_class_label || "Unclassified"); counts[label] = (counts[label] || 0) + 1; });
     return counts;
+  }
+
+
+  function renderFilters() {
+    const classes = Array.from(new Map(roster.map((r) => [clean(r.membership_class_key || r.membership_class_label).toLowerCase(), clean(r.membership_class_label || r.membership_class_key)]).filter(([k]) => k)).entries()).sort((a,b) => a[1].localeCompare(b[1]));
+    const hasBoard = roster.some((r) => arr(r.role_keys).map(clean).includes("board-member") || /board|president|treas|secretary|officer/i.test(clean(r.title)));
+    const pills = Array.from(new Set(roster.flatMap((r) => arr(r.aviation_pills).map((pill) => clean(pill).toUpperCase())).filter(Boolean))).sort();
+    const filters = [["all", "All"]]
+      .concat(classes.map(([k,label]) => [`class:${k}`, label]))
+      .concat(hasBoard ? [["board", "Board / Officers"]] : [])
+      .concat(pills.map((pill) => [pill.toLowerCase(), pill]));
+    return `<div class="roster-filter-row">${filters.map(([value,label]) => `<button type="button" class="roster-filter ${rosterFilter === value ? "active" : ""}" data-roster-filter="${esc(value)}">${esc(label)}</button>`).join("")}</div>`;
   }
 
   function telHref(phone) { const n = clean(phone).replace(/[^0-9+]/g, ""); return n ? `tel:${esc(n)}` : "#"; }
@@ -195,7 +218,7 @@
   function renderSummary(rows) {
     const counts = visibleSummary(rows);
     const pills = Object.entries(counts).sort((a,b) => a[0].localeCompare(b[0])).map(([label,count]) => `<span class="roster-summary-pill"><strong>${esc(count)}</strong> ${esc(label)}</span>`).join("");
-    return `<div class="roster-summary-bar"><span class="roster-summary-pill"><strong>${esc(rows.length)}</strong> Visible</span>${pills}<button id="roster-open-all" class="roster-toggle-btn" type="button">Open all</button><button id="roster-close-all" class="roster-toggle-btn" type="button">Close all</button><button id="roster-export" class="roster-toggle-btn" type="button">Export CSV</button><button id="roster-print" class="roster-print-btn" type="button">Print roster</button></div>`;
+    return `<div class="roster-summary-bar"><span class="roster-summary-pill"><strong>${esc(rows.length)}</strong> Active Roster</span>${pills}<button id="roster-open-all" class="roster-toggle-btn" type="button">Open all</button><button id="roster-close-all" class="roster-toggle-btn" type="button">Close all</button><button id="roster-export" class="roster-toggle-btn" type="button">Export for Excel</button><button id="roster-print" class="roster-print-btn" type="button">Print roster</button></div>`;
   }
 
   function rowDetails(row) {
@@ -227,25 +250,27 @@
     }).join("");
   }
 
-  function csvEscape(v) { const s = String(v ?? ""); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; }
+  function tsvCell(v) {
+    return String(v ?? "").replace(/\t/g, " ").replace(/\r?\n/g, " ").trim();
+  }
   function exportCsv() {
     const rows = filteredRows();
-    const header = ["Name","Address 1","Address 2 / Apt","Full Address","City","State","Zip","Phone","Email"];
-    const csvRows = [header.join(",")].concat(rows.map((r) => {
+    const header = ["Name","Address 1","Address 2 / Apt","Full Address","City","State","Zip","Phone","Email","Membership Type","Title"];
+    const tsvRows = [header.join("\t")].concat(rows.map((r) => {
       const a = obj(r.address);
-      return [r.display_name, a.address1, a.address2, a.full_address, a.city, a.state, a.zip, r.phone, r.email].map(csvEscape).join(",");
+      return [r.display_name, a.address1, a.address2, a.full_address, a.city, a.state, a.zip, r.phone, r.email, r.membership_class_label, r.title].map(tsvCell).join("\t");
     }));
-    const blob = new Blob([csvRows.join("\r\n")], { type:"text/csv;charset=utf-8" });
+    const blob = new Blob([tsvRows.join("\r\n")], { type:"text/tab-separated-values;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const org = selectedAccess()?.organization_key || "organization";
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${org}-roster.csv`;
+    a.download = `${org}-roster.tsv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    setMessage("CSV export created.", "ok");
+    setMessage("Excel export created.", "ok");
   }
 
   function renderContent() {
@@ -254,15 +279,15 @@
     const row = selectedAccess();
     if (!obj(row.capabilities).can_view_roster) return `<div class="roster-card"><h2>Roster unavailable</h2><p>This organization has not granted roster access to this account.</p></div>`;
     const rows = filteredRows();
-    return `<div class="roster-card roster-note">Roster contains private organization information. Use only for organization purposes.</div>${renderSummary(rows)}<div class="roster-search-panel"><div class="roster-search-wrap"><input id="roster-search" type="search" value="${esc(searchDraft)}" placeholder="Search by name, phone, email, city, role, class…" aria-label="Search roster"><button id="roster-clear" class="roster-clear ${searchDraft ? "show" : ""}" type="button">×</button></div><div class="roster-search-count">Showing ${esc(rows.length)} of ${esc(roster.length)}</div></div><div class="roster-legend"><span><strong>CFI</strong> = Club instructor</span><span><strong>IFR</strong> = Instrument rated</span><span><strong>NIGHT</strong> = Club night checkout</span></div><div class="roster-list">${renderRows(rows)}</div>`;
+    return `<div class="roster-card roster-note">Roster contains private organization information. Use only for organization purposes.</div>${renderSummary(rows)}${renderFilters()}<div class="roster-search-panel"><div class="roster-search-wrap"><input id="roster-search" type="search" value="${esc(searchDraft)}" placeholder="Search by name, phone, email, city, role, class…" aria-label="Search roster"><button id="roster-clear" class="roster-clear ${searchDraft ? "show" : ""}" type="button">×</button></div><div class="roster-search-count">Showing ${esc(rows.length)} of ${esc(roster.length)}</div></div>${roster.some((r) => arr(r.aviation_pills).length) ? `<div class="roster-legend"><span><strong>CFI</strong> = Club instructor</span><span><strong>IFR</strong> = Instrument rated</span><span><strong>NIGHT</strong> = Club night checkout</span></div>` : ""}<div class="roster-list">${renderRows(rows)}</div>`;
   }
 
   function render() {
     const root = rootEl(); if (!root) return;
     const cfg = styleConfig(selectedAccess());
     root.innerHTML = `<style>
-      .roster-wrap{${cssVars(cfg)}max-width:var(--roster-page-width);margin:24px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:var(--roster-text);box-sizing:border-box}.roster-wrap *{box-sizing:border-box}.roster-card,.roster-shell{background:rgba(255,255,255,.95);border:1px solid var(--roster-border);border-radius:var(--roster-radius);box-shadow:var(--roster-shadow);padding:20px;margin:16px 0}.roster-hero{background:linear-gradient(135deg,var(--roster-primary),${rgba(cfg.primary,.78)});color:#fff}.roster-hero h1{margin:8px 0 6px;color:#fff;font-size:clamp(32px,4vw,48px);line-height:1.05}.roster-hero p{color:rgba(255,255,255,.9);font-weight:800}.roster-eyebrow{display:inline-flex;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.roster-message{display:inline-flex;margin-top:12px;border-radius:14px;padding:10px 12px;font-size:13px;font-weight:900;background:rgba(255,255,255,.18);color:#fff}.roster-message.ok{background:#e7f6ec;color:#14532d}.roster-message.warn{background:#fff7ec;color:#8a4d00}.roster-note{font-weight:900;color:var(--roster-primary);background:var(--roster-soft);box-shadow:none}.roster-login{display:grid;grid-template-columns:1fr 1fr auto auto;gap:10px;align-items:center}.roster-wrap input{width:100%;min-height:42px;border:1px solid var(--roster-border);border-radius:12px;padding:10px 12px;background:#fff;color:var(--roster-text)}.roster-btn,.roster-toggle-btn,.roster-print-btn{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:8px 13px;border-radius:999px;border:1px solid var(--roster-primary);background:var(--roster-primary);color:#fff;font-weight:950;cursor:pointer;text-decoration:none}.roster-btn.secondary,.roster-toggle-btn{background:#fff;color:var(--roster-primary);border-color:var(--roster-border)}.roster-btn:hover,.roster-toggle-btn:hover,.roster-print-btn:hover{filter:brightness(.94);transform:translateY(-1px)}.roster-summary-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:16px;background:rgba(255,255,255,.9);border:1px solid var(--roster-border);border-radius:var(--roster-radius);box-shadow:0 8px 24px ${rgba(cfg.primary,.08)};margin:16px 0}.roster-summary-pill{display:inline-flex;padding:8px 12px;border-radius:999px;background:#fff;color:var(--roster-primary);border:1px solid var(--roster-border);font-size:12px;font-weight:900}.roster-summary-pill strong{margin-right:4px}.roster-print-btn{margin-left:auto}.roster-search-panel{position:sticky;top:10px;z-index:10;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;margin:14px 0;padding:12px;border:1px solid var(--roster-border);border-radius:18px;background:rgba(255,255,255,.97);box-shadow:0 12px 28px ${rgba(cfg.primary,.12)};backdrop-filter:blur(8px)}.roster-search-wrap{position:relative}.roster-search-wrap input{border-radius:999px;padding-right:42px}.roster-clear{position:absolute;right:7px;top:50%;transform:translateY(-50%);width:30px;height:30px;border-radius:999px;border:1px solid var(--roster-border);background:var(--roster-soft);color:var(--roster-primary);font-weight:950;display:none;cursor:pointer}.roster-clear.show{display:inline-flex;align-items:center;justify-content:center}.roster-search-count{padding:8px 12px;border-radius:999px;background:var(--roster-primary);color:#fff;font-size:12px;font-weight:950;white-space:nowrap}.roster-legend{margin:0 0 14px;padding:12px 14px;border:1px solid var(--roster-border);border-radius:16px;background:var(--roster-soft);font-size:12px;color:var(--roster-muted);font-weight:800}.roster-legend span{margin-right:16px}.roster-legend strong{color:var(--roster-primary)}.roster-list{border:1px solid var(--roster-border);border-radius:18px;overflow:hidden;background:#fff}.roster-row{border-bottom:1px solid var(--roster-border);background:#fff}.roster-row:last-child{border-bottom:none}.roster-row.open{background:linear-gradient(180deg,var(--roster-soft),rgba(255,255,255,.94))}.roster-row-main{width:100%;min-height:58px;padding:11px 14px;display:grid;grid-template-columns:24px minmax(0,1.7fr) minmax(0,2fr) minmax(0,1.25fr) minmax(120px,.9fr) minmax(110px,.85fr);gap:10px;align-items:center;border:none;background:transparent;text-align:left;cursor:pointer;font-family:inherit;color:var(--roster-text)}.roster-row-main:hover{background:var(--roster-soft)}.roster-chevron{font-weight:950;color:var(--roster-primary)}.roster-name-cell strong{font-weight:950;color:var(--roster-primary)}.roster-email-cell,.roster-phone-cell{font-size:13px;color:${rgba(cfg.primary,.86)};font-weight:850;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.roster-title-pill{display:inline-flex;margin-left:7px;padding:4px 8px;border-radius:999px;background:#fff2d7;color:#8a4b00;font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:.04em}.roster-aviation-pill,.roster-type-pill{display:inline-flex;margin:2px;padding:4px 8px;border-radius:999px;font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:.04em;border:1px solid var(--roster-border);background:var(--roster-soft);color:var(--roster-primary)}.roster-type-pill{background:#e7f6ec;color:#14532d}.roster-row-details{display:none;padding:0 14px 14px}.roster-row.open .roster-row-details{display:block}.roster-row-details-inner{display:grid;grid-template-columns:1fr 1fr 150px;gap:16px;padding:16px;border:1px solid var(--roster-border);border-radius:16px;background:rgba(255,255,255,.92)}.roster-detail-block h3{margin:0 0 8px;color:var(--roster-primary);font-size:12px;text-transform:uppercase;letter-spacing:.05em}.roster-detail-block p{margin:4px 0;font-size:13px;font-weight:750}.roster-detail-block a{color:var(--roster-primary);font-weight:950;text-decoration:none}.muted{color:var(--roster-muted)}.roster-photo-box{display:flex;align-items:center;justify-content:center}.roster-photo-box img,.roster-photo-placeholder{width:130px;height:130px;border-radius:18px;object-fit:cover;border:1px solid var(--roster-border);box-shadow:0 8px 22px ${rgba(cfg.primary,.14)}}.roster-photo-placeholder{display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--roster-primary),${rgba(cfg.primary,.74)});color:#fff;font-size:36px;font-weight:950}.roster-empty{padding:22px;text-align:center;color:var(--roster-muted);font-weight:900}.roster-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font-size:12px;max-height:240px;overflow:auto}@media(max-width:980px){.roster-row-main{grid-template-columns:24px minmax(0,1.5fr) minmax(0,1.5fr);grid-auto-rows:auto}.roster-phone-cell,.roster-pill-cell,.roster-class-cell{grid-column:auto}.roster-row-details-inner{grid-template-columns:1fr}.roster-print-btn{margin-left:0}.roster-login,.roster-search-panel{grid-template-columns:1fr}}@media(max-width:650px){.roster-row-main{grid-template-columns:24px minmax(0,1fr)}.roster-email-cell,.roster-phone-cell,.roster-pill-cell,.roster-class-cell{grid-column:2}.roster-summary-bar>*{width:100%;justify-content:center}.roster-wrap{padding:0 10px}}@media print{#syncetc-portal-shell,#syncetc-portal-footer,.roster-search-panel,.roster-toggle-btn,.roster-print-btn,details.roster-debug{display:none!important}.roster-wrap{max-width:none;margin:0;padding:0}.roster-card,.roster-row-details-inner,.roster-list{box-shadow:none}.roster-row-details{display:block!important}.roster-row-main{break-inside:avoid}.roster-hero{background:#fff!important;color:#000!important}.roster-hero h1,.roster-hero p{color:#000!important}}
-    </style><div class="roster-wrap"><section class="roster-card roster-hero"><div class="roster-eyebrow">Roster</div><h1>Roster</h1><p>Search, tap, or click a row to see contact details.</p><div class="roster-message ${esc(messageKind)}">${esc(message)}</div></section>${renderContent()}<details class="roster-card roster-debug"><summary>Diagnostics</summary><pre class="roster-backend">${esc(JSON.stringify(backend || {}, null, 2))}</pre></details></div>`;
+      .roster-wrap{${cssVars(cfg)}max-width:var(--roster-page-width);margin:24px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:var(--roster-text);box-sizing:border-box}.roster-wrap *{box-sizing:border-box}.roster-card,.roster-shell{background:rgba(255,255,255,.95);border:1px solid var(--roster-border);border-radius:var(--roster-radius);box-shadow:var(--roster-shadow);padding:20px;margin:16px 0}.roster-hero{background:linear-gradient(135deg,var(--roster-primary),${rgba(cfg.primary,.78)});color:#fff}.roster-hero h1{margin:8px 0 6px;color:#fff;font-size:clamp(32px,4vw,48px);line-height:1.05}.roster-hero p{color:rgba(255,255,255,.9);font-weight:800}.roster-eyebrow{display:inline-flex;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.roster-message{display:inline-flex;margin-top:12px;border-radius:14px;padding:10px 12px;font-size:13px;font-weight:900;background:rgba(255,255,255,.18);color:#fff}.roster-message.ok{background:#e7f6ec;color:#14532d}.roster-message.warn{background:#fff7ec;color:#8a4d00}.roster-note{font-weight:900;color:var(--roster-primary);background:var(--roster-soft);box-shadow:none}.roster-login{display:grid;grid-template-columns:1fr 1fr auto auto;gap:10px;align-items:center}.roster-wrap input{width:100%;min-height:42px;border:1px solid var(--roster-border);border-radius:12px;padding:10px 12px;background:#fff;color:var(--roster-text)}.roster-btn,.roster-toggle-btn,.roster-print-btn{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:8px 13px;border-radius:999px;border:1px solid var(--roster-primary);background:var(--roster-primary);color:#fff;font-weight:950;cursor:pointer;text-decoration:none}.roster-btn.secondary,.roster-toggle-btn{background:#fff;color:var(--roster-primary);border-color:var(--roster-border)}.roster-btn:hover,.roster-toggle-btn:hover,.roster-print-btn:hover{filter:brightness(.94);transform:translateY(-1px)}.roster-filter-row{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.roster-filter{border:1px solid var(--roster-border);background:#fff;color:var(--roster-primary);border-radius:999px;padding:8px 12px;font-size:12px;font-weight:950;cursor:pointer}.roster-filter.active,.roster-filter:hover{background:var(--roster-primary);color:#fff}.roster-summary-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:16px;background:rgba(255,255,255,.9);border:1px solid var(--roster-border);border-radius:var(--roster-radius);box-shadow:0 8px 24px ${rgba(cfg.primary,.08)};margin:16px 0}.roster-summary-pill{display:inline-flex;padding:8px 12px;border-radius:999px;background:#fff;color:var(--roster-primary);border:1px solid var(--roster-border);font-size:12px;font-weight:900}.roster-summary-pill strong{margin-right:4px}.roster-print-btn{margin-left:auto}.roster-search-panel{position:sticky;top:10px;z-index:10;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;margin:14px 0;padding:12px;border:1px solid var(--roster-border);border-radius:18px;background:rgba(255,255,255,.97);box-shadow:0 12px 28px ${rgba(cfg.primary,.12)};backdrop-filter:blur(8px)}.roster-search-wrap{position:relative}.roster-search-wrap input{border-radius:999px;padding-right:42px}.roster-clear{position:absolute;right:7px;top:50%;transform:translateY(-50%);width:30px;height:30px;border-radius:999px;border:1px solid var(--roster-border);background:var(--roster-soft);color:var(--roster-primary);font-weight:950;display:none;cursor:pointer}.roster-clear.show{display:inline-flex;align-items:center;justify-content:center}.roster-search-count{padding:8px 12px;border-radius:999px;background:var(--roster-primary);color:#fff;font-size:12px;font-weight:950;white-space:nowrap}.roster-legend{margin:0 0 14px;padding:12px 14px;border:1px solid var(--roster-border);border-radius:16px;background:var(--roster-soft);font-size:12px;color:var(--roster-muted);font-weight:800}.roster-legend span{margin-right:16px}.roster-legend strong{color:var(--roster-primary)}.roster-list{border:1px solid var(--roster-border);border-radius:18px;overflow:hidden;background:#fff}.roster-row{border-bottom:1px solid var(--roster-border);background:#fff}.roster-row:last-child{border-bottom:none}.roster-row.open{background:linear-gradient(180deg,var(--roster-soft),rgba(255,255,255,.94))}.roster-row-main{width:100%;min-height:58px;padding:11px 14px;display:grid;grid-template-columns:24px minmax(0,1.7fr) minmax(0,2fr) minmax(0,1.25fr) minmax(120px,.9fr) minmax(110px,.85fr);gap:10px;align-items:center;border:none;background:transparent;text-align:left;cursor:pointer;font-family:inherit;color:var(--roster-text)}.roster-row-main:hover{background:var(--roster-soft)}.roster-chevron{font-weight:950;color:var(--roster-primary)}.roster-name-cell strong{font-weight:950;color:var(--roster-primary)}.roster-email-cell,.roster-phone-cell{font-size:13px;color:${rgba(cfg.primary,.86)};font-weight:850;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.roster-title-pill{display:inline-flex;margin-left:7px;padding:4px 8px;border-radius:999px;background:#fff2d7;color:#8a4b00;font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:.04em}.roster-aviation-pill,.roster-type-pill{display:inline-flex;margin:2px;padding:4px 8px;border-radius:999px;font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:.04em;border:1px solid var(--roster-border);background:var(--roster-soft);color:var(--roster-primary)}.roster-type-pill{background:#e7f6ec;color:#14532d}.roster-row-details{display:none;padding:0 14px 14px}.roster-row.open .roster-row-details{display:block}.roster-row-details-inner{display:grid;grid-template-columns:1fr 1fr 150px;gap:16px;padding:16px;border:1px solid var(--roster-border);border-radius:16px;background:rgba(255,255,255,.92)}.roster-detail-block h3{margin:0 0 8px;color:var(--roster-primary);font-size:12px;text-transform:uppercase;letter-spacing:.05em}.roster-detail-block p{margin:4px 0;font-size:13px;font-weight:750}.roster-detail-block a{color:var(--roster-primary);font-weight:950;text-decoration:none}.muted{color:var(--roster-muted)}.roster-photo-box{display:flex;align-items:center;justify-content:center}.roster-photo-box img,.roster-photo-placeholder{width:130px;height:130px;border-radius:18px;object-fit:cover;border:1px solid var(--roster-border);box-shadow:0 8px 22px ${rgba(cfg.primary,.14)}}.roster-photo-placeholder{display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--roster-primary),${rgba(cfg.primary,.74)});color:#fff;font-size:36px;font-weight:950}.roster-empty{padding:22px;text-align:center;color:var(--roster-muted);font-weight:900}.roster-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font-size:12px;max-height:240px;overflow:auto}@media(max-width:980px){.roster-row-main{grid-template-columns:24px minmax(0,1.5fr) minmax(0,1.5fr);grid-auto-rows:auto}.roster-phone-cell,.roster-pill-cell,.roster-class-cell{grid-column:auto}.roster-row-details-inner{grid-template-columns:1fr}.roster-print-btn{margin-left:0}.roster-login,.roster-search-panel{grid-template-columns:1fr}}@media(max-width:650px){.roster-row-main{grid-template-columns:24px minmax(0,1fr)}.roster-email-cell,.roster-phone-cell,.roster-pill-cell,.roster-class-cell{grid-column:2}.roster-summary-bar>*{width:100%;justify-content:center}.roster-wrap{padding:0 10px}}@media print{#syncetc-portal-shell,#syncetc-portal-footer,.roster-search-panel,.roster-toggle-btn,.roster-print-btn,details.roster-debug{display:none!important}.roster-wrap{max-width:none;margin:0;padding:0}.roster-card,.roster-row-details-inner,.roster-list{box-shadow:none}.roster-row-details{display:block!important}.roster-row-main{break-inside:avoid}.roster-hero{background:#fff!important;color:#000!important}.roster-hero h1,.roster-hero p{color:#000!important}}
+    </style><div class="roster-wrap"><section class="roster-card roster-hero"><div class="roster-eyebrow">Roster</div><h1>${esc(clean(pageConfig?.title) || "Roster")}</h1><p>${esc(clean(pageConfig?.intro_text) || "Search, tap, or click a row to see contact details.")}</p><div class="roster-message ${esc(messageKind)}">${esc(message)}</div></section>${renderContent()}<details class="roster-card roster-debug"><summary>Diagnostics</summary><pre class="roster-backend">${esc(JSON.stringify(backend || {}, null, 2))}</pre></details></div>`;
 
     $("roster-login")?.addEventListener("click", () => runButton("roster-login", "Logging in…", login));
     $("roster-reset")?.addEventListener("click", () => runButton("roster-reset", "Sending…", resetPassword));
@@ -273,6 +298,7 @@
       $("roster-clear")?.classList.toggle("show", Boolean(searchDraft));
     });
     $("roster-clear")?.addEventListener("click", () => { searchDraft = ""; searchTerm = ""; render(); });
+    document.querySelectorAll("[data-roster-filter]").forEach((btn) => btn.addEventListener("click", () => { rosterFilter = btn.getAttribute("data-roster-filter") || "all"; expanded = new Set(); render(); }));
     document.querySelectorAll("[data-roster-toggle]").forEach((btn) => btn.addEventListener("click", () => { const id = btn.getAttribute("data-roster-toggle"); if (!id) return; expanded.has(id) ? expanded.delete(id) : expanded.add(id); render(); }));
     $("roster-open-all")?.addEventListener("click", () => { filteredRows().forEach((r) => expanded.add(clean(r.membership_id || r.person_id))); render(); });
     $("roster-close-all")?.addEventListener("click", () => { expanded = new Set(); render(); });
@@ -283,7 +309,7 @@
   async function handleOrganizationChange(nextOrgId) {
     nextOrgId = String(nextOrgId || "");
     if (!nextOrgId || nextOrgId === selectedOrgId) return;
-    selectedOrgId = nextOrgId; roster = []; expanded = new Set(); searchDraft = ""; searchTerm = "";
+    selectedOrgId = nextOrgId; roster = []; expanded = new Set(); searchDraft = ""; searchTerm = ""; rosterFilter = "all"; pageConfig = null;
     try { await loadAccessAndRoster(); setMessage("Organization loaded.", "ok"); }
     catch (e) { setMessage(e.message || String(e), "warn"); }
     render();

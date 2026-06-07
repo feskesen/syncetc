@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-07-011-A
+// Internal Version: 2026-06-07-012-A
 // Purpose: Shared shell for signed-in user and organization-admin pages. Header owns login/logout and organization context.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-011-A";
+  const VERSION = "2026-06-07-012-A";
   const SHELL_ID = "syncetc-portal-shell";
   const FOOTER_ID = "syncetc-portal-footer";
 
@@ -53,6 +53,53 @@
     })).filter((o, idx, list) => o.id && list.findIndex((x) => x.id === o.id) === idx);
   }
 
+
+  function portalPages() {
+    const pages = arr(obj(state.accessRow).portal_pages);
+    return pages.map((page) => ({
+      key: clean(page.page_key || page.template_key),
+      label: clean(page.nav_label || page.title || page.template_name || page.page_key),
+      path: clean(page.path || (page.page_slug ? `/${String(page.page_slug).replace(/^\/+/, "")}` : "")),
+      show: page.show_in_nav !== false,
+      category: clean(page.template_category),
+      module: clean(page.module_key || page.module_category),
+      sort: Number(page.sort_order || 100),
+    })).filter((page) => page.key && page.path && page.show).sort((a,b) => a.sort - b.sort || a.label.localeCompare(b.label));
+  }
+
+  function navLabelForPage(page) {
+    const key = clean(page.key);
+    if (key === "home") return "Public Home";
+    if (key === "organization-people") return "People";
+    if (key === "roster") return "Roster";
+    return page.label || key;
+  }
+
+  function renderPortalNav(adminVisible, rosterVisible) {
+    const pages = portalPages();
+    const seen = new Set();
+    const links = [];
+    const add = (key, href, label) => {
+      const id = `${key}:${href}`;
+      if (!href || seen.has(id)) return;
+      seen.add(id);
+      links.push(`<a href="${esc(href)}">${esc(label)}</a>`);
+    };
+
+    for (const page of pages) {
+      const key = clean(page.key);
+      if (key === "organization-people" && !adminVisible) continue;
+      if (key === "roster" && !rosterVisible) continue;
+      if (["user-dashboard", "organization-admin"].includes(key)) continue;
+      if (key.includes("admin") && !adminVisible) continue;
+      add(key, page.path, navLabelForPage(page));
+    }
+
+    add("user-dashboard", "/user-dashboard", "User Dashboard");
+    if (adminVisible) add("organization-admin", "/organization-admin", "Organization Admin");
+    return links.join("");
+  }
+
   function renderOrgContext() {
     const options = organizationOptions();
     if (!state.authenticated || !options.length) return "";
@@ -89,8 +136,8 @@
     const initials = clean(state.organizationName || "S").slice(0, 1).toUpperCase() || "S";
     const caps = obj(obj(state.accessRow).capabilities);
     const adminVisible = state.mode === "org-admin" || Boolean(obj(state.accessRow).is_organization_admin || caps.can_view_organization_admin);
-    const rosterVisible = state.authenticated && Boolean(caps.can_view_roster || adminVisible);
-    const nav = `<a href="/home">Public Home</a><a href="/documents">Documents</a><a href="/user-dashboard">User Dashboard</a>${rosterVisible ? `<a href="/roster">Roster</a>` : ""}${adminVisible ? `<a href="/organization-admin">Organization Admin</a><a href="/organization-people">People</a>` : ""}`;
+    const rosterVisible = state.authenticated && Boolean(caps.can_view_roster || adminVisible) && portalPages().some((page) => clean(page.key) === "roster");
+    const nav = renderPortalNav(adminVisible, rosterVisible);
 
     shell.innerHTML = `
       <style>

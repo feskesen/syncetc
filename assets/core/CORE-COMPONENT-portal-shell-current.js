@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-07-010-A
+// Internal Version: 2026-06-07-011-A
 // Purpose: Shared shell for signed-in user and organization-admin pages. Header owns login/logout and organization context.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-010-A";
+  const VERSION = "2026-06-07-011-A";
   const SHELL_ID = "syncetc-portal-shell";
   const FOOTER_ID = "syncetc-portal-footer";
 
@@ -89,7 +89,8 @@
     const initials = clean(state.organizationName || "S").slice(0, 1).toUpperCase() || "S";
     const caps = obj(obj(state.accessRow).capabilities);
     const adminVisible = state.mode === "org-admin" || Boolean(obj(state.accessRow).is_organization_admin || caps.can_view_organization_admin);
-    const nav = `<a href="/home">Public Home</a><a href="/documents">Documents</a><a href="/user-dashboard">User Dashboard</a>${adminVisible ? `<a href="/organization-admin">Organization Admin</a><a href="/organization-people">People</a>` : ""}`;
+    const rosterVisible = state.authenticated && Boolean(caps.can_view_roster || adminVisible);
+    const nav = `<a href="/home">Public Home</a><a href="/documents">Documents</a><a href="/user-dashboard">User Dashboard</a>${rosterVisible ? `<a href="/roster">Roster</a>` : ""}${adminVisible ? `<a href="/organization-admin">Organization Admin</a><a href="/organization-people">People</a>` : ""}`;
 
     shell.innerHTML = `
       <style>

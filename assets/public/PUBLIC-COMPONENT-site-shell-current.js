@@ -1,11 +1,11 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-07-021-H
+// Internal Version: 2026-06-07-021-I
 // Purpose: Public page wrapper. It never renders its own header; it feeds context to the single organization header engine.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-H";
+  const VERSION = "2026-06-07-021-I";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -54,6 +54,64 @@
   }
 
   installEarlyPublicRootGate();
+
+  const DEBUG_ENABLED = /(?:\?|&)syncetc_debug=1(?:&|$)/.test(window.location.search) || window.localStorage.getItem("syncetc_public_debug") === "1";
+  const debugState = { version: VERSION, startedAt: performance.now(), steps: [], latest: {}, errors: [] };
+
+  function debugElapsed() { return Math.round(performance.now() - debugState.startedAt); }
+
+  function ensureDebugPanel() {
+    if (!DEBUG_ENABLED) return null;
+    let panel = document.getElementById("syncetc-public-shell-debug-panel");
+    if (panel) return panel;
+    panel = document.createElement("div");
+    panel.id = "syncetc-public-shell-debug-panel";
+    panel.style.cssText = "position:fixed;z-index:2147483647;right:12px;bottom:12px;width:min(520px,calc(100vw - 24px));max-height:45vh;overflow:auto;background:#111827;color:#f9fafb;border:2px solid #f59e0b;border-radius:12px;box-shadow:0 18px 55px rgba(0,0,0,.35);font:12px/1.35 Consolas,Monaco,monospace;padding:10px;white-space:pre-wrap;";
+    panel.innerHTML = "SyncEtc public shell diagnostics starting...";
+    document.body.appendChild(panel);
+    return panel;
+  }
+
+  function updateDebugPanel() {
+    if (!DEBUG_ENABLED) return;
+    const panel = ensureDebugPanel();
+    if (!panel) return;
+    const lines = [];
+    lines.push(`SyncEtc Public Shell Diagnostics ${VERSION}`);
+    lines.push(`Elapsed: ${debugElapsed()}ms`);
+    if (debugState.latest.page) lines.push(`Page: ${debugState.latest.page}`);
+    if (debugState.latest.org) lines.push(`Org: ${debugState.latest.org}`);
+    if (debugState.latest.sessionKnown) lines.push(`Session: ${debugState.latest.sessionKnown}`);
+    if (debugState.latest.accessStatus) lines.push(`Access: ${debugState.latest.accessStatus}`);
+    lines.push("");
+    lines.push("Steps:");
+    debugState.steps.slice(-28).forEach((step) => lines.push(`${String(step.t).padStart(6)}ms  ${step.label}${step.detail ? " — " + step.detail : ""}`));
+    if (debugState.errors.length) {
+      lines.push("");
+      lines.push("Errors:");
+      debugState.errors.slice(-6).forEach((err) => lines.push(`${err.t}ms ${err.label}: ${err.message}`));
+    }
+    panel.textContent = lines.join("\n");
+  }
+
+  function debugStep(label, detail = "") {
+    const entry = { t: debugElapsed(), label, detail: String(detail ?? "").replace(/\s+/g, " ").trim() };
+    debugState.steps.push(entry);
+    if (DEBUG_ENABLED) {
+      console.info(`[SyncEtc public shell ${VERSION}] ${entry.t}ms ${label}${detail ? " — " + detail : ""}`);
+      updateDebugPanel();
+    }
+    return entry;
+  }
+
+  function debugError(label, error) {
+    const entry = { t: debugElapsed(), label, message: error instanceof Error ? error.message : String(error || "unknown") };
+    debugState.errors.push(entry);
+    console.warn(`[SyncEtc public shell ${VERSION}] ${entry.t}ms ${label}`, error);
+    updateDebugPanel();
+  }
+
+  window.SyncEtcPublicShellDiagnostics = debugState;
 
   function clean(value) { return String(value ?? "").replace(/\s+/g, " ").trim(); }
   function hasText(value) { return clean(value).length > 0; }
@@ -239,20 +297,23 @@
   }
 
   function loadScript(src) {
+    debugStep("loadScript:start", src);
     return new Promise((resolve, reject) => {
-      if (document.querySelector(`script[src="${src}"]`)) return resolve();
+      if (document.querySelector(`script[src="${src}"]`)) { debugStep("loadScript:already-present", src); return resolve(); }
       const script = document.createElement("script");
       script.src = src;
-      script.onload = resolve;
-      script.onerror = () => reject(new Error(`Failed to load ${src}`));
+      script.onload = () => { debugStep("loadScript:loaded", src); resolve(); };
+      script.onerror = () => { const error = new Error(`Failed to load ${src}`); debugError("loadScript:error", error); reject(error); };
       document.head.appendChild(script);
     });
   }
 
   async function ensureSupabase() {
-    if (supabaseClient) return supabaseClient;
+    debugStep("ensureSupabase:start");
+    if (supabaseClient) { debugStep("ensureSupabase:cached"); return supabaseClient; }
     if (!window.supabase) await loadScript(SUPABASE_JS);
     supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    debugStep("ensureSupabase:created-client");
     if (!authListenerStarted) {
       authListenerStarted = true;
       supabaseClient.auth.onAuthStateChange(() => refreshOrganizationHeader().catch(() => {}));
@@ -261,9 +322,11 @@
   }
 
   async function ensureOrganizationHeader() {
-    if (window.SyncEtcOrganizationHeader && typeof window.SyncEtcOrganizationHeader.render === "function") return window.SyncEtcOrganizationHeader;
+    debugStep("ensureOrganizationHeader:start");
+    if (window.SyncEtcOrganizationHeader && typeof window.SyncEtcOrganizationHeader.render === "function") { debugStep("ensureOrganizationHeader:cached"); return window.SyncEtcOrganizationHeader; }
     if (!document.querySelector(`script[src="${ORGANIZATION_HEADER_URL}"]`)) await loadScript(ORGANIZATION_HEADER_URL);
     if (!window.SyncEtcOrganizationHeader || typeof window.SyncEtcOrganizationHeader.render !== "function") throw new Error("Shared organization header did not load.");
+    debugStep("ensureOrganizationHeader:ready", window.SyncEtcOrganizationHeader.version || "unknown version");
     return window.SyncEtcOrganizationHeader;
   }
 
@@ -315,16 +378,19 @@
   }
 
   async function callAccess(action, payload = {}) {
+    debugStep("callAccess:start", action);
     const client = await ensureSupabase();
     const { data } = await client.auth.getSession();
     const token = data?.session?.access_token;
-    if (!token) return null;
+    if (!token) { debugStep("callAccess:no-token", action); return null; }
+    const accessStartedAt = performance.now();
     const response = await fetch(ACCESS_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}`, "apikey": SUPABASE_ANON_KEY },
       body: JSON.stringify({ action, ...payload }),
     });
     const result = await response.json().catch(() => null);
+    debugStep("callAccess:response", `${action} HTTP ${response.status} in ${Math.round(performance.now() - accessStartedAt)}ms`);
     if (!response.ok || !result || result.ok === false) {
       const message = clean(result?.message || result?.error || `HTTP ${response.status}`);
       const errorKey = key(`${result?.error || ""} ${message}`);
@@ -351,8 +417,13 @@
   }
 
   async function getSessionComplete(client) {
+    debugStep("getSession:start");
+    const startedAt = performance.now();
     const result = await withFailureTimeout(client.auth.getSession(), 10000, "Login session check");
-    return result?.data?.session || null;
+    const session = result?.data?.session || null;
+    debugState.latest.sessionKnown = session?.user?.email ? `logged in as ${session.user.email}` : "logged out";
+    debugStep("getSession:done", `${debugState.latest.sessionKnown} in ${Math.round(performance.now() - startedAt)}ms`);
+    return session;
   }
 
 
@@ -478,7 +549,8 @@
   }
 
   async function refreshOrganizationHeader() {
-    if (!context) return;
+    debugStep("refreshHeader:start");
+    if (!context) { debugStep("refreshHeader:no-context"); return; }
     const payload = context.payload || {};
     const target = document.getElementById(HEADER_ID);
     if (!target) return;
@@ -492,7 +564,12 @@
       return;
     }
 
+    debugState.latest.page = context?.activePageKey || window.location.pathname;
+    debugState.latest.org = clean(payload?.organization?.organization_key || payload?.site_shell?.organization_key || payload?.site_shell?.organization_name || "unknown");
+    updateDebugPanel();
+    const styleStartedAt = performance.now();
     const styleResult = requiredStyleConfig(payload);
+    debugStep("styleConfig:checked", styleResult.ok ? `ok in ${Math.round(performance.now() - styleStartedAt)}ms` : `failed: ${arr(styleResult.missing).join(", ")}`);
     if (!styleResult.ok) {
       target.innerHTML = requiredStyleErrorHtml(styleResult);
       markRootError(context.root);
@@ -509,7 +586,10 @@
     if (session?.access_token) {
       const facts = headerBaseFacts(payload);
       const requestPayload = facts.orgId ? { organization_id: facts.orgId } : {};
+      debugState.latest.accessStatus = "starting get_user_dashboard"; updateDebugPanel();
+      const accessStartedAt = performance.now();
       const result = await withFailureTimeout(callAccess("get_user_dashboard", requestPayload), 12000, "Organization access context");
+      debugState.latest.accessStatus = `done in ${Math.round(performance.now() - accessStartedAt)}ms`; updateDebugPanel();
       if (result) {
         accessRows = arr(result.access);
         accessRow = chooseAccessRow(accessRows, payload);
@@ -518,11 +598,17 @@
     }
 
     // Render once, after style + session/access completion. No timer fallback to logged-out state.
+    debugStep("headerRender:start");
     header.render(target, headerContext(payload, session, accessRow, accessRows, platformAdmin));
+    debugStep("headerRender:done");
     revealRoot();
+    debugStep("root:revealed");
+    if (DEBUG_ENABLED) console.table(debugState.steps.map((s) => ({ ms: s.t, step: s.label, detail: s.detail })));
   }
 
   function render(options) {
+    debugStep("render:start", window.location.pathname);
+    ensureDebugPanel();
     if (options && options.root) {
       options.root.classList.remove("syncetc-public-shell-ready", "syncetc-public-shell-error");
       options.root.style.visibility = "hidden";
@@ -536,6 +622,7 @@
       extraCss: options.extraCss || "",
     };
 
+    debugStep("render:context-built", `activePageKey=${context.activePageKey || ""}`);
     const styleResult = requiredStyleConfig(context.payload);
     if (!styleResult.ok) {
       context.root.innerHTML = requiredStyleErrorHtml(styleResult);
@@ -560,7 +647,7 @@
       </div>`;
 
     refreshOrganizationHeader().catch((error) => {
-      console.warn("SyncEtc organization header refresh failed", error);
+      debugError("refreshHeader:failed", error);
       const target = document.getElementById(HEADER_ID);
       if (target) target.innerHTML = `<div class="syncetc-public-error"><strong>Navigation unavailable.</strong><br>${escapeHtml(error?.message || "Unknown header error")}</div>`;
       markRootError(context.root);
@@ -568,6 +655,7 @@
   }
 
   function renderError(root, message, payload) {
+    debugStep("renderError:start", message || "");
     if (root) {
       root.classList.remove("syncetc-public-shell-ready");
       root.style.visibility = "hidden";
@@ -582,6 +670,7 @@
     root.innerHTML = `<style>${buildCss(config)}</style><div id="${HEADER_ID}"></div><div class="syncetc-public-error"><strong>Unable to load page.</strong><br>${escapeHtml(message || "Unknown error")}</div>`;
     context = { root, payload: payload || {}, activePageKey: "", bodyHtml: "", beforeBodyHtml: "", extraCss: "" };
     refreshOrganizationHeader().catch((error) => {
+      debugError("refreshHeader:failed", error);
       const target = document.getElementById(HEADER_ID);
       if (target) target.innerHTML = `<div class="syncetc-public-error"><strong>Navigation unavailable.</strong><br>${escapeHtml(error?.message || "Unknown header error")}</div>`;
       markRootError(root);
@@ -596,5 +685,6 @@
     escapeHtml,
     safeHref,
     refreshOrganizationHeader,
+    diagnostics: debugState,
   };
 })();

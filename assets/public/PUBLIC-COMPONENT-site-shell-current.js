@@ -1,16 +1,17 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-07-020-A
+// Internal Version: 2026-06-07-021-C
 // Purpose: Public page wrapper. It never renders its own header; it feeds context to the single organization header engine.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-020-A";
+  const VERSION = "2026-06-07-021-C";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
-  const PORTAL_SHELL_URL = "https://feskesen.github.io/syncetc/assets/core/CORE-COMPONENT-portal-shell-current.js?v=2026-06-07-020-A";
+  const ORGANIZATION_HEADER_URL = "https://feskesen.github.io/syncetc/assets/core/CORE-COMPONENT-organization-header-current.js";
+  const HEADER_ID = "syncetc-organization-header";
 
   let supabaseClient = null;
   let context = null;
@@ -116,8 +117,10 @@
   }
 
   async function ensureOrganizationHeader() {
-    if (!window.SyncEtcPortalShell && !document.querySelector(`script[src="${PORTAL_SHELL_URL}"]`)) await loadScript(PORTAL_SHELL_URL);
-    return window.SyncEtcPortalShell || window.SyncEtcOrganizationHeader || null;
+    if (window.SyncEtcOrganizationHeader && typeof window.SyncEtcOrganizationHeader.render === "function") return window.SyncEtcOrganizationHeader;
+    if (!document.querySelector(`script[src="${ORGANIZATION_HEADER_URL}"]`)) await loadScript(ORGANIZATION_HEADER_URL);
+    if (!window.SyncEtcOrganizationHeader || typeof window.SyncEtcOrganizationHeader.render !== "function") throw new Error("Shared organization header did not load.");
+    return window.SyncEtcOrganizationHeader;
   }
 
   function shellNavItems(payload) {
@@ -165,10 +168,60 @@
     return result;
   }
 
+
+  function normalizePath(path, pageKey) {
+    const k = key(pageKey);
+    if (k === "home") return "/";
+    const p = clean(path);
+    if (!p) return k ? `/${k}` : "#";
+    if (/^https?:\/\//i.test(p) || p.startsWith("#") || /^mailto:/i.test(p) || /^tel:/i.test(p)) return p;
+    return p.startsWith("/") ? p : `/${p}`;
+  }
+
+  function portalPageLinks(accessRow, zone) {
+    const pages = arr(obj(accessRow).portal_pages);
+    return pages.map((page) => {
+      const pageKey = key(page.page_key || page.template_key || page.key);
+      const templateCategory = key(page.template_category);
+      const accessDefault = key(page.access_default);
+      const moduleKey = key(page.module_key || page.module_category);
+      let pageZone = "public";
+      if (pageKey === "organization-people" || pageKey.includes("admin") || templateCategory === "organization-admin" || accessDefault === "organization-admin") pageZone = "admin";
+      else if (pageKey === "roster" || templateCategory === "user" || templateCategory === "member" || accessDefault === "member" || accessDefault === "user") pageZone = "user";
+      if (pageZone !== zone) return null;
+      let label = clean(page.nav_label || page.title || page.template_name || page.page_key || pageKey);
+      if (pageKey === "user-dashboard") label = "Dashboard";
+      if (pageKey === "organization-admin") label = "Admin Dashboard";
+      if (pageKey === "organization-people") label = "People";
+      if (pageKey === "home") label = "Home";
+      return {
+        key: pageKey,
+        label,
+        href: normalizePath(page.path || page.href || page.url || (page.page_slug ? `/${String(page.page_slug).replace(/^\/+/, "")}` : ""), pageKey),
+        order: Number(page.sort_order || page.nav_order || 100)
+      };
+    }).filter(Boolean);
+  }
+
+  function defaultPublicNavIfNeeded(items) {
+    const links = arr(items);
+    if (links.length > 1) return links;
+    return [
+      { key: "home", label: "Home", href: "/", order: 0 },
+      { key: "info", label: "Info", href: "/info", order: 20 },
+      { key: "aircraft", label: "Aircraft", href: "/aircraft", order: 30 },
+      { key: "calendar", label: "Calendar / Events", href: "/calendar", order: 40 },
+      { key: "gallery", label: "Gallery", href: "/gallery", order: 50 },
+      { key: "documents", label: "Documents", href: "/documents", order: 60 },
+      { key: "contact", label: "Contact", href: "/#contact", order: 70 }
+    ];
+  }
+
   async function refreshOrganizationHeader() {
     if (!context) return;
     const header = await ensureOrganizationHeader();
-    if (!header || typeof header.setState !== "function") return;
+    const target = document.getElementById(HEADER_ID);
+    if (!target) return;
 
     const payload = context.payload || {};
     const org = obj(payload.organization);
@@ -176,7 +229,6 @@
     const orgId = clean(org.organization_id || shell.organization_id || "");
     const orgKey = clean(org.organization_key || shell.organization_key || "");
     const orgName = clean(shell.organization_name || org.display_name || org.legal_name || orgKey || "Organization");
-    const publicNavItems = shellNavItems(payload);
     const logo = shell.logo || null;
 
     const client = await ensureSupabase();
@@ -193,22 +245,52 @@
       platformAdmin = Boolean(result?.platform_admin);
     }
 
-    header.setState({
+    const caps = obj(obj(accessRow).capabilities);
+    const isOrgAdmin = Boolean(obj(accessRow).is_organization_admin || caps.can_view_organization_admin || platformAdmin);
+    const canUser = Boolean(obj(accessRow).organization_id || caps.can_view_user_dashboard || isOrgAdmin || platformAdmin);
+    const publicNavItems = defaultPublicNavIfNeeded(shellNavItems(payload));
+    const userLinks = canUser ? [
+      { key: "user-dashboard", label: "Dashboard", href: "/user-dashboard", order: 5 },
+      ...portalPageLinks(accessRow, "user")
+    ] : [];
+    const adminLinks = isOrgAdmin ? [
+      { key: "organization-admin", label: "Admin Dashboard", href: "/organization-admin", order: 5 },
+      ...portalPageLinks(accessRow, "admin")
+    ] : [];
+    const platformLinks = platformAdmin ? [
+      { key: "platform-access-tools", label: "Platform Access Tools", href: "/access-admin", order: 10 },
+      { key: "customer-builder", label: "Customer Builder", href: "/customer-builder", order: 20 },
+      { key: "page-setup", label: "Page Setup", href: "/page-setup", order: 30 },
+      { key: "layout-designer", label: "Layout Designer", href: "/layout-designer", order: 40 }
+    ] : [];
+
+    header.render(target, {
       authenticated: Boolean(session?.access_token),
       email: session?.user?.email || "",
-      mode: "public",
       organizationName: orgName,
-      organizationKey: orgKey,
-      organizationId: orgId,
+      organization: { organization_id: orgId, organization_key: orgKey, display_name: orgName },
       selectedOrganizationId: accessRow?.organization_id || orgId,
-      organizations: accessRows.map((row) => ({ id: row.organization_id, name: row.organization_name, key: row.organization_key })),
+      organizations: accessRows.map((row) => ({ organization_id: row.organization_id, display_name: row.organization_name, organization_key: row.organization_key })),
       styleProfile: payload.style_profile || accessRow?.style_profile || null,
-      accessRow,
-      platformAdmin,
-      publicNavItems,
       logo,
       activePageKey: context.activePageKey || payload?.page?.page_key || "",
-      shellAuthChecked: true,
+      access: {
+        can_view_user_dashboard: canUser,
+        can_view_organization_admin: isOrgAdmin,
+        is_platform_admin: platformAdmin
+      },
+      nav: {
+        public: publicNavItems,
+        user: userLinks,
+        admin: adminLinks,
+        platform: platformLinks
+      },
+      loginUrl: `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`,
+      onLogout: async () => {
+        await client.auth.signOut();
+        await refreshOrganizationHeader();
+      },
+      onOrganizationChange: () => {}
     });
   }
 
@@ -233,6 +315,7 @@
 
     context.root.innerHTML = `
       <style>${buildCss(config)}${context.extraCss || ""}</style>
+      <div id="${HEADER_ID}"></div>
       <div class="syncetc-public-site" data-syncetc-shell-version="${VERSION}">
         <main class="syncetc-public-page-slot">${context.beforeBodyHtml || ""}${context.bodyHtml || ""}</main>
         ${footerMode === "disabled" ? "" : `<footer class="syncetc-public-footer"><div class="syncetc-public-footer-brand"><div class="syncetc-public-footer-logo">${footerLogoHtml(logo, orgName)}</div><div><h2>${escapeHtml(orgName)}</h2>${hasText(footerNote) ? `<p>${escapeHtml(footerNote)}</p>` : ""}</div></div><div class="syncetc-public-footer-links">${publicLinks.map((item) => `<a href="${escapeHtml(item.href)}">${escapeHtml(item.label)}</a>`).join("")}</div></footer>`}
@@ -243,7 +326,7 @@
 
   function renderError(root, message, payload) {
     const config = styleConfig(payload || {});
-    root.innerHTML = `<style>${buildCss(config)}</style><div class="syncetc-public-error"><strong>Unable to load page.</strong><br>${escapeHtml(message || "Unknown error")}</div>`;
+    root.innerHTML = `<style>${buildCss(config)}</style><div id="${HEADER_ID}"></div><div class="syncetc-public-error"><strong>Unable to load page.</strong><br>${escapeHtml(message || "Unknown error")}</div>`;
     context = { root, payload: payload || {}, activePageKey: "", bodyHtml: "", beforeBodyHtml: "", extraCss: "" };
     refreshOrganizationHeader().catch(() => {});
   }

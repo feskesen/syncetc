@@ -1,11 +1,11 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-07-021-G
+// Internal Version: 2026-06-07-021-H
 // Purpose: Public page wrapper. It never renders its own header; it feeds context to the single organization header engine.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-G";
+  const VERSION = "2026-06-07-021-H";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -16,6 +16,44 @@
   let supabaseClient = null;
   let context = null;
   let authListenerStarted = false;
+
+  const PUBLIC_ROOT_SELECTORS = [
+    "#syncetc-home-page-root",
+    "#syncetc-info-page-root",
+    "#syncetc-aircraft-page-root",
+    "#syncetc-gallery-page-root",
+    "#syncetc-documents-page-root",
+    "#syncetc-calendar-page-root",
+    "#syncetc-event-rsvp-root",
+    "[data-render-mode='public'][data-organization-key]",
+    "[data-render-mode='public'][data-customer-key]",
+    "[data-syncetc-page]",
+    "[data-syncetc-gallery-page-root='true']"
+  ];
+
+  function installEarlyPublicRootGate() {
+    if (document.getElementById("syncetc-public-shell-early-gate")) return;
+    const style = document.createElement("style");
+    style.id = "syncetc-public-shell-early-gate";
+    style.textContent = `${PUBLIC_ROOT_SELECTORS.map((selector) => `${selector}:not(.syncetc-public-shell-ready):not(.syncetc-public-shell-error)`).join(",\n")} { visibility: hidden !important; }`;
+    document.head.appendChild(style);
+  }
+
+  function markRootReady(root) {
+    if (!root) return;
+    root.classList.remove("syncetc-public-shell-error");
+    root.classList.add("syncetc-public-shell-ready");
+    root.style.visibility = "visible";
+  }
+
+  function markRootError(root) {
+    if (!root) return;
+    root.classList.remove("syncetc-public-shell-ready");
+    root.classList.add("syncetc-public-shell-error");
+    root.style.visibility = "visible";
+  }
+
+  installEarlyPublicRootGate();
 
   function clean(value) { return String(value ?? "").replace(/\s+/g, " ").trim(); }
   function hasText(value) { return clean(value).length > 0; }
@@ -287,7 +325,12 @@
       body: JSON.stringify({ action, ...payload }),
     });
     const result = await response.json().catch(() => null);
-    if (!response.ok || !result || result.ok === false) return null;
+    if (!response.ok || !result || result.ok === false) {
+      const message = clean(result?.message || result?.error || `HTTP ${response.status}`);
+      const errorKey = key(`${result?.error || ""} ${message}`);
+      if (errorKey.includes("no-organization") || errorKey.includes("not-linked") || errorKey.includes("no-active") || errorKey.includes("access-denied") || errorKey.includes("not-authorized")) return null;
+      throw new Error(message || "Organization access context failed.");
+    }
     return result;
   }
 
@@ -299,8 +342,16 @@
     ]).finally(() => { if (timer) clearTimeout(timer); });
   }
 
-  async function getSessionFast(client) {
-    const result = await withTimeout(client.auth.getSession(), 1600, null);
+  function withFailureTimeout(promise, ms, label) {
+    let timer = null;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label || "Operation"} did not complete.`)), ms);
+    });
+    return Promise.race([Promise.resolve(promise), timeout]).finally(() => { if (timer) clearTimeout(timer); });
+  }
+
+  async function getSessionComplete(client) {
+    const result = await withFailureTimeout(client.auth.getSession(), 10000, "Login session check");
     return result?.data?.session || null;
   }
 
@@ -423,7 +474,7 @@
   }
 
   function revealRoot() {
-    if (context && context.root) context.root.style.visibility = "visible";
+    if (context && context.root) markRootReady(context.root);
   }
 
   async function refreshOrganizationHeader() {
@@ -437,19 +488,19 @@
       header = await ensureOrganizationHeader();
     } catch (error) {
       target.innerHTML = `<div class="syncetc-public-error"><strong>Navigation unavailable.</strong><br>${escapeHtml(error?.message || "Shared header did not load.")}</div>`;
-      revealRoot();
+      markRootError(context.root);
       return;
     }
 
     const styleResult = requiredStyleConfig(payload);
     if (!styleResult.ok) {
       target.innerHTML = requiredStyleErrorHtml(styleResult);
-      revealRoot();
+      markRootError(context.root);
       return;
     }
 
-    const client = await withTimeout(ensureSupabase(), 1800, null);
-    const session = client ? await getSessionFast(client) : null;
+    const client = await withFailureTimeout(ensureSupabase(), 10000, "Supabase client initialization");
+    const session = await getSessionComplete(client);
 
     let accessRow = null;
     let accessRows = [];
@@ -458,7 +509,7 @@
     if (session?.access_token) {
       const facts = headerBaseFacts(payload);
       const requestPayload = facts.orgId ? { organization_id: facts.orgId } : {};
-      const result = await withTimeout(callAccess("get_user_dashboard", requestPayload), 2600, null);
+      const result = await withFailureTimeout(callAccess("get_user_dashboard", requestPayload), 12000, "Organization access context");
       if (result) {
         accessRows = arr(result.access);
         accessRow = chooseAccessRow(accessRows, payload);
@@ -466,13 +517,16 @@
       }
     }
 
-    // Render once, after style + auth/session check. This prevents Home-only or logged-out flashes.
+    // Render once, after style + session/access completion. No timer fallback to logged-out state.
     header.render(target, headerContext(payload, session, accessRow, accessRows, platformAdmin));
     revealRoot();
   }
 
   function render(options) {
-    if (options && options.root) options.root.style.visibility = "hidden";
+    if (options && options.root) {
+      options.root.classList.remove("syncetc-public-shell-ready", "syncetc-public-shell-error");
+      options.root.style.visibility = "hidden";
+    }
     context = {
       root: options.root,
       payload: options.payload || {},
@@ -485,6 +539,7 @@
     const styleResult = requiredStyleConfig(context.payload);
     if (!styleResult.ok) {
       context.root.innerHTML = requiredStyleErrorHtml(styleResult);
+      markRootError(context.root);
       return;
     }
     const config = styleResult.config;
@@ -508,21 +563,29 @@
       console.warn("SyncEtc organization header refresh failed", error);
       const target = document.getElementById(HEADER_ID);
       if (target) target.innerHTML = `<div class="syncetc-public-error"><strong>Navigation unavailable.</strong><br>${escapeHtml(error?.message || "Unknown header error")}</div>`;
-      revealRoot();
+      markRootError(context.root);
     });
   }
 
   function renderError(root, message, payload) {
-    if (root) root.style.visibility = "visible";
+    if (root) {
+      root.classList.remove("syncetc-public-shell-ready");
+      root.style.visibility = "hidden";
+    }
     const styleResult = requiredStyleConfig(payload || {});
     if (!styleResult.ok) {
       root.innerHTML = requiredStyleErrorHtml(styleResult);
+      markRootError(root);
       return;
     }
     const config = styleResult.config;
     root.innerHTML = `<style>${buildCss(config)}</style><div id="${HEADER_ID}"></div><div class="syncetc-public-error"><strong>Unable to load page.</strong><br>${escapeHtml(message || "Unknown error")}</div>`;
     context = { root, payload: payload || {}, activePageKey: "", bodyHtml: "", beforeBodyHtml: "", extraCss: "" };
-    refreshOrganizationHeader().catch(() => {});
+    refreshOrganizationHeader().catch((error) => {
+      const target = document.getElementById(HEADER_ID);
+      if (target) target.innerHTML = `<div class="syncetc-public-error"><strong>Navigation unavailable.</strong><br>${escapeHtml(error?.message || "Unknown header error")}</div>`;
+      markRootError(root);
+    });
   }
 
   window.SyncEtcPublicShell = {

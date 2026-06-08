@@ -1,0 +1,247 @@
+// CORE-COMPONENT-organization-header-current.js
+// Internal Version: 2026-06-07-021-A
+// Purpose: Single shared organization header engine. No page should render its own organization header.
+// Usage: window.SyncEtcOrganizationHeader.render(containerOrId, context)
+
+(function () {
+  "use strict";
+
+  const VERSION = "2026-06-07-021-A";
+  const DEFAULT_PAGE_WIDTH = "1120px";
+  const PUBLIC_ORDER = ["home", "about", "info", "aircraft", "calendar", "events", "gallery", "documents", "documents-resources", "contact"];
+  const USER_ORDER = ["user-dashboard", "dashboard", "roster", "member-roster", "documents", "events", "gallery-submission", "submit-gallery", "my-profile", "profile"];
+  const ADMIN_ORDER = ["organization-admin", "admin-dashboard", "organization-people", "people", "events-admin", "documents-admin", "gallery-admin", "aircraft-admin", "assets"];
+  const PLATFORM_ORDER = ["platform-access-tools", "access-admin", "customer-builder", "page-setup", "layout-designer"];
+
+  function clean(value) {
+    return String(value ?? "").replace(/\s+/g, " ").trim();
+  }
+
+  function key(value) {
+    return clean(value).toLowerCase().replace(/[^a-z0-9_.:-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  }
+
+  function esc(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function obj(value) {
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  }
+
+  function arr(value) {
+    return Array.isArray(value) ? value : [];
+  }
+
+  function hexToRgb(hex, fallback) {
+    const c = clean(hex).replace("#", "");
+    if (!/^[0-9a-f]{6}$/i.test(c)) return fallback || { r: 31, g: 79, b: 130 };
+    return { r: parseInt(c.slice(0, 2), 16), g: parseInt(c.slice(2, 4), 16), b: parseInt(c.slice(4, 6), 16) };
+  }
+
+  function rgba(hex, alpha) {
+    const rgb = hexToRgb(hex);
+    const a = Number.isFinite(Number(alpha)) ? Math.max(0, Math.min(1, Number(alpha))) : 1;
+    return `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`;
+  }
+
+  function firstText() {
+    for (const value of arguments) {
+      const text = clean(value);
+      if (text) return text;
+    }
+    return "";
+  }
+
+  function normalizeStyle(context) {
+    const styleProfile = obj(context.styleProfile || context.style || {});
+    const colors = obj(styleProfile.colors_json || styleProfile.colors || {});
+    const layout = obj(styleProfile.layout_json || styleProfile.layout || {});
+    const component = obj(styleProfile.component_json || styleProfile.component || {});
+
+    const primary = firstText(colors.primary, colors.brand, styleProfile.primary, context.primaryColor, "#1f4f82");
+    const secondary = firstText(colors.secondary, styleProfile.secondary, context.secondaryColor, "#f4f8f4");
+    const surface = firstText(colors.surface, styleProfile.surface, "#ffffff");
+    const text = firstText(colors.text, styleProfile.text, "#172033");
+    const pageWidth = firstText(layout.page_width, layout.max_width, styleProfile.pageWidth, context.pageWidth, DEFAULT_PAGE_WIDTH);
+    const radius = firstText(component.radius, component.border_radius, styleProfile.radius, "20px");
+
+    return {
+      primary,
+      secondary,
+      surface,
+      text,
+      soft: firstText(colors.soft, styleProfile.soft, rgba(primary, 0.08)),
+      border: firstText(colors.border, styleProfile.border, rgba(primary, 0.18)),
+      pageWidth,
+      radius,
+      shadow: firstText(component.shadow, styleProfile.shadow, "0 12px 34px rgba(23,32,51,.08)")
+    };
+  }
+
+  function normalizeLink(input, fallbackOrder) {
+    const link = obj(input);
+    const linkKey = key(link.key || link.page_key || link.template_key || link.slug || link.href || link.label);
+    const href = clean(link.href || link.url || link.path || (linkKey === "home" ? "/" : `/${linkKey}`));
+    const label = firstText(link.label, link.nav_label, link.title, link.template_name, link.page_name, linkKey === "home" ? "Home" : linkKey);
+    const order = Number.isFinite(Number(link.order ?? link.nav_order ?? link.sort_order)) ? Number(link.order ?? link.nav_order ?? link.sort_order) : orderIndex(fallbackOrder, linkKey, 9999);
+    return { key: linkKey, href, label, order };
+  }
+
+  function orderIndex(order, linkKey, fallback) {
+    const index = arr(order).indexOf(key(linkKey));
+    return index >= 0 ? (index + 1) * 10 : fallback;
+  }
+
+  function sortLinks(links, order) {
+    return arr(links)
+      .map((link) => normalizeLink(link, order))
+      .filter((link) => link.key && link.href && link.label)
+      .reduce((items, link) => {
+        if (!items.some((item) => item.key === link.key || item.href === link.href)) items.push(link);
+        return items;
+      }, [])
+      .sort((a, b) => {
+        const orderA = Number.isFinite(Number(a.order)) ? Number(a.order) : 9999;
+        const orderB = Number.isFinite(Number(b.order)) ? Number(b.order) : 9999;
+        if (orderA !== orderB) return orderA - orderB;
+        return String(a.label).localeCompare(String(b.label));
+      });
+  }
+
+  function ensureHome(publicLinks) {
+    const links = sortLinks(publicLinks, PUBLIC_ORDER);
+    if (!links.some((link) => link.key === "home" || link.href === "/")) {
+      links.unshift({ key: "home", href: "/", label: "Home", order: 0 });
+    }
+    return links.sort((a, b) => {
+      if (a.key === "home") return -1;
+      if (b.key === "home") return 1;
+      return (Number(a.order) || 9999) - (Number(b.order) || 9999) || a.label.localeCompare(b.label);
+    });
+  }
+
+  function normalizeRows(context) {
+    const nav = obj(context.nav || context.navigation || {});
+    const access = obj(context.access || {});
+    const authenticated = Boolean(context.authenticated ?? context.isAuthenticated ?? obj(context.auth).authenticated);
+    const isUser = Boolean(access.can_view_user_dashboard || access.canViewUserDashboard || context.userVisible || nav.user?.length);
+    const isAdmin = Boolean(access.can_view_organization_admin || access.canViewOrganizationAdmin || context.adminVisible || nav.admin?.length);
+    const isSuperAdmin = Boolean(access.is_organization_super_admin || access.isOrganizationSuperAdmin || context.superAdmin);
+    const isPlatform = Boolean(access.is_platform_admin || access.isPlatformAdmin || context.platformAdmin || nav.platform?.length);
+
+    const publicLinks = ensureHome(nav.public || context.publicNavItems || context.publicLinks || []);
+    const userLinks = authenticated && (isUser || isAdmin || isSuperAdmin || isPlatform) ? sortLinks(nav.user || context.userNavItems || context.userLinks || [], USER_ORDER) : [];
+    const adminLinks = authenticated && (isAdmin || isSuperAdmin || isPlatform) ? sortLinks(nav.admin || context.adminNavItems || context.adminLinks || [], ADMIN_ORDER) : [];
+    const platformLinks = authenticated && isPlatform ? sortLinks(nav.platform || context.platformNavItems || context.platformLinks || [], PLATFORM_ORDER) : [];
+
+    return { publicLinks, userLinks, adminLinks, platformLinks, authenticated, isUser, isAdmin, isSuperAdmin, isPlatform };
+  }
+
+  function activePageKey(context) {
+    const explicit = key(context.activePageKey || context.pageKey || context.currentPageKey);
+    if (explicit) return explicit;
+    const path = clean(location.pathname).replace(/^\/+/, "").replace(/\/+$/, "");
+    return path ? key(path) : "home";
+  }
+
+  function logoHtml(context, organizationName, cfg) {
+    const organization = obj(context.organization || {});
+    const logo = obj(context.logo || organization.logo || organization.logo_json || {});
+    const url = firstText(logo.url, logo.src, organization.logo_url, context.logoUrl);
+    if (url) return `<img src="${esc(url)}" alt="${esc(firstText(logo.alt_text, organizationName, "Organization logo"))}" loading="lazy" decoding="async">`;
+    const initials = clean(context.initials || organization.initials || organizationName || "S").split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p.charAt(0)).join("").toUpperCase() || "S";
+    return `<span class="syncetc-org-header-mark">${esc(initials)}</span>`;
+  }
+
+  function organizationSelectorHtml(context) {
+    const orgs = arr(context.organizations || context.organizationOptions || context.availableOrganizations);
+    const selected = clean(context.selectedOrganizationId || obj(context.organization).organization_id || context.organizationId);
+    if (!orgs.length) return "";
+    if (orgs.length === 1) {
+      const org = obj(orgs[0]);
+      return `<span class="syncetc-org-header-org-single">${esc(firstText(org.display_name, org.name, org.organization_name, context.organizationName))}${firstText(org.organization_key, org.key) ? `<small>${esc(firstText(org.organization_key, org.key))}</small>` : ""}</span>`;
+    }
+    return `<label class="syncetc-org-header-org-select"><span>Organization</span><select data-syncetc-org-select aria-label="Organization selector">${orgs.map((orgRaw) => {
+      const org = obj(orgRaw);
+      const id = clean(org.organization_id || org.id || org.customer_id);
+      const name = firstText(org.display_name, org.name, org.organization_name, "Organization");
+      const orgKey = firstText(org.organization_key, org.key, org.customer_key);
+      return `<option value="${esc(id)}" ${id && id === selected ? "selected" : ""}>${esc(name)}${orgKey ? ` (${esc(orgKey)})` : ""}</option>`;
+    }).join("")}</select></label>`;
+  }
+
+  function rowHtml(label, links, rowClass, context, forceLabel) {
+    if (!links.length) return "";
+    const active = activePageKey(context);
+    const showLabel = forceLabel || label !== "PUBLIC" || normalizeRows(context).authenticated;
+    return `<div class="syncetc-org-header-row ${esc(rowClass)} ${showLabel ? "" : "no-label"}">${showLabel ? `<span class="syncetc-org-header-row-label">${esc(label)}</span>` : ""}<nav>${links.map((link) => `<a href="${esc(link.href)}" class="${key(link.key) === active ? "is-active" : ""}">${esc(link.label)}</a>`).join("")}</nav></div>`;
+  }
+
+  function css(cfg) {
+    return `
+      .syncetc-org-header{font-family:Arial,Helvetica,sans-serif;margin:0 auto;padding:12px 18px;max-width:${cfg.pageWidth};box-sizing:border-box;color:${cfg.text}}
+      .syncetc-org-header *{box-sizing:border-box}.syncetc-org-header-card{display:grid;grid-template-columns:116px minmax(0,1fr);gap:10px;padding:10px;border-radius:${cfg.radius};background:rgba(255,255,255,.95);border:1px solid ${cfg.border};box-shadow:${cfg.shadow};backdrop-filter:blur(8px)}
+      .syncetc-org-header-logo{display:flex;align-items:center;justify-content:center;border:1px solid ${cfg.border};border-radius:14px;background:${rgba(cfg.surface,.96)};min-height:96px;padding:10px}.syncetc-org-header-logo img{max-width:92px;max-height:92px;width:auto;height:auto;object-fit:contain;border-radius:12px}.syncetc-org-header-mark{width:72px;height:72px;border-radius:18px;background:linear-gradient(135deg,${cfg.primary},${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;font-size:27px;font-weight:950;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
+      .syncetc-org-header-main{display:grid;gap:7px;min-width:0}.syncetc-org-header-title-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 4px;min-width:0}.syncetc-org-header-title{min-width:0;color:${cfg.primary};font-size:clamp(20px,3vw,31px);font-weight:950;letter-spacing:-.035em;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .syncetc-org-header-auth{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;flex:0 0 auto}.syncetc-org-header-pill,.syncetc-org-header-auth-btn{display:inline-flex;align-items:center;justify-content:center;min-height:30px;padding:6px 11px;border-radius:999px;border:1px solid ${cfg.border};background:#fff;color:${cfg.primary}!important;text-decoration:none;font-size:12px;font-weight:950;white-space:nowrap}.syncetc-org-header-auth-btn{cursor:pointer;font-family:inherit}.syncetc-org-header-auth-btn:hover{background:${cfg.primary};color:#fff!important;transform:translateY(-1px)}.syncetc-org-header-pill.ok{background:#e7f6ec;color:#14532d!important;max-width:240px;overflow:hidden;text-overflow:ellipsis}.syncetc-org-header-pill.warn{background:#fff7ec;color:#8a4d00!important}
+      .syncetc-org-header-context-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}.syncetc-org-header-org-select{display:block;position:relative;min-width:260px;max-width:460px;cursor:pointer}.syncetc-org-header-org-select span{display:none}.syncetc-org-header-org-select select{width:100%;min-height:34px;border:1px solid ${cfg.border};border-radius:999px;background:#fff;color:${cfg.primary};font-weight:950;padding:8px 34px 8px 12px;cursor:pointer}.syncetc-org-header-org-single{display:inline-flex;align-items:center;gap:8px;max-width:520px;border:1px solid ${cfg.border};background:${cfg.soft};color:${cfg.primary};border-radius:999px;padding:8px 12px;font-size:12px;font-weight:950;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.syncetc-org-header-org-single small{font-size:11px;color:${rgba(cfg.text,.58)};overflow:hidden;text-overflow:ellipsis}
+      .syncetc-org-header-row{display:grid;grid-template-columns:92px minmax(0,1fr);gap:8px;align-items:center;min-height:34px;border:1px solid ${cfg.border};border-radius:999px;background:${rgba(cfg.surface,.95)};padding:4px 7px}.syncetc-org-header-row.no-label{grid-template-columns:1fr}.syncetc-org-header-row.public{background:rgba(255,255,255,.92)}.syncetc-org-header-row.user{background:${cfg.soft}}.syncetc-org-header-row.admin{background:${rgba(cfg.secondary,.68)}}.syncetc-org-header-row.platform{background:linear-gradient(90deg,rgba(6,31,78,.08),rgba(255,113,0,.08))}.syncetc-org-header-row-label{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;min-height:24px;padding:4px 9px;background:${cfg.primary};color:#fff;font-size:10px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}.syncetc-org-header-row nav{display:flex;gap:7px;flex-wrap:wrap;align-items:center;justify-content:flex-end}.syncetc-org-header-row a{display:inline-flex;align-items:center;justify-content:center;min-height:26px;padding:5px 10px;border-radius:999px;border:1px solid ${cfg.border};background:#fff;color:${cfg.primary}!important;text-decoration:none;font-size:11px;font-weight:950;white-space:nowrap}.syncetc-org-header-row a:hover,.syncetc-org-header-row a.is-active{background:${cfg.primary};color:#fff!important;transform:translateY(-1px)}
+      @media(max-width:900px){.syncetc-org-header-card{grid-template-columns:1fr}.syncetc-org-header-logo{min-height:72px}.syncetc-org-header-mark{width:56px;height:56px;font-size:23px}.syncetc-org-header-title-row{align-items:flex-start;flex-direction:column}.syncetc-org-header-auth{justify-content:flex-start}.syncetc-org-header-org-select,.syncetc-org-header-org-single{max-width:none;width:100%}.syncetc-org-header-row{grid-template-columns:1fr;border-radius:18px}.syncetc-org-header-row-label{justify-content:flex-start}.syncetc-org-header-row nav{justify-content:flex-start;align-items:stretch}.syncetc-org-header-row a,.syncetc-org-header-pill,.syncetc-org-header-auth-btn{flex:1 1 160px}}@media(max-width:620px){.syncetc-org-header{padding:10px}.syncetc-org-header-row a,.syncetc-org-header-pill,.syncetc-org-header-auth-btn{width:100%;flex-basis:100%}.syncetc-org-header-title{white-space:normal}}
+    `;
+  }
+
+  function render(target, contextRaw) {
+    const context = obj(contextRaw);
+    const container = typeof target === "string" ? document.getElementById(target) : target;
+    if (!container) throw new Error("SyncEtcOrganizationHeader.render requires a valid container element or id.");
+
+    const cfg = normalizeStyle(context);
+    const organization = obj(context.organization || {});
+    const organizationName = firstText(context.organizationName, organization.display_name, organization.name, organization.organization_name, "SyncEtc User Portal");
+    const rows = normalizeRows(context);
+    const loginUrl = firstText(context.loginUrl, `/login?next=${encodeURIComponent(location.pathname + location.search)}`);
+    const email = firstText(context.email, obj(context.auth).email);
+    const showPlatform = rows.platformLinks.length > 0;
+
+    container.classList.add("syncetc-org-header");
+    container.dataset.version = VERSION;
+    container.innerHTML = `<style>${css(cfg)}</style><div class="syncetc-org-header-card" data-version="${esc(VERSION)}"><div class="syncetc-org-header-logo">${logoHtml(context, organizationName, cfg)}</div><div class="syncetc-org-header-main"><div class="syncetc-org-header-title-row"><div class="syncetc-org-header-title">${esc(organizationName)}</div><span class="syncetc-org-header-auth">${rows.authenticated ? `<span class="syncetc-org-header-pill ok">${esc(email || "Signed in")}</span><button class="syncetc-org-header-auth-btn" data-syncetc-logout type="button">Log out</button>` : `<a class="syncetc-org-header-auth-btn" data-syncetc-login href="${esc(loginUrl)}">Log in</a>`}</span></div><div class="syncetc-org-header-context-row">${organizationSelectorHtml(context)}</div>${rowHtml("PUBLIC", rows.publicLinks, "public", context, rows.authenticated || rows.userLinks.length || rows.adminLinks.length || rows.platformLinks.length)}${rowHtml("USER", rows.userLinks, "user", context, true)}${rowHtml("ADMIN", rows.adminLinks, "admin", context, true)}${showPlatform ? rowHtml("PLATFORM", rows.platformLinks, "platform", context, true) : ""}</div></div>`;
+
+    const onLogout = typeof context.onLogout === "function" ? context.onLogout : obj(context.callbacks).onLogout;
+    const onLogin = typeof context.onLogin === "function" ? context.onLogin : obj(context.callbacks).onLogin;
+    const onOrganizationChange = typeof context.onOrganizationChange === "function" ? context.onOrganizationChange : obj(context.callbacks).onOrganizationChange;
+
+    container.querySelector("[data-syncetc-logout]")?.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (typeof onLogout === "function") onLogout(event);
+    });
+    container.querySelector("[data-syncetc-login]")?.addEventListener("click", (event) => {
+      if (typeof onLogin === "function") {
+        event.preventDefault();
+        onLogin(event);
+      }
+    });
+    container.querySelector("[data-syncetc-org-select]")?.addEventListener("change", (event) => {
+      if (typeof onOrganizationChange === "function") onOrganizationChange(event.target.value, event);
+    });
+
+    return { version: VERSION, container, context };
+  }
+
+  window.SyncEtcOrganizationHeader = Object.freeze({
+    VERSION,
+    PUBLIC_ORDER: Object.freeze([...PUBLIC_ORDER]),
+    USER_ORDER: Object.freeze([...USER_ORDER]),
+    ADMIN_ORDER: Object.freeze([...ADMIN_ORDER]),
+    PLATFORM_ORDER: Object.freeze([...PLATFORM_ORDER]),
+    render,
+    normalizeRows,
+    normalizeStyle
+  });
+})();

@@ -1,11 +1,11 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-07-021-K
+// Internal Version: 2026-06-07-021-L
 // Purpose: Public page wrapper. It never renders its own header; it feeds context to the single organization header engine.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-K";
+  const VERSION = "2026-06-07-021-L";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -88,6 +88,8 @@
     if (debugState.latest.org) lines.push(`Org: ${debugState.latest.org}`);
     if (debugState.latest.sessionKnown) lines.push(`Session: ${debugState.latest.sessionKnown}`);
     if (debugState.latest.accessStatus) lines.push(`Access: ${debugState.latest.accessStatus}`);
+    if (debugState.latest.visibleRenderMs != null) lines.push(`Visible render: ${debugState.latest.visibleRenderMs}ms`);
+    if (debugState.latest.backgroundRefreshMs != null) lines.push(`Background refresh: ${debugState.latest.backgroundRefreshMs}ms`);
     lines.push("");
     lines.push("Steps:");
     debugState.steps.slice(-28).forEach((step) => lines.push(`${String(step.t).padStart(6)}ms  ${step.label}${step.detail ? " — " + step.detail : ""}`));
@@ -687,12 +689,22 @@
     let accessRows = [];
     let platformAdmin = false;
 
-    const renderFinalHeader = (label = "headerRender") => {
+    const renderFinalHeader = (label = "headerRender", options = {}) => {
+      const shouldReveal = options.reveal !== false;
+      const started = performance.now();
       debugStep(`${label}:start`);
       header.render(target, headerContext(payload, session, accessRow, accessRows, platformAdmin));
-      debugStep(`${label}:done`);
-      revealRoot();
-      debugStep("root:revealed");
+      const tookMs = Math.round(performance.now() - started);
+      debugStep(`${label}:done`, `${tookMs}ms`);
+      if (shouldReveal) {
+        revealRoot();
+        debugState.latest.visibleRenderMs = debugElapsed();
+        debugStep("root:revealed");
+      } else {
+        debugState.latest.backgroundRefreshMs = tookMs;
+        debugStep(`${label}:silent-update`, `${tookMs}ms`);
+      }
+      updateDebugPanel();
     };
 
     if (session?.access_token) {
@@ -710,7 +722,7 @@
           writeCachedAccessContext(session, payload, freshResult);
           ({ accessRow, accessRows, platformAdmin } = unpackAccessResult(freshResult, payload));
           debugState.latest.accessStatus = "background refreshed"; updateDebugPanel();
-          renderFinalHeader("headerRender:background-refresh");
+          renderFinalHeader("headerRender:background-refresh", { reveal: false });
           if (DEBUG_ENABLED) console.table(debugState.steps.map((s) => ({ ms: s.t, step: s.label, detail: s.detail })));
         }).catch((error) => debugError("accessCache:background_refresh_failed", error));
 

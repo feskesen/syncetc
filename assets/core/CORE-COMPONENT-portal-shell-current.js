@@ -1,14 +1,23 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-07-021-N
+// Internal Version: 2026-06-07-021-O
 // Purpose: Portal shell render gate: no visible header/page shell until organization style and shared header are ready. Diagnostics remain behind ?syncetc_debug=1.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-N";
+  const VERSION = "2026-06-07-021-O";
   const SHELL_ID = "syncetc-organization-header";
   const FOOTER_ID = "syncetc-portal-footer";
   const LOGIN_MODAL_ID = "syncetc-portal-login-modal";
+  const EARLY_HIDE_STYLE_ID = "syncetc-portal-early-hide-style";
+  const PORTAL_ROOT_SELECTORS = [
+    "#syncetc-user-dashboard-root",
+    "#syncetc-member-dashboard-root",
+    "#syncetc-user-roster-root",
+    "#syncetc-member-roster-root",
+    "#syncetc-organization-admin-root",
+    "#syncetc-organization-people-root"
+  ];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -135,6 +144,38 @@
       document.head.appendChild(script);
     });
     return SCRIPT_PROMISES[src];
+  }
+
+  function installEarlyHideStyle() {
+    let style = document.getElementById(EARLY_HIDE_STYLE_ID);
+    if (!style) {
+      style = document.createElement("style");
+      style.id = EARLY_HIDE_STYLE_ID;
+      style.textContent = `${PORTAL_ROOT_SELECTORS.join(",")} { visibility: hidden !important; } #${SHELL_ID}{ visibility:hidden !important; }`;
+      document.head.appendChild(style);
+      mark("earlyHide:installed");
+    }
+  }
+
+  function removeEarlyHideStyle() {
+    const style = document.getElementById(EARLY_HIDE_STYLE_ID);
+    if (style) {
+      style.remove();
+      mark("earlyHide:removed");
+    }
+  }
+
+  function hidePortalShell(shell) {
+    if (!shell) return;
+    shell.style.visibility = "hidden";
+    shell.setAttribute("data-syncetc-hidden", "true");
+  }
+
+  function revealPortalShell(shell) {
+    if (!shell) return;
+    shell.style.visibility = "";
+    shell.removeAttribute("data-syncetc-hidden");
+    removeEarlyHideStyle();
   }
 
   function hasSharedOrganizationHeader() {
@@ -494,7 +535,7 @@
     mark("render:start");
     const renderStart = performance.now();
     let shell = document.getElementById(SHELL_ID);
-    if (!shell) { shell = document.createElement("div"); shell.id = SHELL_ID; document.body.insertBefore(shell, document.body.firstChild); mark("shell:created"); }
+    if (!shell) { shell = document.createElement("div"); shell.id = SHELL_ID; hidePortalShell(shell); document.body.insertBefore(shell, document.body.firstChild); mark("shell:created"); }
 
     if (!hasRequiredOrganizationStyle()) {
       mark("styleConfig:missing", state.organizationKey || state.organizationName || "no organization style yet");
@@ -571,6 +612,7 @@
     lastRenderMs = Math.round(performance.now() - renderStart);
     if (visibleRenderMs === null) visibleRenderMs = elapsedMs();
     mark("headerRender:done", `${lastRenderMs}ms`);
+    revealPortalShell(shell);
     renderDebugPanel();
   }
 
@@ -578,6 +620,7 @@
 
   function bootPortalShell() {
     mark("boot:start", window.location.pathname);
+    installEarlyHideStyle();
     syncShellAuth().catch((error) => { mark("boot:syncAuth:error", error?.message || String(error)); render(); });
   }
 

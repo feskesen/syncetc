@@ -1,11 +1,11 @@
 // USER-PAGE-profile-current.js
-// Internal Version: 2026-06-08-024-C
+// Internal Version: 2026-06-08-024-D
 // Purpose: User-facing My Profile page. Self-service contact/profile photo updates; membership/access fields remain read-only.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-08-024-C";
+  const VERSION = "2026-06-08-024-D";
   const ROOT_IDS = ["syncetc-user-profile-root", "syncetc-my-profile-root", "syncetc-member-profile-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -187,10 +187,10 @@
     return `
       .profile-wrap{${cssVars(cfg)}max-width:var(--profile-page-width);margin:24px auto 30px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:var(--profile-text);box-sizing:border-box}.profile-wrap *{box-sizing:border-box}
       .profile-card{background:rgba(255,255,255,.96);border:1px solid var(--profile-border);border-radius:var(--profile-radius);box-shadow:var(--profile-shadow);padding:22px;margin:16px 0}.profile-hero{background:linear-gradient(135deg,var(--profile-primary),${rgba(cfg.primary,.78)});color:#fff}.profile-hero h1{margin:10px 0 8px;font-size:clamp(32px,4vw,48px);color:#fff;letter-spacing:-.04em}.profile-hero p{margin:0;color:rgba(255,255,255,.9);line-height:1.45}.profile-eyebrow{display:inline-flex;border-radius:999px;background:rgba(255,255,255,.16);padding:6px 10px;font-size:11px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.profile-message{margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.15);font-weight:900}.profile-message.ok{background:rgba(16,185,129,.18)}.profile-message.warn{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}
-      .profile-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,.7fr);gap:16px}.profile-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.profile-contact-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:18px}.profile-contact-head h2{margin:0}.profile-rendered-name{font-size:clamp(24px,3vw,34px);font-weight:950;color:var(--profile-primary);letter-spacing:-.04em;text-align:right}.profile-contact-layout{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(280px,.9fr) minmax(0,1.05fr);gap:18px;align-items:start}.profile-contact-column{display:grid;gap:14px;align-content:start}.profile-name-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}.profile-address-grid{display:grid;grid-template-columns:1.3fr .7fr .55fr;gap:12px}.profile-emergency-grid{display:grid;grid-template-columns:1.2fr .8fr 1fr;gap:14px}.profile-subhead{margin:20px 0 10px;font-size:20px;letter-spacing:-.02em}.profile-field{display:grid;gap:6px;font-weight:850}.profile-field span{font-size:13px}.profile-field input,.profile-field select{width:100%;min-height:44px;border:1px solid var(--profile-border);border-radius:14px;padding:10px 12px;font:inherit;color:var(--profile-text);background:#fff}.profile-field input[readonly]{background:#f8fafc;color:var(--profile-muted)}.profile-field small{font-weight:650;color:var(--profile-muted);line-height:1.35}.profile-readonly{background:var(--profile-soft);border:1px solid var(--profile-border);border-radius:16px;padding:13px 14px}.profile-readonly strong{color:var(--profile-primary)}
+      .profile-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,.7fr);gap:16px}.profile-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.profile-contact-title{margin:0 0 16px;font-size:30px;letter-spacing:-.035em}.profile-contact-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:stretch}.profile-contact-panel{border:1px solid var(--profile-border);border-radius:18px;background:rgba(255,255,255,.72);padding:16px;display:grid;gap:14px;align-content:start}.profile-contact-panel h3{margin:0;font-size:20px;letter-spacing:-.025em}.profile-rendered-name{font-size:clamp(22px,2.6vw,32px);font-weight:950;color:var(--profile-primary);letter-spacing:-.04em;line-height:1.05;margin:0 0 2px}.profile-name-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}.profile-address-grid{display:grid;grid-template-columns:1.2fr .55fr .55fr;gap:12px}.profile-emergency-grid{display:grid;grid-template-columns:1fr;gap:14px}.profile-field{display:grid;gap:6px;font-weight:850}.profile-field span{font-size:13px}.profile-field input,.profile-field select{width:100%;min-height:44px;border:1px solid var(--profile-border);border-radius:14px;padding:10px 12px;font:inherit;color:var(--profile-text);background:#fff}.profile-field input[readonly]{background:#f8fafc;color:var(--profile-muted)}.profile-field small{font-weight:650;color:var(--profile-muted);line-height:1.35}.profile-readonly{background:var(--profile-soft);border:1px solid var(--profile-border);border-radius:16px;padding:13px 14px}.profile-readonly strong{color:var(--profile-primary)}
       .profile-phone-table{display:grid;gap:8px}.profile-phone-head,.profile-phone-row{display:grid;grid-template-columns:74px minmax(0,1fr) 88px 68px;gap:8px;align-items:center}.profile-phone-head{font-size:12px;font-weight:950;color:var(--profile-muted);text-transform:uppercase;letter-spacing:.04em;padding:0 4px}.profile-phone-type{font-weight:950;color:var(--profile-primary)}.profile-phone-row input[type='tel']{width:100%;min-height:42px;border:1px solid var(--profile-border);border-radius:13px;padding:9px 11px;font:inherit;color:var(--profile-text);background:#fff}.profile-phone-check{display:flex;align-items:center;justify-content:center;min-height:42px;border:1px solid var(--profile-border);border-radius:13px;background:var(--profile-soft);font-weight:900;color:var(--profile-primary)}.profile-phone-check.disabled{opacity:.38}.profile-phone-check input{width:16px;height:16px}.profile-phone-note{font-size:12px;color:var(--profile-muted);line-height:1.35;margin-top:2px}
       .profile-photo-card{display:grid;grid-template-columns:140px minmax(0,1fr);gap:18px;align-items:center}.profile-photo-preview{width:128px;height:128px;border-radius:24px;background:linear-gradient(135deg,var(--profile-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--profile-border);box-shadow:0 12px 28px ${rgba(cfg.primary,.16)}}.profile-photo-preview img{width:100%;height:100%;object-fit:cover}.profile-photo-preview span{font-size:38px;font-weight:950}.profile-drop{border:1px dashed var(--profile-border);border-radius:18px;background:var(--profile-soft);padding:18px;text-align:center;min-height:128px;display:grid;align-content:center;gap:8px}.profile-drop.dragover{box-shadow:0 0 0 3px var(--profile-strong-soft);border-color:var(--profile-primary)}.profile-drop strong{color:var(--profile-primary)}.profile-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.profile-btn{border:0;border-radius:999px;background:var(--profile-primary);color:#fff;font-weight:950;padding:11px 16px;cursor:pointer}.profile-btn.secondary{background:var(--profile-strong-soft);color:var(--profile-primary)}.profile-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.profile-btn:disabled{opacity:.58;cursor:not-allowed}.profile-summary-list{display:grid;gap:8px}.profile-summary-list div{display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--profile-border);padding-bottom:8px}.profile-summary-list span{color:var(--profile-muted);font-weight:750}.profile-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font:12px/1.45 Consolas,Monaco,monospace;max-height:260px;overflow:auto;display:${DEBUG ? "block" : "none"}}
-      @media(max-width:1050px){.profile-contact-layout{grid-template-columns:1fr}.profile-rendered-name{text-align:left}.profile-name-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:900px){.profile-grid,.profile-form-grid{grid-template-columns:1fr}.profile-photo-card{grid-template-columns:1fr}.profile-photo-preview{margin:auto}.profile-address-grid,.profile-emergency-grid{grid-template-columns:1fr}}@media(max-width:640px){.profile-contact-head{display:block}.profile-rendered-name{margin-top:8px}.profile-name-grid,.profile-phone-head,.profile-phone-row{grid-template-columns:1fr}.profile-phone-head{display:none}.profile-phone-row{border:1px solid var(--profile-border);border-radius:16px;padding:10px;background:rgba(255,255,255,.68)}.profile-phone-check{justify-content:flex-start;padding:0 10px}.profile-btn{width:100%}}
+      @media(max-width:1050px){.profile-contact-grid{grid-template-columns:1fr}.profile-name-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:900px){.profile-grid,.profile-form-grid{grid-template-columns:1fr}.profile-photo-card{grid-template-columns:1fr}.profile-photo-preview{margin:auto}.profile-address-grid,.profile-emergency-grid{grid-template-columns:1fr}}@media(max-width:640px){.profile-name-grid,.profile-phone-head,.profile-phone-row{grid-template-columns:1fr}.profile-phone-head{display:none}.profile-phone-row{border:1px solid var(--profile-border);border-radius:16px;padding:10px;background:rgba(255,255,255,.68)}.profile-phone-check{justify-content:flex-start;padding:0 10px}.profile-btn{width:100%}}
     `;
   }
 
@@ -272,9 +272,9 @@
     const legalFirstName = clean(profile.first_name || profile.legal_first_name || profile.legalFirstName);
     root.style.visibility = "visible";
     root.innerHTML = `<style>${fullCss(cfg)}</style><main class="profile-wrap"><section class="profile-card profile-hero"><span class="profile-eyebrow">My Profile</span><h1>My Profile</h1><p>Update your contact information, emergency contact, and profile photo.</p><div class="profile-message${messageClass}">${esc(message)}</div></section>
-      <section class="profile-card"><div class="profile-contact-head"><h2>Contact Information</h2><div id="profile-rendered-name" class="profile-rendered-name">${esc(renderedName)}</div></div>
-        <div class="profile-contact-layout">
-          <div class="profile-contact-column">
+      <section class="profile-card"><h2 class="profile-contact-title">Contact Information</h2>
+        <div class="profile-contact-grid">
+          <section class="profile-contact-panel"><h3>Name</h3><div id="profile-rendered-name" class="profile-rendered-name">${esc(renderedName)}</div>
             <div class="profile-name-grid">
               <label class="profile-field"><span>Legal first name</span><input value="${esc(legalFirstName)}" readonly><small>Contact your organization to change your legal first name.</small></label>
               <label class="profile-field"><span>Preferred first name</span><input id="profile-preferred" value="${esc(profile.preferred_first_name)}"></label>
@@ -282,8 +282,13 @@
               <label class="profile-field"><span>Last name</span><input value="${esc(profile.last_name)}" readonly><small>Contact your organization to change your last name.</small></label>
               <label class="profile-field"><span>Suffix</span><input id="profile-suffix" value="${esc(profile.suffix)}" placeholder="Jr., Sr., III"></label>
             </div>
-          </div>
-          <div class="profile-contact-column">
+          </section>
+          <section class="profile-contact-panel"><h3>Address</h3>
+            <label class="profile-field"><span>Street address</span><input id="profile-address1" value="${esc(profile.address_1)}"></label>
+            <label class="profile-field"><span>Address line 2</span><input id="profile-address2" value="${esc(profile.address_2)}"></label>
+            <div class="profile-address-grid"><label class="profile-field"><span>City</span><input id="profile-city" value="${esc(profile.city)}"></label><label class="profile-field"><span>State</span><input id="profile-state" value="${esc(profile.state)}"></label><label class="profile-field"><span>Zip</span><input id="profile-zip" value="${esc(profile.zip)}"></label></div>
+          </section>
+          <section class="profile-contact-panel"><h3>Phone numbers</h3>
             <div class="profile-phone-table">
               <div class="profile-phone-head"><span>Type</span><span>Number</span><span>Preferred</span><span>Texts</span></div>
               ${phoneRow("mobile", "Mobile", profile.mobile_phone)}
@@ -291,15 +296,11 @@
               ${phoneRow("work", "Work", profile.work_phone)}
             </div>
             <div class="profile-phone-note">Choose one preferred phone number. Texting is currently tracked for mobile numbers.</div>
-          </div>
-          <div class="profile-contact-column">
-            <label class="profile-field"><span>Street address</span><input id="profile-address1" value="${esc(profile.address_1)}"></label>
-            <label class="profile-field"><span>Address line 2</span><input id="profile-address2" value="${esc(profile.address_2)}"></label>
-            <div class="profile-address-grid"><label class="profile-field"><span>City</span><input id="profile-city" value="${esc(profile.city)}"></label><label class="profile-field"><span>State</span><input id="profile-state" value="${esc(profile.state)}"></label><label class="profile-field"><span>Zip</span><input id="profile-zip" value="${esc(profile.zip)}"></label></div>
-          </div>
+          </section>
+          <section class="profile-contact-panel"><h3>Emergency contact</h3>
+            <div class="profile-emergency-grid"><label class="profile-field"><span>Name</span><input id="profile-emergency-name" value="${esc(profile.emergency_contact_name)}"></label><label class="profile-field"><span>Relationship</span><input id="profile-emergency-relationship" value="${esc(profile.emergency_contact_relationship)}" placeholder="Spouse, parent, friend…"></label><label class="profile-field"><span>Phone</span><input id="profile-emergency-phone" value="${esc(profile.emergency_contact_phone)}" inputmode="tel"></label></div>
+          </section>
         </div>
-        <h3 class="profile-subhead">Emergency contact</h3>
-        <div class="profile-emergency-grid"><label class="profile-field"><span>Name</span><input id="profile-emergency-name" value="${esc(profile.emergency_contact_name)}"></label><label class="profile-field"><span>Relationship</span><input id="profile-emergency-relationship" value="${esc(profile.emergency_contact_relationship)}" placeholder="Spouse, parent, friend…"></label><label class="profile-field"><span>Phone</span><input id="profile-emergency-phone" value="${esc(profile.emergency_contact_phone)}" inputmode="tel"></label></div>
         <div class="profile-actions" style="margin-top:18px;"><button id="profile-save" class="profile-btn" type="button">Update Profile</button><button id="profile-refresh" class="profile-btn secondary" type="button">Refresh</button></div>
       </section>
       <section class="profile-grid">

@@ -1,13 +1,12 @@
 // CORE-COMPONENT-organization-header-current.js
-// Internal Version: 2026-06-07-021-A
+// Internal Version: 2026-06-07-021-E
 // Purpose: Single shared organization header engine. No page should render its own organization header.
 // Usage: window.SyncEtcOrganizationHeader.render(containerOrId, context)
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-A";
-  const DEFAULT_PAGE_WIDTH = "1120px";
+  const VERSION = "2026-06-07-021-E";
   const PUBLIC_ORDER = ["home", "about", "info", "aircraft", "calendar", "events", "gallery", "documents", "documents-resources", "contact"];
   const USER_ORDER = ["user-dashboard", "dashboard", "roster", "member-roster", "documents", "events", "gallery-submission", "submit-gallery", "my-profile", "profile"];
   const ADMIN_ORDER = ["organization-admin", "admin-dashboard", "organization-people", "people", "events-admin", "documents-admin", "gallery-admin", "aircraft-admin", "assets"];
@@ -38,9 +37,14 @@
     return Array.isArray(value) ? value : [];
   }
 
-  function hexToRgb(hex, fallback) {
-    const c = clean(hex).replace("#", "");
-    if (!/^[0-9a-f]{6}$/i.test(c)) return fallback || { r: 31, g: 79, b: 130 };
+  function isHexColor(value) {
+    return /^#[0-9a-f]{6}$/i.test(clean(value));
+  }
+
+  function hexToRgb(hex) {
+    const value = clean(hex);
+    if (!isHexColor(value)) throw new Error(`Invalid required color: ${value || "blank"}`);
+    const c = value.replace("#", "");
     return { r: parseInt(c.slice(0, 2), 16), g: parseInt(c.slice(2, 4), 16), b: parseInt(c.slice(4, 6), 16) };
   }
 
@@ -58,29 +62,74 @@
     return "";
   }
 
+  function styleError(message, missing) {
+    return { ok: false, error: message, missing: arr(missing) };
+  }
+
+  function mapWidth(value) {
+    const width = clean(value).toLowerCase();
+    if (width === "narrow") return "880px";
+    if (width === "normal" || width === "standard") return "1040px";
+    if (width === "wide") return "1180px";
+    if (/^\d+(px|rem|em|%)$/i.test(width)) return width;
+    return "";
+  }
+
+  function mapRadius(effects, component) {
+    const corners = clean(obj(effects).corners || obj(component).radius || obj(component).border_radius || "soft").toLowerCase();
+    if (corners === "sharp") return "8px";
+    if (corners === "pill") return "30px";
+    if (/^\d+(px|rem|em|%)$/i.test(corners)) return corners;
+    return "22px";
+  }
+
+  function mapShadow(effects, primary) {
+    const shadows = clean(obj(effects).shadows || "soft").toLowerCase();
+    if (shadows === "none") return "none";
+    if (shadows === "hairline") return `0 1px 0 ${rgba(primary, 0.14)}`;
+    if (shadows === "strong") return `0 24px 70px ${rgba(primary, 0.28)}`;
+    return `0 14px 42px ${rgba(primary, 0.14)}`;
+  }
+
   function normalizeStyle(context) {
     const styleProfile = obj(context.styleProfile || context.style || {});
     const colors = obj(styleProfile.colors_json || styleProfile.colors || {});
+    const spacing = obj(styleProfile.spacing_json || styleProfile.spacing || {});
     const layout = obj(styleProfile.layout_json || styleProfile.layout || {});
+    const effects = obj(styleProfile.effects_json || styleProfile.effects || {});
     const component = obj(styleProfile.component_json || styleProfile.component || {});
 
-    const primary = firstText(colors.primary, colors.brand, styleProfile.primary, context.primaryColor, "#1f4f82");
-    const secondary = firstText(colors.secondary, styleProfile.secondary, context.secondaryColor, "#f4f8f4");
-    const surface = firstText(colors.surface, styleProfile.surface, "#ffffff");
-    const text = firstText(colors.text, styleProfile.text, "#172033");
-    const pageWidth = firstText(layout.page_width, layout.max_width, styleProfile.pageWidth, context.pageWidth, DEFAULT_PAGE_WIDTH);
-    const radius = firstText(component.radius, component.border_radius, styleProfile.radius, "20px");
+    const primary = firstText(colors.brand_primary, colors.primary, colors.brand);
+    const secondary = firstText(colors.brand_secondary, colors.secondary);
+    const surface = firstText(colors.surface);
+    const text = firstText(colors.text);
+    const rawWidth = firstText(spacing.page_width, layout.default_width, layout.page_width, layout.max_width);
+    const pageWidth = mapWidth(rawWidth);
+
+    const missing = [];
+    if (!primary || !isHexColor(primary)) missing.push("colors_json.brand_primary");
+    if (!secondary || !isHexColor(secondary)) missing.push("colors_json.brand_secondary");
+    if (!surface || !isHexColor(surface)) missing.push("colors_json.surface");
+    if (!text || !isHexColor(text)) missing.push("colors_json.text");
+    if (!pageWidth) missing.push("spacing_json.page_width or layout_json.default_width");
+
+    if (missing.length) {
+      return styleError("STYLE CONFIGURATION ERROR: this organization header cannot render because the active organization style profile was not loaded or is incomplete.", missing);
+    }
 
     return {
-      primary,
-      secondary,
-      surface,
-      text,
-      soft: firstText(colors.soft, styleProfile.soft, rgba(primary, 0.08)),
-      border: firstText(colors.border, styleProfile.border, rgba(primary, 0.18)),
-      pageWidth,
-      radius,
-      shadow: firstText(component.shadow, styleProfile.shadow, "0 12px 34px rgba(23,32,51,.08)")
+      ok: true,
+      config: {
+        primary,
+        secondary,
+        surface,
+        text,
+        soft: firstText(colors.soft, rgba(primary, 0.08)),
+        border: firstText(colors.border, rgba(primary, 0.18)),
+        pageWidth,
+        radius: mapRadius(effects, component),
+        shadow: mapShadow(effects, primary)
+      }
     };
   }
 
@@ -196,12 +245,32 @@
     `;
   }
 
+
+  function renderRequiredStyleError(container, styleResult) {
+    const missing = arr(styleResult?.missing);
+    container.classList.add("syncetc-org-header");
+    container.dataset.version = VERSION;
+    container.dataset.styleError = "true";
+    container.innerHTML = `
+      <div style="box-sizing:border-box;max-width:1180px;margin:18px auto;padding:24px;border:6px solid #ff0000;background:#fff;color:#b00000;font-family:Arial,Helvetica,sans-serif;box-shadow:0 0 0 4px rgba(255,0,0,.18);">
+        <div style="font-size:48px;line-height:1.02;font-weight:950;letter-spacing:-.04em;">STYLE CONFIGURATION ERROR</div>
+        <div style="margin-top:12px;font-size:18px;line-height:1.35;font-weight:900;color:#7a0000;">This organization page cannot render its header because the active organization style profile was not loaded.</div>
+        ${missing.length ? `<div style="margin-top:12px;font-size:14px;font-weight:800;color:#7a0000;">Missing or invalid: ${esc(missing.join(", "))}</div>` : ""}
+        <div style="margin-top:12px;font-size:13px;color:#5f0000;">Version ${esc(VERSION)}. This is intentional: SyncEtc must not guess customer styling.</div>
+      </div>`;
+  }
+
   function render(target, contextRaw) {
     const context = obj(contextRaw);
     const container = typeof target === "string" ? document.getElementById(target) : target;
     if (!container) throw new Error("SyncEtcOrganizationHeader.render requires a valid container element or id.");
 
-    const cfg = normalizeStyle(context);
+    const styleResult = normalizeStyle(context);
+    if (!styleResult.ok) {
+      renderRequiredStyleError(container, styleResult);
+      return { version: VERSION, container, context, error: styleResult.error, missing: styleResult.missing };
+    }
+    const cfg = styleResult.config;
     const organization = obj(context.organization || {});
     const organizationName = firstText(context.organizationName, organization.display_name, organization.name, organization.organization_name, "SyncEtc User Portal");
     const rows = normalizeRows(context);

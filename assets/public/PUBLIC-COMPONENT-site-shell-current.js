@@ -1,11 +1,11 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-07-021-D
+// Internal Version: 2026-06-07-021-E
 // Purpose: Public page wrapper. It never renders its own header; it feeds context to the single organization header engine.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-D";
+  const VERSION = "2026-06-07-021-E";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -26,9 +26,10 @@
   function getJson(source, field) { const value = obj(source)[field]; return obj(value); }
   function getText(source, field, fallback = "") { const value = obj(source)[field]; return typeof value === "string" && value.trim() ? value.trim() : fallback; }
 
+  function isHexColor(value) { return /^#[0-9a-f]{6}$/i.test(clean(value)); }
   function hexToRgb(hex) {
     const c = String(hex || "").replace("#", "").trim();
-    if (!/^[0-9a-f]{6}$/i.test(c)) return { r:31,g:79,b:130 };
+    if (!/^[0-9a-f]{6}$/i.test(c)) throw new Error(`Invalid organization style color: ${hex}`);
     return { r: parseInt(c.slice(0,2),16), g: parseInt(c.slice(2,4),16), b: parseInt(c.slice(4,6),16) };
   }
   function rgba(hex, alpha) { const rgb = hexToRgb(hex); return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`; }
@@ -41,6 +42,79 @@
     return fallback;
   }
 
+  function styleError(message, missing) { return { ok: false, message, missing: arr(missing) }; }
+
+  function resolveWidth(value) {
+    const width = clean(value).toLowerCase();
+    if (width === "wide") return "1180px";
+    if (width === "narrow") return "880px";
+    if (width === "normal" || width === "standard") return "1040px";
+    if (/^\d+(px|rem|em|%)$/i.test(width)) return width;
+    return "";
+  }
+
+  function requiredStyleConfig(payload) {
+    const profile = obj(payload?.style_profile);
+    const colors = getJson(profile, "colors_json");
+    const spacing = getJson(profile, "spacing_json");
+    const layout = getJson(profile, "layout_json");
+    const effects = getJson(profile, "effects_json");
+    const typography = getJson(profile, "typography_json");
+    const primary = getText(colors, "brand_primary", "");
+    const secondary = getText(colors, "brand_secondary", "");
+    const surface = getText(colors, "surface", "");
+    const text = getText(colors, "text", "");
+    const width = resolveWidth(getText(spacing, "page_width", getText(layout, "default_width", "")));
+    const missing = [];
+    if (!primary || !isHexColor(primary)) missing.push("colors_json.brand_primary");
+    if (!secondary || !isHexColor(secondary)) missing.push("colors_json.brand_secondary");
+    if (!surface || !isHexColor(surface)) missing.push("colors_json.surface");
+    if (!text || !isHexColor(text)) missing.push("colors_json.text");
+    if (!width) missing.push("spacing_json.page_width or layout_json.default_width");
+    if (missing.length) return styleError("This organization page cannot render because the active organization style profile was not loaded or is incomplete.", missing);
+
+    const density = getText(profile, "density", "normal");
+    const cardStyle = getText(profile, "card_style", "standard");
+    const corners = getText(effects, "corners", "soft");
+    const shadows = getText(effects, "shadows", "soft");
+    const headingScale = getText(typography, "heading_scale", "normal");
+    const radius = corners === "sharp" || cardStyle === "sharp" ? "6px" : corners === "pill" ? "26px" : "18px";
+    return { ok: true, config: {
+      primary,
+      secondary,
+      surface,
+      text,
+      muted: rgba(text, 0.68),
+      border: rgba(primary, 0.16),
+      softPrimary: rgba(primary, 0.08),
+      pageWidth: width,
+      radius,
+      radiusLarge: corners === "sharp" || cardStyle === "sharp" ? "8px" : corners === "pill" ? "30px" : "26px",
+      shadow: shadows === "none" ? "none" : shadows === "hairline" ? `0 1px 0 ${rgba(primary, .14)}` : shadows === "strong" ? `0 24px 70px ${rgba(primary, .28)}` : `0 14px 42px ${rgba(primary, .14)}`,
+      density,
+      navFontSize: density === "compact" ? "12px" : "13px",
+      titleSize: headingScale === "compact" ? "26px" : "30px",
+    }};
+  }
+
+  function resolvePageWidth(rawValue) {
+    const value = clean(rawValue).toLowerCase();
+    if (!value) return "";
+    if (/^[0-9]+(px|rem|em|vw|%)$/i.test(value)) return clean(rawValue);
+    if (value === "wide") return "1180px";
+    if (value === "normal" || value === "standard") return "1040px";
+    if (value === "narrow") return "880px";
+    return clean(rawValue);
+  }
+
+  function styleErrorConfig(missing) {
+    return {
+      isStyleError: true,
+      missing: arr(missing).filter(Boolean),
+      pageWidth: "1120px"
+    };
+  }
+
   function styleConfig(payload) {
     const profile = obj(payload?.style_profile);
     const colors = getJson(profile, "colors_json");
@@ -48,15 +122,32 @@
     const layout = getJson(profile, "layout_json");
     const effects = getJson(profile, "effects_json");
     const typography = getJson(profile, "typography_json");
-    const primary = getText(colors, "brand_primary", "#1f4f82");
-    const secondary = getText(colors, "brand_secondary", "#eef3f8");
-    const surface = getText(colors, "surface", "#ffffff");
-    const text = getText(colors, "text", "#172033");
+
+    const missing = [];
+    if (!Object.keys(profile).length) missing.push("style_profile");
+
+    const primary = getText(colors, "brand_primary", getText(colors, "primary", ""));
+    const secondary = getText(colors, "brand_secondary", getText(colors, "secondary", ""));
+    const surface = getText(colors, "surface", "");
+    const text = getText(colors, "text", "");
+    const widthToken = getText(spacing, "page_width", getText(layout, "default_width", getText(layout, "page_width", "")));
+
+    if (!primary) missing.push("colors_json.brand_primary");
+    else if (!isHexColor(primary)) missing.push("colors_json.brand_primary valid hex color");
+    if (!secondary) missing.push("colors_json.brand_secondary");
+    else if (!isHexColor(secondary)) missing.push("colors_json.brand_secondary valid hex color");
+    if (!surface) missing.push("colors_json.surface");
+    else if (!isHexColor(surface)) missing.push("colors_json.surface valid hex color");
+    if (!text) missing.push("colors_json.text");
+    else if (!isHexColor(text)) missing.push("colors_json.text valid hex color");
+    if (!widthToken) missing.push("spacing_json.page_width or layout_json.default_width");
+
+    if (missing.length) return styleErrorConfig(missing);
+
     const density = getText(profile, "density", "normal");
     const cardStyle = getText(profile, "card_style", "standard");
     const corners = getText(effects, "corners", "soft");
     const shadows = getText(effects, "shadows", "soft");
-    const width = getText(spacing, "page_width", getText(layout, "default_width", "normal"));
     const headingScale = getText(typography, "heading_scale", "normal");
     return {
       primary,
@@ -66,7 +157,7 @@
       muted: rgba(text, 0.68),
       border: rgba(primary, 0.16),
       softPrimary: rgba(primary, 0.08),
-      pageWidth: width === "wide" ? "1180px" : width === "narrow" ? "880px" : "1040px",
+      pageWidth: resolvePageWidth(widthToken),
       radius: corners === "sharp" || cardStyle === "sharp" ? "6px" : corners === "pill" ? "26px" : "18px",
       radiusLarge: corners === "sharp" || cardStyle === "sharp" ? "8px" : corners === "pill" ? "30px" : "26px",
       shadow: shadows === "none" ? "none" : shadows === "hairline" ? "0 1px 0 rgba(12,38,64,.14)" : shadows === "strong" ? "0 24px 70px rgba(12,38,64,.28)" : "0 14px 42px rgba(12,38,64,.14)",
@@ -74,6 +165,11 @@
       navFontSize: density === "compact" ? "12px" : "13px",
       titleSize: headingScale === "compact" ? "26px" : "30px",
     };
+  }
+
+  function styleErrorHtml(config) {
+    const missing = arr(config && config.missing).join(", ") || "unknown style fields";
+    return `<div style="box-sizing:border-box;max-width:1120px;margin:28px auto;padding:24px 28px;border:6px solid #cc0000;border-radius:18px;background:#fff5f5;color:#b00000;font-family:Arial,Helvetica,sans-serif;box-shadow:0 14px 40px rgba(176,0,0,.18);"><div style="font-size:42px;line-height:1.05;font-weight:950;letter-spacing:-.04em;text-transform:uppercase;">STYLE CONFIGURATION ERROR</div><div style="margin-top:12px;font-size:18px;line-height:1.4;font-weight:800;color:#5b0000;">This organization page cannot render because the active organization style profile was not loaded or is incomplete.</div><div style="margin-top:12px;font-size:15px;line-height:1.4;color:#5b0000;"><strong>Missing:</strong> ${escapeHtml(missing)}</div><div style="margin-top:12px;font-size:13px;line-height:1.4;color:#7a0000;">This is intentional. SyncEtc no longer falls back to a fake/default customer style.</div></div>`;
   }
 
   function buildCss(config) {
@@ -92,6 +188,16 @@
       .syncetc-public-error{max-width:${config.pageWidth};margin:28px auto;padding:16px 18px;border:1px solid rgba(18,54,90,.14);border-radius:16px;background:#fff;color:#5d6b78;font-family:Arial,Helvetica,sans-serif;}
       @media(max-width:760px){.syncetc-public-footer{grid-template-columns:1fr}.syncetc-public-footer-links{justify-content:flex-start}.syncetc-public-site{margin-top:12px;padding:0 12px}}
     `;
+  }
+
+
+  function requiredStyleErrorHtml(styleResult) {
+    const missing = arr(styleResult?.missing);
+    return `<div style="box-sizing:border-box;max-width:1180px;margin:24px auto;padding:24px;border:6px solid #ff0000;background:#fff;color:#b00000;font-family:Arial,Helvetica,sans-serif;box-shadow:0 0 0 4px rgba(255,0,0,.18);"><div style="font-size:48px;line-height:1.02;font-weight:950;letter-spacing:-.04em;">STYLE CONFIGURATION ERROR</div><div style="margin-top:12px;font-size:18px;line-height:1.35;font-weight:900;color:#7a0000;">This organization page cannot render because the active organization style profile was not loaded.</div>${missing.length ? `<div style="margin-top:12px;font-size:14px;font-weight:800;color:#7a0000;">Missing or invalid: ${escapeHtml(missing.join(", "))}</div>` : ""}<div style="margin-top:12px;font-size:13px;color:#5f0000;">Version ${escapeHtml(VERSION)}. This is intentional: SyncEtc must not guess customer styling.</div></div>`;
+  }
+
+  function neutralHeaderLoadingHtml(config) {
+    return `<div style="font-family:Arial,Helvetica,sans-serif;max-width:${config.pageWidth};margin:12px auto;padding:0 16px;box-sizing:border-box;"><div style="border:1px solid ${config.border};border-radius:${config.radiusLarge};background:${config.surface};padding:14px 16px;color:${config.text};font-weight:900;">Loading organization navigation…</div></div>`;
   }
 
   function loadScript(src) {
@@ -300,18 +406,25 @@
       return;
     }
 
-    // Always render the public organization header first. This prevents blank public-page headers
-    // if Supabase auth/access lookup is slow or unavailable.
-    renderHeaderImmediately(header, target, payload).catch(() => {});
+    let styleResult = requiredStyleConfig(payload);
+    if (!styleResult.ok) {
+      target.innerHTML = requiredStyleErrorHtml(styleResult);
+      return;
+    }
+    target.innerHTML = neutralHeaderLoadingHtml(styleResult.config);
 
     let client = null;
     let session = null;
     try {
       client = await ensureSupabase();
-      const { data } = await client.auth.getSession();
-      session = data?.session || null;
+      for (let i = 0; i < 6; i += 1) {
+        const { data } = await client.auth.getSession();
+        session = data?.session || null;
+        if (session?.access_token) break;
+        if (i < 5) await new Promise((resolve) => setTimeout(resolve, 100));
+      }
     } catch (error) {
-      return;
+      session = null;
     }
 
     let accessRow = null;
@@ -345,7 +458,12 @@
       extraCss: options.extraCss || "",
     };
 
-    const config = styleConfig(context.payload);
+    const styleResult = requiredStyleConfig(context.payload);
+    if (!styleResult.ok) {
+      context.root.innerHTML = requiredStyleErrorHtml(styleResult);
+      return;
+    }
+    const config = styleResult.config;
     const shell = obj(context.payload.site_shell);
     const org = obj(context.payload.organization);
     const orgName = clean(shell.organization_name || org.display_name || org.legal_name || org.organization_key || "Organization");
@@ -366,7 +484,12 @@
   }
 
   function renderError(root, message, payload) {
-    const config = styleConfig(payload || {});
+    const styleResult = requiredStyleConfig(payload || {});
+    if (!styleResult.ok) {
+      root.innerHTML = requiredStyleErrorHtml(styleResult);
+      return;
+    }
+    const config = styleResult.config;
     root.innerHTML = `<style>${buildCss(config)}</style><div id="${HEADER_ID}"></div><div class="syncetc-public-error"><strong>Unable to load page.</strong><br>${escapeHtml(message || "Unknown error")}</div>`;
     context = { root, payload: payload || {}, activePageKey: "", bodyHtml: "", beforeBodyHtml: "", extraCss: "" };
     refreshOrganizationHeader().catch(() => {});

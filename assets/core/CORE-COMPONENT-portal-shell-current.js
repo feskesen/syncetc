@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-07-021-B
+// Internal Version: 2026-06-07-021-E
 // Purpose: Portal shell now renders its header through the shared organization header engine. No portal-specific header rendering.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-B";
+  const VERSION = "2026-06-07-021-E";
   const SHELL_ID = "syncetc-organization-header";
   const FOOTER_ID = "syncetc-portal-footer";
   const LOGIN_MODAL_ID = "syncetc-portal-login-modal";
@@ -50,7 +50,7 @@
   function key(v) { return clean(v).toLowerCase().replace(/[^a-z0-9_.:-]+/g,"-").replace(/-+/g,"-").replace(/^-|-$/g,""); }
   function getText(source, field, fallback = "") { const v = obj(source)[field]; return typeof v === "string" && v.trim() ? v.trim() : fallback; }
   function orderIndex(list, value, fallback) { const idx = list.indexOf(key(value)); return idx >= 0 ? idx : fallback; }
-  function hexToRgb(hex) { const c = String(hex || "").replace("#", "").trim(); if (!/^[0-9a-f]{6}$/i.test(c)) return { r:54,g:74,b:99 }; return { r:parseInt(c.slice(0,2),16), g:parseInt(c.slice(2,4),16), b:parseInt(c.slice(4,6),16) }; }
+  function hexToRgb(hex) { const c = String(hex || "").replace("#", "").trim(); if (!/^[0-9a-f]{6}$/i.test(c)) throw new Error("Missing required organization style color."); return { r:parseInt(c.slice(0,2),16), g:parseInt(c.slice(2,4),16), b:parseInt(c.slice(4,6),16) }; }
   function rgba(hex, a) { const r = hexToRgb(hex); return `rgba(${r.r}, ${r.g}, ${r.b}, ${a})`; }
 
   function loadScript(src) {
@@ -65,7 +65,7 @@
   }
 
   function hasSharedOrganizationHeader() {
-    return Boolean(window.SyncEtcOrganizationHeader && typeof window.SyncEtcOrganizationHeader.render === "function" && window.SyncEtcOrganizationHeader.VERSION === "2026-06-07-021-A");
+    return Boolean(window.SyncEtcOrganizationHeader && typeof window.SyncEtcOrganizationHeader.render === "function");
   }
 
   async function ensureSharedOrganizationHeader() {
@@ -113,11 +113,11 @@
     const effects = obj(profile.effects_json);
     const spacing = obj(profile.spacing_json);
     const layout = obj(profile.layout_json);
-    const primary = getText(colors, "brand_primary", "#344966");
-    const secondary = getText(colors, "brand_secondary", "#eef3f8");
-    const surface = getText(colors, "surface", "#ffffff");
-    const text = getText(colors, "text", "#172033");
-    const width = getText(spacing, "page_width", getText(layout, "default_width", "wide"));
+    const primary = getText(colors, "brand_primary", "");
+    const secondary = getText(colors, "brand_secondary", "");
+    const surface = getText(colors, "surface", "");
+    const text = getText(colors, "text", "");
+    const width = getText(spacing, "page_width", getText(layout, "default_width", ""));
     const corners = getText(effects, "corners", "soft");
     return {
       primary, secondary, surface, text,
@@ -125,6 +125,20 @@
       radius: corners === "sharp" ? "10px" : corners === "pill" ? "28px" : "18px",
       pageWidth: width === "narrow" ? "900px" : width === "normal" ? "1060px" : "1180px"
     };
+  }
+
+  function hasRequiredOrganizationStyle() {
+    const profile = obj(state.styleProfile);
+    const colors = obj(profile.colors_json);
+    const spacing = obj(profile.spacing_json);
+    const layout = obj(profile.layout_json);
+    const hasColorSet = Boolean(colors.brand_primary && colors.brand_secondary && colors.surface && colors.text);
+    const hasWidth = Boolean(spacing.page_width || layout.default_width || layout.page_width);
+    return hasColorSet && hasWidth;
+  }
+
+  function renderWaitingForOrganizationStyle(shell) {
+    shell.innerHTML = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:1180px;margin:0 auto;padding:12px 18px;box-sizing:border-box;"><div style="border:1px solid #d8dee8;border-radius:18px;background:#fff;padding:14px 16px;color:#172033;font-weight:900;box-shadow:0 8px 22px rgba(23,32,51,.06);">Loading organization style…</div></div>`;
   }
 
   function selectedOrgId() {
@@ -376,6 +390,11 @@
   function render() {
     let shell = document.getElementById(SHELL_ID);
     if (!shell) { shell = document.createElement("div"); shell.id = SHELL_ID; document.body.insertBefore(shell, document.body.firstChild); }
+
+    if (!hasRequiredOrganizationStyle()) {
+      renderWaitingForOrganizationStyle(shell);
+      return;
+    }
 
     const cfg = config();
     const groups = navGroups();

@@ -1,17 +1,18 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-07-021-J
+// Internal Version: 2026-06-07-021-K
 // Purpose: Public page wrapper. It never renders its own header; it feeds context to the single organization header engine.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-J";
+  const VERSION = "2026-06-07-021-K";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
   const ORGANIZATION_HEADER_URL = "https://feskesen.github.io/syncetc/assets/core/CORE-COMPONENT-organization-header-current.js";
   const HEADER_ID = "syncetc-organization-header";
+  const ACCESS_CONTEXT_CACHE_TTL_MS = 5 * 60 * 1000;
 
   let supabaseClient = null;
   let context = null;
@@ -396,6 +397,69 @@
       || null;
   }
 
+  function accessCacheIdentity(session, payload) {
+    const facts = headerBaseFacts(payload);
+    const userKey = clean(session?.user?.id || session?.user?.email || "").toLowerCase();
+    const orgKey = clean(facts.orgId || facts.orgKey || "").toLowerCase();
+    if (!userKey || !orgKey) return null;
+    return {
+      key: `syncetc_public_access_context_v2:${userKey}:${orgKey}`,
+      userKey,
+      orgKey
+    };
+  }
+
+  function readCachedAccessContext(session, payload) {
+    try {
+      const identity = accessCacheIdentity(session, payload);
+      if (!identity || !window.sessionStorage) return null;
+      const raw = window.sessionStorage.getItem(identity.key);
+      if (!raw) { debugStep("accessCache:miss", identity.orgKey); return null; }
+      const parsed = JSON.parse(raw);
+      const ageMs = Date.now() - Number(parsed.saved_at || 0);
+      if (parsed.user_key !== identity.userKey || parsed.org_key !== identity.orgKey) {
+        debugStep("accessCache:mismatch", identity.orgKey);
+        return null;
+      }
+      if (!parsed.result || ageMs < 0 || ageMs > ACCESS_CONTEXT_CACHE_TTL_MS) {
+        debugStep("accessCache:stale", `${identity.orgKey} age ${Math.round(ageMs)}ms`);
+        return null;
+      }
+      debugState.latest.accessStatus = `cached; age ${Math.round(ageMs)}ms`;
+      debugStep("accessCache:hit", `${identity.orgKey} age ${Math.round(ageMs)}ms`);
+      return parsed.result;
+    } catch (error) {
+      debugError("accessCache:read_failed", error);
+      return null;
+    }
+  }
+
+  function writeCachedAccessContext(session, payload, result) {
+    try {
+      const identity = accessCacheIdentity(session, payload);
+      if (!identity || !result || !window.sessionStorage) return;
+      window.sessionStorage.setItem(identity.key, JSON.stringify({
+        saved_at: Date.now(),
+        user_key: identity.userKey,
+        org_key: identity.orgKey,
+        result
+      }));
+      debugStep("accessCache:write", identity.orgKey);
+    } catch (error) {
+      debugError("accessCache:write_failed", error);
+    }
+  }
+
+  function unpackAccessResult(result, payload) {
+    if (!result) return { accessRow: null, accessRows: [], platformAdmin: false };
+    const accessRows = arr(result.access);
+    return {
+      accessRow: chooseAccessRow(accessRows, payload),
+      accessRows,
+      platformAdmin: Boolean(result.platform_admin || result.platform_override)
+    };
+  }
+
   async function callAccess(action, payload = {}, tokenOverride = "") {
     debugStep("callAccess:start", action);
     const client = await ensureSupabase();
@@ -623,26 +687,49 @@
     let accessRows = [];
     let platformAdmin = false;
 
+    const renderFinalHeader = (label = "headerRender") => {
+      debugStep(`${label}:start`);
+      header.render(target, headerContext(payload, session, accessRow, accessRows, platformAdmin));
+      debugStep(`${label}:done`);
+      revealRoot();
+      debugStep("root:revealed");
+    };
+
     if (session?.access_token) {
       const facts = headerBaseFacts(payload);
       const requestPayload = facts.orgId ? { organization_id: facts.orgId } : {};
+      const cachedResult = readCachedAccessContext(session, payload);
+      if (cachedResult) {
+        ({ accessRow, accessRows, platformAdmin } = unpackAccessResult(cachedResult, payload));
+        updateDebugPanel();
+        renderFinalHeader("headerRender:cached");
+
+        // Refresh the cached context in the background. Backend permission checks still protect every page/action.
+        callAccess("get_user_dashboard", requestPayload, session.access_token).then((freshResult) => {
+          if (!freshResult) return;
+          writeCachedAccessContext(session, payload, freshResult);
+          ({ accessRow, accessRows, platformAdmin } = unpackAccessResult(freshResult, payload));
+          debugState.latest.accessStatus = "background refreshed"; updateDebugPanel();
+          renderFinalHeader("headerRender:background-refresh");
+          if (DEBUG_ENABLED) console.table(debugState.steps.map((s) => ({ ms: s.t, step: s.label, detail: s.detail })));
+        }).catch((error) => debugError("accessCache:background_refresh_failed", error));
+
+        if (DEBUG_ENABLED) console.table(debugState.steps.map((s) => ({ ms: s.t, step: s.label, detail: s.detail })));
+        return;
+      }
+
       debugState.latest.accessStatus = "starting get_user_dashboard"; updateDebugPanel();
       const accessStartedAt = performance.now();
       const result = await withFailureTimeout(callAccess("get_user_dashboard", requestPayload, session.access_token), 12000, "Organization access context");
       debugState.latest.accessStatus = `done in ${Math.round(performance.now() - accessStartedAt)}ms`; updateDebugPanel();
       if (result) {
-        accessRows = arr(result.access);
-        accessRow = chooseAccessRow(accessRows, payload);
-        platformAdmin = Boolean(result.platform_admin || result.platform_override);
+        writeCachedAccessContext(session, payload, result);
+        ({ accessRow, accessRows, platformAdmin } = unpackAccessResult(result, payload));
       }
     }
 
-    // Render once, after style + session/access completion. No timer fallback to logged-out state.
-    debugStep("headerRender:start");
-    header.render(target, headerContext(payload, session, accessRow, accessRows, platformAdmin));
-    debugStep("headerRender:done");
-    revealRoot();
-    debugStep("root:revealed");
+    // Render after style + session/access completion. No timer fallback to logged-out state.
+    renderFinalHeader("headerRender");
     if (DEBUG_ENABLED) console.table(debugState.steps.map((s) => ({ ms: s.t, step: s.label, detail: s.detail })));
   }
 

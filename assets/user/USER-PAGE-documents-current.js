@@ -1,11 +1,11 @@
 // USER-PAGE-documents-current.js
-// Internal Version: 2026-06-08-026-E
+// Internal Version: 2026-06-08-026-F
 // Purpose: Access-aware protected document viewer. Shows only member document visibility for the selected organization.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-08-026-E";
+  const VERSION = "2026-06-08-026-F";
   const ROOT_IDS = ["syncetc-user-documents-root", "syncetc-member-documents-root"];
   const PAGE_KEY = "member-documents";
   const DOCUMENT_SCOPE = "member";
@@ -61,15 +61,48 @@
     return root;
   }
 
-  function loadScript(src) {
+  function loadScript(src, readyCheck = null) {
     diag("loadScript:start", src);
     return new Promise((resolve, reject) => {
+      if (typeof readyCheck === "function" && readyCheck()) {
+        diag("loadScript:already-ready", src);
+        resolve();
+        return;
+      }
+
       const existing = document.querySelector(`script[src="${src}"]`);
-      if (existing) { diag("loadScript:cached", src); return resolve(); }
+      const finish = () => {
+        if (typeof readyCheck === "function" && !readyCheck()) {
+          diag("loadScript:loaded-but-not-ready", src);
+          reject(new Error(`Script loaded but expected global was not ready: ${src}`));
+          return;
+        }
+        diag("loadScript:loaded", src);
+        resolve();
+      };
+
+      if (existing) {
+        diag("loadScript:existing", src);
+        if (typeof readyCheck === "function" && readyCheck()) {
+          diag("loadScript:existing-ready", src);
+          resolve();
+          return;
+        }
+        existing.addEventListener("load", finish, { once: true });
+        existing.addEventListener("error", () => {
+          diag("loadScript:error", src);
+          reject(new Error(`Failed to load ${src}`));
+        }, { once: true });
+        return;
+      }
+
       const s = document.createElement("script");
       s.src = src;
-      s.onload = () => { diag("loadScript:loaded", src); resolve(); };
-      s.onerror = () => { diag("loadScript:error", src); reject(new Error(`Failed to load ${src}`)); };
+      s.onload = finish;
+      s.onerror = () => {
+        diag("loadScript:error", src);
+        reject(new Error(`Failed to load ${src}`));
+      };
       document.head.appendChild(s);
     });
   }
@@ -77,8 +110,17 @@
   async function ensureSupabase() {
     diag("ensureSupabase:start");
     if (supabaseClient) { diag("ensureSupabase:cached"); return supabaseClient; }
-    if (!window.supabase) await loadScript(SUPABASE_JS);
+    if (window.syncetcSupabase) {
+      supabaseClient = window.syncetcSupabase;
+      diag("ensureSupabase:used-shared-client");
+      return supabaseClient;
+    }
+    await loadScript(SUPABASE_JS, () => Boolean(window.supabase && window.supabase.createClient));
+    if (!window.supabase || !window.supabase.createClient) {
+      throw new Error("Supabase client library did not initialize.");
+    }
     supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    window.syncetcSupabase = window.syncetcSupabase || supabaseClient;
     diag("ensureSupabase:created-client");
     return supabaseClient;
   }

@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-07-021-E
-// Purpose: Portal shell now renders its header through the shared organization header engine. No portal-specific header rendering.
+// Internal Version: 2026-06-07-021-M
+// Purpose: Portal shell with timing diagnostics for auth/style/header initialization. No behavior change unless ?syncetc_debug=1.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-E";
+  const VERSION = "2026-06-07-021-M";
   const SHELL_ID = "syncetc-organization-header";
   const FOOTER_ID = "syncetc-portal-footer";
   const LOGIN_MODAL_ID = "syncetc-portal-login-modal";
@@ -43,6 +43,56 @@
     shellAuthChecked: false,
   };
 
+  const DEBUG = new URLSearchParams(window.location.search).get("syncetc_debug") === "1";
+  const DEBUG_START = performance.now();
+  const debugEvents = [];
+  let visibleRenderMs = null;
+  let lastRenderMs = null;
+  let styleReadyMs = null;
+  let sessionCheckMs = null;
+
+  function elapsedMs() { return Math.round(performance.now() - DEBUG_START); }
+  function mark(step, detail = "") {
+    if (!DEBUG) return;
+    debugEvents.push({ ms: elapsedMs(), step, detail: String(detail || "") });
+    if (window.console && typeof window.console.debug === "function") {
+      window.console.debug(`[SyncEtc portal ${VERSION}] ${step}`, detail || "");
+    }
+  }
+
+  function debugStatusLine() {
+    const bits = [];
+    bits.push(`Session: ${state.authenticated ? `logged in as ${state.email || "active session"}` : state.shellAuthChecked ? "not logged in" : "checking"}`);
+    bits.push(`Org: ${state.organizationKey || state.organizationName || "not selected"}`);
+    bits.push(`Style: ${hasRequiredOrganizationStyle() ? "loaded" : "missing/not ready"}`);
+    if (styleReadyMs !== null) bits.push(`Style ready: ${styleReadyMs}ms`);
+    if (sessionCheckMs !== null) bits.push(`Session check: ${sessionCheckMs}ms`);
+    if (visibleRenderMs !== null) bits.push(`Visible render: ${visibleRenderMs}ms`);
+    if (lastRenderMs !== null) bits.push(`Last render: ${lastRenderMs}ms`);
+    return bits.join(" | ");
+  }
+
+  function renderDebugPanel() {
+    if (!DEBUG) return;
+    let panel = document.getElementById("syncetc-portal-shell-diagnostics");
+    if (!panel) {
+      panel = document.createElement("pre");
+      panel.id = "syncetc-portal-shell-diagnostics";
+      panel.style.cssText = "max-width:1180px;margin:18px auto;padding:12px 14px;border:1px solid #c7d2e2;border-radius:12px;background:#0f172a;color:#e5edf8;font:12px/1.45 Consolas,Monaco,monospace;white-space:pre-wrap;overflow:auto;box-sizing:border-box;";
+      document.body.appendChild(panel);
+    }
+    const lines = [
+      `SyncEtc Portal Shell Diagnostics ${VERSION}`,
+      `Elapsed: ${elapsedMs()}ms`,
+      `Path: ${window.location.pathname}`,
+      debugStatusLine(),
+      "",
+      "Steps:",
+      ...debugEvents.map((e) => `${String(e.ms).padStart(6)}ms  ${e.step}${e.detail ? ` — ${e.detail}` : ""}`)
+    ];
+    panel.textContent = lines.join("\n");
+  }
+
   function esc(v) { return String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#039;"); }
   function clean(v) { return String(v ?? "").replace(/\s+/g," ").trim(); }
   function obj(v) { return v && typeof v === "object" && !Array.isArray(v) ? v : {}; }
@@ -55,11 +105,15 @@
 
   function loadScript(src) {
     return new Promise((resolve, reject) => {
-      if (document.querySelector(`script[src="${src}"]`)) return resolve();
+      if (document.querySelector(`script[src="${src}"]`)) {
+        mark("loadScript:cached", src);
+        return resolve();
+      }
+      mark("loadScript:start", src);
       const s = document.createElement("script");
       s.src = src;
-      s.onload = resolve;
-      s.onerror = () => reject(new Error(`Failed to load ${src}`));
+      s.onload = () => { mark("loadScript:loaded", src); resolve(); };
+      s.onerror = () => { mark("loadScript:error", src); reject(new Error(`Failed to load ${src}`)); };
       document.head.appendChild(s);
     });
   }
@@ -69,16 +123,20 @@
   }
 
   async function ensureSharedOrganizationHeader() {
-    if (hasSharedOrganizationHeader()) return window.SyncEtcOrganizationHeader;
+    mark("ensureOrganizationHeader:start");
+    if (hasSharedOrganizationHeader()) { mark("ensureOrganizationHeader:cached", window.SyncEtcOrganizationHeader.VERSION || "unknown version"); return window.SyncEtcOrganizationHeader; }
     await loadScript(ORGANIZATION_HEADER_URL);
     if (!hasSharedOrganizationHeader()) throw new Error("Shared organization header did not load correctly.");
+    mark("ensureOrganizationHeader:ready", window.SyncEtcOrganizationHeader.VERSION || "unknown version");
     return window.SyncEtcOrganizationHeader;
   }
 
   async function ensureShellSupabase() {
-    if (shellSupabaseClient) return shellSupabaseClient;
+    mark("ensureSupabase:start");
+    if (shellSupabaseClient) { mark("ensureSupabase:cached"); return shellSupabaseClient; }
     if (!window.supabase) await loadScript(SUPABASE_JS);
     shellSupabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    mark("ensureSupabase:created-client");
     startAuthListener();
     return shellSupabaseClient;
   }
@@ -87,6 +145,7 @@
     if (authListenerStarted || !shellSupabaseClient?.auth?.onAuthStateChange) return;
     authListenerStarted = true;
     shellSupabaseClient.auth.onAuthStateChange((event, session) => {
+      mark("authStateChange", event);
       if (!["SIGNED_IN", "SIGNED_OUT", "TOKEN_REFRESHED", "USER_UPDATED"].includes(event)) return;
       const nextAuth = Boolean(session?.access_token);
       const nextEmail = session?.user?.email || "";
@@ -102,6 +161,7 @@
   }
 
   function setState(next = {}) {
+    mark("setState", Object.keys(next || {}).join(",") || "empty");
     const keepPublicNav = next.publicNavItems === undefined ? state.publicNavItems : arr(next.publicNavItems);
     state = { ...state, ...next, publicNavItems: keepPublicNav, shellAuthChecked: next.shellAuthChecked ?? state.shellAuthChecked };
     render();
@@ -370,15 +430,22 @@
   }
 
   async function syncShellAuth(skipRender = false) {
+    mark("syncAuth:start", skipRender ? "skipRender" : "render");
+    const authStart = performance.now();
     const wasAuthenticated = state.authenticated;
     const wasEmail = state.email;
     let sessionEmail = "";
     try {
       const client = await ensureShellSupabase();
+      mark("getSession:start");
       const { data } = await client.auth.getSession();
       sessionEmail = data?.session?.user?.email || "";
+      sessionCheckMs = Math.round(performance.now() - authStart);
+      mark("getSession:done", data?.session?.access_token ? `logged in as ${sessionEmail || "active session"} in ${sessionCheckMs}ms` : `not logged in in ${sessionCheckMs}ms`);
       state = { ...state, authenticated: Boolean(data?.session?.access_token), email: sessionEmail || state.email, shellAuthChecked: true };
-    } catch {
+    } catch (error) {
+      sessionCheckMs = Math.round(performance.now() - authStart);
+      mark("getSession:error", error?.message || String(error));
       state = { ...state, shellAuthChecked: true };
     }
     if (!skipRender) render();
@@ -388,13 +455,19 @@
   }
 
   function render() {
+    mark("render:start");
+    const renderStart = performance.now();
     let shell = document.getElementById(SHELL_ID);
-    if (!shell) { shell = document.createElement("div"); shell.id = SHELL_ID; document.body.insertBefore(shell, document.body.firstChild); }
+    if (!shell) { shell = document.createElement("div"); shell.id = SHELL_ID; document.body.insertBefore(shell, document.body.firstChild); mark("shell:created"); }
 
     if (!hasRequiredOrganizationStyle()) {
+      mark("styleConfig:missing", state.organizationKey || state.organizationName || "no organization style yet");
       renderWaitingForOrganizationStyle(shell);
+      renderDebugPanel();
       return;
     }
+    if (styleReadyMs === null) styleReadyMs = elapsedMs();
+    mark("styleConfig:ready", `first ready at ${styleReadyMs}ms`);
 
     const cfg = config();
     const groups = navGroups();
@@ -404,13 +477,18 @@
     const orgOptions = organizationOptions();
 
     if (!hasSharedOrganizationHeader()) {
+      mark("header:not-ready");
       shell.innerHTML = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:${cfg.pageWidth};margin:0 auto;padding:12px 18px;color:${cfg.text};box-sizing:border-box"><div style="border:1px solid ${cfg.border};border-radius:${cfg.radius};background:#fff;padding:14px;font-weight:900;color:${cfg.primary}">Loading organization header...</div></div>`;
+      renderDebugPanel();
       ensureSharedOrganizationHeader().then(() => render()).catch((error) => {
+        mark("header:load-error", error?.message || String(error));
         shell.innerHTML = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:${cfg.pageWidth};margin:0 auto;padding:12px 18px;color:#8a1f1f;box-sizing:border-box"><div style="border:1px solid #f0b8b8;border-radius:14px;background:#fff7f7;padding:14px;font-weight:900">Header failed to load: ${esc(error.message || String(error))}</div></div>`;
+        renderDebugPanel();
       });
       return;
     }
 
+    mark("headerRender:start");
     window.SyncEtcOrganizationHeader.render(shell, {
       organizationName,
       organization: {
@@ -451,12 +529,17 @@
 
     renderLoginModal();
     renderFooter(cfg);
+    lastRenderMs = Math.round(performance.now() - renderStart);
+    if (visibleRenderMs === null) visibleRenderMs = elapsedMs();
+    mark("headerRender:done", `${lastRenderMs}ms`);
+    renderDebugPanel();
   }
 
   window.SyncEtcPortalShell = { setState, render, version: VERSION, openLogin: openLoginModal, logout: shellLogout, syncAuth: syncShellAuth };
 
   function bootPortalShell() {
-    syncShellAuth().catch(() => render());
+    mark("boot:start", window.location.pathname);
+    syncShellAuth().catch((error) => { mark("boot:syncAuth:error", error?.message || String(error)); render(); });
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bootPortalShell);

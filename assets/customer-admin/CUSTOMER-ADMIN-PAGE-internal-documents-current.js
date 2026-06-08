@@ -1,17 +1,18 @@
 // CUSTOMER-ADMIN-PAGE-internal-documents-current.js
-// Internal Version: 2026-06-08-026-C
+// Internal Version: 2026-06-08-026-D
 // Purpose: Access-aware protected document viewer. Shows only internal document visibility for the selected organization.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-08-026-C";
+  const VERSION = "2026-06-08-026-D";
   const ROOT_IDS = ["syncetc-internal-documents-root", "syncetc-organization-internal-documents-root"];
   const PAGE_KEY = "internal-documents";
   const DOCUMENT_SCOPE = "internal";
   const DEFAULT_TITLE = "Internal Documents";
   const DEFAULT_INTRO = "Internal documents for board, organization admins, and authorized organization staff.";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
+  const PROJECT_REF = "bxywokidhgppmlzyqvem";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -124,14 +125,34 @@
     catch {}
   }
 
+  function readStoredSupabaseSession() {
+    try {
+      const raw = window.localStorage.getItem(`sb-${PROJECT_REF}-auth-token`);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      const session = parsed?.currentSession || parsed?.session || parsed;
+      if (!session?.access_token) return null;
+      const expiresAt = Number(session.expires_at || 0);
+      if (expiresAt && expiresAt * 1000 < Date.now() - 30000) return null;
+      return session;
+    } catch {
+      return null;
+    }
+  }
+
   async function getStableSession() {
-    const attempts = shouldWaitForSession() ? 14 : 5;
+    const attempts = shouldWaitForSession() ? 14 : 8;
     for (let i = 0; i < attempts; i += 1) {
       const { data, error } = await supabaseClient.auth.getSession();
       if (error) throw error;
       if (data?.session?.access_token) {
         clearJustLoggedIn();
         return data.session;
+      }
+      const storedSession = readStoredSupabaseSession();
+      if (storedSession?.access_token) {
+        clearJustLoggedIn();
+        return storedSession;
       }
       if (i < attempts - 1) await sleep(150);
     }
@@ -232,12 +253,14 @@
 
   function renderLogin(root) {
     root.style.visibility = "visible";
+    root.removeAttribute("data-syncetc-documents-held");
     root.innerHTML = `<div class="protected-docs-wrap"><section class="protected-docs-card"><h1>Login required</h1><p>Use your SyncEtc login to view ${esc(DEFAULT_TITLE)}.</p><button id="protected-docs-login" class="protected-docs-btn" type="button">Go to Login</button></section></div>`;
     $("protected-docs-login")?.addEventListener("click", () => { location.href = `/login?next=${encodeURIComponent(location.pathname + location.search)}`; });
   }
 
   function renderError(root, error) {
     root.style.visibility = "visible";
+    root.removeAttribute("data-syncetc-documents-held");
     const messageText = error?.message || String(error || "Unknown error");
     root.innerHTML = `<div class="protected-docs-wrap"><section class="protected-docs-card"><h1>${esc(DEFAULT_TITLE)}</h1><p class="protected-docs-message warn">${esc(messageText)}</p><button id="protected-docs-retry" class="protected-docs-btn" type="button">Try again</button><pre class="protected-docs-backend">${esc(JSON.stringify(backend || {}, null, 2))}</pre></section></div>`;
     $("protected-docs-retry")?.addEventListener("click", refresh);
@@ -259,6 +282,7 @@
     const groups = groupedDocs(rows);
     const groupKeys = Object.keys(groups).sort();
     root.style.visibility = "visible";
+    root.removeAttribute("data-syncetc-documents-held");
     root.innerHTML = `<style>${fullCss(cfg)}</style><div class="protected-docs-wrap" data-version="${esc(VERSION)}"><section class="protected-docs-card protected-docs-hero"><span class="protected-docs-eyebrow">${DOCUMENT_SCOPE === "internal" ? "Internal" : "Member"} Documents</span><h1>${esc(title)}</h1><p>${esc(intro)}</p><div class="protected-docs-message ${messageKind}">${esc(message || `Version ${VERSION}`)}</div></section><section class="protected-docs-card"><div class="protected-docs-toolbar"><input id="protected-docs-search" class="protected-docs-search" type="search" placeholder="Search documents..." value="${esc(searchDraft)}"><button id="protected-docs-clear" class="protected-docs-btn secondary" type="button">Clear</button><button id="protected-docs-refresh" class="protected-docs-btn secondary" type="button">Refresh</button></div><div class="protected-docs-summary"><span class="protected-docs-pill">${rows.length} document${rows.length === 1 ? "" : "s"}</span><span class="protected-docs-pill">${DOCUMENT_SCOPE === "internal" ? "Internal only" : "Member only"}</span></div><div class="protected-docs-categories"><button class="protected-docs-cat ${activeCategory === "all" ? "active" : ""}" type="button" data-doc-cat="all">All</button>${categories.map((cat) => `<button class="protected-docs-cat ${activeCategory === cat ? "active" : ""}" type="button" data-doc-cat="${esc(cat)}">${esc(cat)}</button>`).join("")}</div></section><section class="protected-docs-card"><div class="protected-docs-groups">${groupKeys.length ? groupKeys.map((cat) => `<details class="protected-docs-group" open><summary>${esc(cat)} <span>${groups[cat].length}</span></summary><div class="protected-docs-list">${groups[cat].map(docCardHtml).join("")}</div></details>`).join("") : `<div class="protected-docs-empty">No ${DOCUMENT_SCOPE === "internal" ? "internal" : "member"} documents are currently available.</div>`}</div></section><pre class="protected-docs-backend">${esc(JSON.stringify(backend || {}, null, 2))}</pre><div class="protected-docs-modal-backdrop" id="protected-docs-modal-backdrop" aria-hidden="true"><div class="protected-docs-modal" role="dialog" aria-modal="true"><div class="protected-docs-modal-head"><strong id="protected-docs-modal-title">Document preview</strong><button type="button" class="protected-docs-btn secondary" id="protected-docs-modal-close">Close</button></div><iframe class="protected-docs-modal-frame" id="protected-docs-modal-frame"></iframe></div></div></div>`;
     bindEvents(root);
   }
@@ -305,6 +329,7 @@
   function boot() {
     const root = rootEl();
     root.style.visibility = "hidden";
+    root.setAttribute("data-syncetc-documents-held", "true");
     refresh().catch((error) => { loading = false; authChecked = true; message = error.message || String(error); messageKind = "warn"; render(); });
   }
 

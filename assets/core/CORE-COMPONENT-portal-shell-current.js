@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-07-021-O
-// Purpose: Portal shell render gate: no visible header/page shell until organization style and shared header are ready. Diagnostics remain behind ?syncetc_debug=1.
+// Internal Version: 2026-06-08-026-B
+// Purpose: Portal shell logged-out repair: show login when no session, but keep logged-in portal rendering style-gated.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-O";
+  const VERSION = "2026-06-08-026-B";
   const SHELL_ID = "syncetc-organization-header";
   const FOOTER_ID = "syncetc-portal-footer";
   const LOGIN_MODAL_ID = "syncetc-portal-login-modal";
@@ -477,6 +477,81 @@
   function openLoginModal(focus = true) { renderLoginModal(); const modal = document.getElementById(LOGIN_MODAL_ID); modal?.classList.add("open"); if (focus) setTimeout(() => document.getElementById("portal-login-email")?.focus(), 0); }
   function closeLoginModal() { document.getElementById(LOGIN_MODAL_ID)?.classList.remove("open"); }
 
+  function renderLoggedOutShell(shell) {
+    mark("render:logged-out", "showing neutral portal login");
+    const next = encodeURIComponent(window.location.pathname + window.location.search);
+    shell.style.visibility = "visible";
+    shell.style.minHeight = "";
+    shell.innerHTML = `<style>
+      #${SHELL_ID}{font-family:Arial,Helvetica,sans-serif;background:#f7f9fc;color:#172033;min-height:100vh;box-sizing:border-box;padding:28px 18px;}
+      #${SHELL_ID} *{box-sizing:border-box;}
+      #${SHELL_ID} .portal-logged-out-wrap{max-width:760px;margin:0 auto;}
+      #${SHELL_ID} .portal-logged-out-card{background:#fff;border:1px solid #d9e2ef;border-radius:22px;box-shadow:0 16px 44px rgba(15,23,42,.10);padding:24px;}
+      #${SHELL_ID} .portal-logged-out-kicker{display:inline-flex;border-radius:999px;background:#eef3f8;color:#26344d;font-size:12px;font-weight:900;padding:6px 10px;margin-bottom:12px;}
+      #${SHELL_ID} .portal-logged-out-card h1{margin:0 0 8px;font-size:30px;line-height:1.12;letter-spacing:-.02em;}
+      #${SHELL_ID} .portal-logged-out-card p{margin:0 0 16px;color:#5d6b82;font-size:14px;line-height:1.5;font-weight:700;}
+      #${SHELL_ID} .portal-login-grid{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end;}
+      #${SHELL_ID} label{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:900;color:#26344d;}
+      #${SHELL_ID} input{min-height:44px;border:1px solid #c7d2e2;border-radius:12px;padding:10px 12px;font-size:15px;background:#fff;color:#172033;}
+      #${SHELL_ID} button{min-height:44px;border:1px solid #26344d;background:#26344d;color:#fff;border-radius:999px;padding:10px 16px;font-weight:950;cursor:pointer;white-space:nowrap;}
+      #${SHELL_ID} button.secondary{background:#fff;color:#26344d;}
+      #${SHELL_ID} .portal-login-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;}
+      #${SHELL_ID} .portal-inline-login-message{display:${loginMessage ? "block" : "none"};margin-top:12px;border-radius:12px;padding:10px 12px;font-size:13px;font-weight:900;background:${loginMessageKind === "ok" ? "#e7f6ec" : "#fff7ec"};color:${loginMessageKind === "ok" ? "#14532d" : "#8a4d00"};}
+      @media(max-width:760px){#${SHELL_ID} .portal-login-grid{grid-template-columns:1fr;}#${SHELL_ID}{padding:18px 12px;}}
+    </style>
+    <div class="portal-logged-out-wrap">
+      <section class="portal-logged-out-card">
+        <span class="portal-logged-out-kicker">SyncEtc Portal</span>
+        <h1>Log in</h1>
+        <p>Use your organization login to access your dashboard, member tools, and administrative pages if permitted.</p>
+        <div class="portal-login-grid">
+          <label>Email<input id="portal-inline-login-email" type="email" autocomplete="username" placeholder="you@example.com"></label>
+          <label>Password<input id="portal-inline-login-password" type="password" autocomplete="current-password" placeholder="Password"></label>
+          <button id="portal-inline-login-submit" type="button">Log in</button>
+        </div>
+        <div class="portal-login-actions">
+          <button id="portal-inline-login-reset" class="secondary" type="button">Send password reset</button>
+          <a href="/login?next=${next}" style="align-self:center;color:#26344d;font-weight:900;text-decoration:underline;">Open full login page</a>
+        </div>
+        <div class="portal-inline-login-message">${esc(loginMessage)}</div>
+      </section>
+    </div>`;
+    shell.querySelector("#portal-inline-login-submit")?.addEventListener("click", () => inlineLogin(shell).catch((e) => setInlineLoginMessage(e.message || String(e), "warn")));
+    shell.querySelector("#portal-inline-login-reset")?.addEventListener("click", () => inlineReset(shell).catch((e) => setInlineLoginMessage(e.message || String(e), "warn")));
+    revealPortalShell(shell);
+    if (visibleRenderMs === null) visibleRenderMs = elapsedMs();
+    renderDebugPanel();
+  }
+
+  function setInlineLoginMessage(text, kind) {
+    loginMessage = clean(text);
+    loginMessageKind = kind || "warn";
+    render();
+  }
+
+  async function inlineLogin(shell) {
+    const client = await ensureShellSupabase();
+    const email = clean(shell.querySelector("#portal-inline-login-email")?.value).toLowerCase();
+    const password = shell.querySelector("#portal-inline-login-password")?.value || "";
+    if (!email || !password) throw new Error("Enter email and password.");
+    const { error } = await client.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    loginMessage = "";
+    loginMessageKind = "";
+    try { window.sessionStorage.setItem("syncetc_just_logged_in", "1"); } catch {}
+    await syncShellAuth(true);
+    window.dispatchEvent(new CustomEvent("syncetc:portal-auth-changed", { detail: { authenticated: true, email } }));
+  }
+
+  async function inlineReset(shell) {
+    const client = await ensureShellSupabase();
+    const email = clean(shell.querySelector("#portal-inline-login-email")?.value).toLowerCase();
+    if (!email) throw new Error("Enter your email first.");
+    const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/password-reset` });
+    if (error) throw error;
+    setInlineLoginMessage("Password reset email requested.", "ok");
+  }
+
   async function shellLogin() {
     const client = await ensureShellSupabase();
     const email = clean(document.getElementById("portal-login-email")?.value).toLowerCase();
@@ -536,6 +611,17 @@
     const renderStart = performance.now();
     let shell = document.getElementById(SHELL_ID);
     if (!shell) { shell = document.createElement("div"); shell.id = SHELL_ID; hidePortalShell(shell); document.body.insertBefore(shell, document.body.firstChild); mark("shell:created"); }
+
+    if (state.shellAuthChecked && !state.authenticated) {
+      renderLoggedOutShell(shell);
+      return;
+    }
+
+    if (!state.shellAuthChecked) {
+      holdPortalShellHidden(shell, "waiting for login check");
+      renderDebugPanel();
+      return;
+    }
 
     if (!hasRequiredOrganizationStyle()) {
       mark("styleConfig:missing", state.organizationKey || state.organizationName || "no organization style yet");

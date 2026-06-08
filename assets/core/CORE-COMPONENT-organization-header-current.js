@@ -1,12 +1,12 @@
 // CORE-COMPONENT-organization-header-current.js
-// Internal Version: 2026-06-08-026-A
+// Internal Version: 2026-06-08-027-A
 // Purpose: Single shared organization header engine. No page should render its own organization header.
 // Usage: window.SyncEtcOrganizationHeader.render(containerOrId, context)
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-08-026-A";
+  const VERSION = "2026-06-08-027-A";
   const PUBLIC_ORDER = ["home", "about", "info", "aircraft", "calendar", "calendar-events", "events", "gallery", "documents", "documents-resources", "contact"];
   const USER_ORDER = ["user-dashboard", "dashboard", "my-profile", "profile", "roster", "member-roster", "member-documents", "user-documents", "gallery-submission", "submit-gallery"];
   const ADMIN_ORDER = ["organization-admin", "admin-dashboard", "organization-people", "people", "internal-documents", "board-documents", "admin-documents", "events-admin", "documents-admin", "gallery-admin", "aircraft-admin", "assets"];
@@ -223,7 +223,101 @@
     });
   }
 
+  function normalizeConfiguredNavigation(context) {
+    const navigation = obj(context.navigation || {});
+    const profile = obj(context.navigationProfile || navigation.profile || context.navigation_profile || {});
+    const configuredRows = arr(context.navigationRows || navigation.rows || context.navigation_rows);
+    const configuredItems = arr(context.navigationItems || navigation.items || context.navigation_items);
+    if (!configuredRows.length && !configuredItems.length) return null;
+
+    const access = obj(context.access || {});
+    const authenticated = Boolean(context.authenticated ?? context.isAuthenticated ?? obj(context.auth).authenticated);
+    const isUser = Boolean(access.can_view_user_dashboard || access.canViewUserDashboard || context.userVisible || authenticated);
+    const isAdmin = Boolean(access.can_view_organization_admin || access.canViewOrganizationAdmin || context.adminVisible);
+    const isSuperAdmin = Boolean(access.is_organization_super_admin || access.isOrganizationSuperAdmin || context.superAdmin);
+    const isPlatform = Boolean(access.is_platform_admin || access.isPlatformAdmin || context.platformAdmin);
+
+    const defaultRows = [
+      { row_key: "public", row_label: "PUBLIC", sort_order: 10, visibility_rule: "always", is_enabled: true },
+      { row_key: "user", row_label: "USER", sort_order: 20, visibility_rule: "authenticated_user", is_enabled: true },
+      { row_key: "admin", row_label: "ADMIN", sort_order: 30, visibility_rule: "organization_admin", is_enabled: true },
+      { row_key: "platform", row_label: "PLATFORM", sort_order: 40, visibility_rule: "platform_admin", is_enabled: true }
+    ];
+    const rowMap = new Map();
+    for (const row of defaultRows.concat(configuredRows)) {
+      const rowKey = key(obj(row).row_key || obj(row).key || obj(row).row || "public");
+      if (!rowKey) continue;
+      rowMap.set(rowKey, {
+        key: rowKey,
+        label: firstText(obj(row).row_label, obj(row).label, rowKey.toUpperCase()),
+        order: Number(obj(row).sort_order || obj(row).order || 100),
+        visibility: key(obj(row).visibility_rule || obj(row).visibility || (rowKey === "public" ? "always" : rowKey === "user" ? "authenticated_user" : rowKey === "admin" ? "organization_admin" : "platform_admin")),
+        enabled: obj(row).is_enabled !== false && obj(row).enabled !== false,
+      });
+    }
+
+    function rowIsVisible(row) {
+      if (!row.enabled) return false;
+      if (row.visibility === "hidden") return false;
+      if (row.key === "public" || row.visibility === "always") return true;
+      if (row.key === "platform" || row.visibility === "platform_admin") return authenticated && isPlatform;
+      if (row.key === "admin" || row.visibility === "organization_admin") return authenticated && (isAdmin || isSuperAdmin || isPlatform);
+      if (row.key === "user" || row.visibility === "authenticated_user") return authenticated && (isUser || isAdmin || isSuperAdmin || isPlatform);
+      return authenticated;
+    }
+
+    const linksByRow = new Map();
+    for (const itemRaw of configuredItems) {
+      const item = obj(itemRaw);
+      if (item.show_in_header === false || item.show === false) continue;
+      const status = key(item.status || item.item_status || "published");
+      if (["archived", "hidden", "disabled"].includes(status)) continue;
+      const rowKey = key(item.row_key || item.nav_row || item.row || "public");
+      if (!rowMap.has(rowKey)) rowMap.set(rowKey, { key: rowKey, label: rowKey.toUpperCase(), order: 100, visibility: rowKey === "public" ? "always" : "authenticated_user", enabled: true });
+      const link = normalizeLink({
+        key: item.item_key || item.key || item.page_key,
+        page_key: item.page_key || item.item_key,
+        href: item.href || item.url || item.path,
+        label: item.nav_label || item.label || item.title,
+        sort_order: item.sort_order ?? item.order ?? item.item_sort_order
+      }, []);
+      if (!link.key || !link.href || !link.label) continue;
+      const list = linksByRow.get(rowKey) || [];
+      list.push(link);
+      linksByRow.set(rowKey, list);
+    }
+
+    const rowDefs = Array.from(rowMap.values())
+      .filter(rowIsVisible)
+      .sort((a, b) => Number(a.order || 0) - Number(b.order || 0) || a.label.localeCompare(b.label))
+      .map((row) => ({
+        key: row.key,
+        label: row.label,
+        links: sortLinks(linksByRow.get(row.key) || [], []),
+        className: row.key,
+      }))
+      .filter((row) => row.links.length);
+
+    return {
+      configured: true,
+      profile,
+      rowDefs,
+      publicLinks: (rowDefs.find((r) => r.key === "public") || {}).links || [],
+      userLinks: (rowDefs.find((r) => r.key === "user") || {}).links || [],
+      adminLinks: (rowDefs.find((r) => r.key === "admin") || {}).links || [],
+      platformLinks: (rowDefs.find((r) => r.key === "platform") || {}).links || [],
+      authenticated,
+      isUser,
+      isAdmin,
+      isSuperAdmin,
+      isPlatform,
+    };
+  }
+
   function normalizeRows(context) {
+    const configured = normalizeConfiguredNavigation(context);
+    if (configured) return configured;
+
     const nav = obj(context.nav || context.navigation || {});
     const access = obj(context.access || {});
     const authenticated = Boolean(context.authenticated ?? context.isAuthenticated ?? obj(context.auth).authenticated);
@@ -264,6 +358,15 @@
     if (url) return `<img src="${esc(url)}" alt="${esc(firstText(logo.alt_text, organizationName, "Organization logo"))}" loading="lazy" decoding="async">`;
     const initials = clean(context.initials || organization.initials || organizationName || "S").split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p.charAt(0)).join("").toUpperCase() || "S";
     return `<span class="syncetc-org-header-mark">${esc(initials)}</span>`;
+  }
+
+  function shouldShowOrgContextRow(context, rows) {
+    const profile = obj(context.navigationProfile || context.navigation_profile || obj(context.navigation || {}).profile || rows?.profile || {});
+    const orgs = arr(context.organizations || context.organizationOptions || context.availableOrganizations);
+    if (orgs.length > 1) return true;
+    if (context.showOrgContextRow === true || context.show_org_context_row === true) return true;
+    if (profile.show_org_context_row === true || profile.showOrgContextRow === true) return true;
+    return false;
   }
 
   function organizationSelectorHtml(context) {
@@ -335,10 +438,18 @@
     const loginUrl = firstText(context.loginUrl, `/login?next=${encodeURIComponent(location.pathname + location.search)}`);
     const email = firstText(context.email, obj(context.auth).email);
     const showPlatform = rows.platformLinks.length > 0;
+    const rowDefs = Array.isArray(rows.rowDefs) ? rows.rowDefs : null;
+    const navRowsHtml = rowDefs
+      ? rowDefs.map((row) => rowHtml(row.label, row.links || [], row.className || row.key || "custom", context, true)).join("")
+      : `${rowHtml("PUBLIC", rows.publicLinks, "public", context, rows.authenticated || rows.userLinks.length || rows.adminLinks.length || rows.platformLinks.length)}${rowHtml("USER", rows.userLinks, "user", context, true)}${rowHtml("ADMIN", rows.adminLinks, "admin", context, true)}${showPlatform ? rowHtml("PLATFORM", rows.platformLinks, "platform", context, true) : ""}`;
+    const orgContextHtml = shouldShowOrgContextRow(context, rows) ? `<div class="syncetc-org-header-context-row">${organizationSelectorHtml(context)}</div>` : "";
+    const authHtml = rows.authenticated
+      ? `${(obj(context.navigationProfile || context.navigation_profile || rows.profile).show_user_badge === false) ? "" : `<span class="syncetc-org-header-pill ok">${esc(email || "Signed in")}</span>`}${(obj(context.navigationProfile || context.navigation_profile || rows.profile).show_logout_button === false) ? "" : `<button class="syncetc-org-header-auth-btn" data-syncetc-logout type="button">Log out</button>`}`
+      : `<a class="syncetc-org-header-auth-btn" data-syncetc-login href="${esc(loginUrl)}">Log in</a>`;
 
     container.classList.add("syncetc-org-header");
     container.dataset.version = VERSION;
-    container.innerHTML = `<style>${css(cfg)}</style><div class="syncetc-org-header-card" data-version="${esc(VERSION)}"><div class="syncetc-org-header-logo">${logoHtml(context, organizationName, cfg)}</div><div class="syncetc-org-header-main"><div class="syncetc-org-header-title-row"><div class="syncetc-org-header-title">${esc(organizationName)}</div><span class="syncetc-org-header-auth">${rows.authenticated ? `<span class="syncetc-org-header-pill ok">${esc(email || "Signed in")}</span><button class="syncetc-org-header-auth-btn" data-syncetc-logout type="button">Log out</button>` : `<a class="syncetc-org-header-auth-btn" data-syncetc-login href="${esc(loginUrl)}">Log in</a>`}</span></div><div class="syncetc-org-header-context-row">${organizationSelectorHtml(context)}</div>${rowHtml("PUBLIC", rows.publicLinks, "public", context, rows.authenticated || rows.userLinks.length || rows.adminLinks.length || rows.platformLinks.length)}${rowHtml("USER", rows.userLinks, "user", context, true)}${rowHtml("ADMIN", rows.adminLinks, "admin", context, true)}${showPlatform ? rowHtml("PLATFORM", rows.platformLinks, "platform", context, true) : ""}</div></div>`;
+    container.innerHTML = `<style>${css(cfg)}</style><div class="syncetc-org-header-card" data-version="${esc(VERSION)}"><div class="syncetc-org-header-logo">${logoHtml(context, organizationName, cfg)}</div><div class="syncetc-org-header-main"><div class="syncetc-org-header-title-row"><div class="syncetc-org-header-title">${esc(organizationName)}</div><span class="syncetc-org-header-auth">${authHtml}</span></div>${orgContextHtml}${navRowsHtml}</div></div>`;
 
     const onLogout = typeof context.onLogout === "function" ? context.onLogout : obj(context.callbacks).onLogout;
     const onLogin = typeof context.onLogin === "function" ? context.onLogin : obj(context.callbacks).onLogin;

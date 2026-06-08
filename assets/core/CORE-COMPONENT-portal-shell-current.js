@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-08-026-B
+// Internal Version: 2026-06-08-027-A
 // Purpose: Portal shell logged-out repair: show login when no session, but keep logged-in portal rendering style-gated.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-08-026-B";
+  const VERSION = "2026-06-08-027-A";
   const SHELL_ID = "syncetc-organization-header";
   const FOOTER_ID = "syncetc-portal-footer";
   const LOGIN_MODAL_ID = "syncetc-portal-login-modal";
@@ -237,7 +237,10 @@
   function setState(next = {}) {
     mark("setState", Object.keys(next || {}).join(",") || "empty");
     const keepPublicNav = next.publicNavItems === undefined ? state.publicNavItems : arr(next.publicNavItems);
-    state = { ...state, ...next, publicNavItems: keepPublicNav, shellAuthChecked: next.shellAuthChecked ?? state.shellAuthChecked };
+    const keepNavigationProfile = next.navigationProfile === undefined ? (state.navigationProfile || obj(state.accessRow).navigation_profile || null) : next.navigationProfile;
+    const keepNavigationRows = next.navigationRows === undefined ? (state.navigationRows.length ? state.navigationRows : arr(obj(state.accessRow).navigation_rows)) : arr(next.navigationRows);
+    const keepNavigationItems = next.navigationItems === undefined ? (state.navigationItems.length ? state.navigationItems : arr(obj(state.accessRow).navigation_items)) : arr(next.navigationItems);
+    state = { ...state, ...next, publicNavItems: keepPublicNav, navigationProfile: keepNavigationProfile, navigationRows: keepNavigationRows, navigationItems: keepNavigationItems, shellAuthChecked: next.shellAuthChecked ?? state.shellAuthChecked };
     render();
   }
 
@@ -673,6 +676,9 @@
       pageWidth: cfg.pageWidth,
       logo: state.logo,
       activePageKey: state.activePageKey,
+      navigationProfile: state.navigationProfile || obj(state.accessRow).navigation_profile || null,
+      navigationRows: state.navigationRows.length ? state.navigationRows : arr(obj(state.accessRow).navigation_rows),
+      navigationItems: state.navigationItems.length ? state.navigationItems : arr(obj(state.accessRow).navigation_items),
       access: {
         can_view_user_dashboard: groups.userVisible,
         can_view_organization_admin: groups.adminVisible,

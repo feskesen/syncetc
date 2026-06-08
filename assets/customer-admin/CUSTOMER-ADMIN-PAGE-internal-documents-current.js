@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-internal-documents-current.js
-// Internal Version: 2026-06-08-025-A
+// Internal Version: 2026-06-08-026-C
 // Purpose: Access-aware protected document viewer. Shows only internal document visibility for the selected organization.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-08-025-A";
+  const VERSION = "2026-06-08-026-C";
   const ROOT_IDS = ["syncetc-internal-documents-root", "syncetc-organization-internal-documents-root"];
   const PAGE_KEY = "internal-documents";
   const DOCUMENT_SCOPE = "internal";
@@ -81,6 +81,7 @@
       organizationId: row?.organization_id || "",
       selectedOrganizationId: selectedOrgId || row?.organization_id || "",
       organizationOptions: organizationOptions(),
+      organizations: organizationOptions(),
       styleProfile: row?.style_profile || null,
       accessRow: row || null,
       platformAdmin,
@@ -111,13 +112,40 @@
 
   function setMessage(text, kind = "") { message = text || `Version ${VERSION}`; messageKind = kind; render(); }
 
+  function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+  function shouldWaitForSession() {
+    try { return window.sessionStorage.getItem("syncetc_just_logged_in") === "1"; }
+    catch { return false; }
+  }
+
+  function clearJustLoggedIn() {
+    try { window.sessionStorage.removeItem("syncetc_just_logged_in"); }
+    catch {}
+  }
+
+  async function getStableSession() {
+    const attempts = shouldWaitForSession() ? 14 : 5;
+    for (let i = 0; i < attempts; i += 1) {
+      const { data, error } = await supabaseClient.auth.getSession();
+      if (error) throw error;
+      if (data?.session?.access_token) {
+        clearJustLoggedIn();
+        return data.session;
+      }
+      if (i < attempts - 1) await sleep(150);
+    }
+    clearJustLoggedIn();
+    return null;
+  }
+
   async function refresh() {
     loading = true;
     try {
       await ensureSupabase();
-      const { data } = await supabaseClient.auth.getSession();
-      token = data?.session?.access_token || "";
-      email = data?.session?.user?.email || "";
+      const session = await getStableSession();
+      token = session?.access_token || "";
+      email = session?.user?.email || "";
       authChecked = true;
       if (!token) {
         access = [];

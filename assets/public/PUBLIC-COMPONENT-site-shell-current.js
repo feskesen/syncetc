@@ -1,11 +1,11 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-07-021-I
+// Internal Version: 2026-06-07-021-J
 // Purpose: Public page wrapper. It never renders its own header; it feeds context to the single organization header engine.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-I";
+  const VERSION = "2026-06-07-021-J";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -16,6 +16,10 @@
   let supabaseClient = null;
   let context = null;
   let authListenerStarted = false;
+  let supabaseClientPromise = null;
+  let headerRefreshPromise = null;
+  let sessionCheckPromise = null;
+  let authChangeTimer = null;
 
   const PUBLIC_ROOT_SELECTORS = [
     "#syncetc-home-page-root",
@@ -311,14 +315,29 @@
   async function ensureSupabase() {
     debugStep("ensureSupabase:start");
     if (supabaseClient) { debugStep("ensureSupabase:cached"); return supabaseClient; }
-    if (!window.supabase) await loadScript(SUPABASE_JS);
-    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    debugStep("ensureSupabase:created-client");
-    if (!authListenerStarted) {
-      authListenerStarted = true;
-      supabaseClient.auth.onAuthStateChange(() => refreshOrganizationHeader().catch(() => {}));
-    }
-    return supabaseClient;
+    if (supabaseClientPromise) { debugStep("ensureSupabase:join-inflight"); return supabaseClientPromise; }
+
+    supabaseClientPromise = (async () => {
+      if (!window.supabase) await loadScript(SUPABASE_JS);
+      supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      debugStep("ensureSupabase:created-client");
+
+      if (!authListenerStarted) {
+        authListenerStarted = true;
+        supabaseClient.auth.onAuthStateChange((event) => {
+          debugStep("authStateChange", event || "unknown");
+          if (event === "INITIAL_SESSION") return;
+          if (!context || !context.root || !context.root.classList.contains("syncetc-public-shell-ready")) return;
+          if (authChangeTimer) clearTimeout(authChangeTimer);
+          authChangeTimer = setTimeout(() => {
+            refreshOrganizationHeader().catch((error) => debugError("authStateChange:refresh-failed", error));
+          }, 50);
+        });
+      }
+      return supabaseClient;
+    })().finally(() => { supabaseClientPromise = null; });
+
+    return supabaseClientPromise;
   }
 
   async function ensureOrganizationHeader() {
@@ -377,11 +396,14 @@
       || null;
   }
 
-  async function callAccess(action, payload = {}) {
+  async function callAccess(action, payload = {}, tokenOverride = "") {
     debugStep("callAccess:start", action);
     const client = await ensureSupabase();
-    const { data } = await client.auth.getSession();
-    const token = data?.session?.access_token;
+    let token = clean(tokenOverride);
+    if (!token) {
+      const session = await getSessionComplete(client);
+      token = session?.access_token || "";
+    }
     if (!token) { debugStep("callAccess:no-token", action); return null; }
     const accessStartedAt = performance.now();
     const response = await fetch(ACCESS_URL, {
@@ -417,13 +439,22 @@
   }
 
   async function getSessionComplete(client) {
-    debugStep("getSession:start");
-    const startedAt = performance.now();
-    const result = await withFailureTimeout(client.auth.getSession(), 10000, "Login session check");
-    const session = result?.data?.session || null;
-    debugState.latest.sessionKnown = session?.user?.email ? `logged in as ${session.user.email}` : "logged out";
-    debugStep("getSession:done", `${debugState.latest.sessionKnown} in ${Math.round(performance.now() - startedAt)}ms`);
-    return session;
+    if (sessionCheckPromise) {
+      debugStep("getSession:join-inflight");
+      return sessionCheckPromise;
+    }
+
+    sessionCheckPromise = (async () => {
+      debugStep("getSession:start");
+      const startedAt = performance.now();
+      const result = await client.auth.getSession();
+      const session = result?.data?.session || null;
+      debugState.latest.sessionKnown = session?.user?.email ? `logged in as ${session.user.email}` : "logged out";
+      debugStep("getSession:done", `${debugState.latest.sessionKnown} in ${Math.round(performance.now() - startedAt)}ms`);
+      return session;
+    })().finally(() => { sessionCheckPromise = null; });
+
+    return sessionCheckPromise;
   }
 
 
@@ -549,6 +580,15 @@
   }
 
   async function refreshOrganizationHeader() {
+    if (headerRefreshPromise) {
+      debugStep("refreshHeader:join-inflight");
+      return headerRefreshPromise;
+    }
+    headerRefreshPromise = refreshOrganizationHeaderInner().finally(() => { headerRefreshPromise = null; });
+    return headerRefreshPromise;
+  }
+
+  async function refreshOrganizationHeaderInner() {
     debugStep("refreshHeader:start");
     if (!context) { debugStep("refreshHeader:no-context"); return; }
     const payload = context.payload || {};
@@ -588,7 +628,7 @@
       const requestPayload = facts.orgId ? { organization_id: facts.orgId } : {};
       debugState.latest.accessStatus = "starting get_user_dashboard"; updateDebugPanel();
       const accessStartedAt = performance.now();
-      const result = await withFailureTimeout(callAccess("get_user_dashboard", requestPayload), 12000, "Organization access context");
+      const result = await withFailureTimeout(callAccess("get_user_dashboard", requestPayload, session.access_token), 12000, "Organization access context");
       debugState.latest.accessStatus = `done in ${Math.round(performance.now() - accessStartedAt)}ms`; updateDebugPanel();
       if (result) {
         accessRows = arr(result.access);

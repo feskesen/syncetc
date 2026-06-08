@@ -1,11 +1,11 @@
 // USER-PAGE-profile-current.js
-// Internal Version: 2026-06-08-024-A
-// Purpose: User-facing My Profile page. Self-service contact/profile photo updates only; access fields remain read-only.
+// Internal Version: 2026-06-08-024-B
+// Purpose: User-facing My Profile page. Self-service contact/profile photo updates only; membership/access fields remain read-only.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-08-024-A";
+  const VERSION = "2026-06-08-024-B";
   const ROOT_IDS = ["syncetc-user-profile-root", "syncetc-my-profile-root", "syncetc-member-profile-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -187,9 +187,9 @@
     return `
       .profile-wrap{${cssVars(cfg)}max-width:var(--profile-page-width);margin:24px auto 30px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:var(--profile-text);box-sizing:border-box}.profile-wrap *{box-sizing:border-box}
       .profile-card{background:rgba(255,255,255,.96);border:1px solid var(--profile-border);border-radius:var(--profile-radius);box-shadow:var(--profile-shadow);padding:22px;margin:16px 0}.profile-hero{background:linear-gradient(135deg,var(--profile-primary),${rgba(cfg.primary,.78)});color:#fff}.profile-hero h1{margin:10px 0 8px;font-size:clamp(32px,4vw,48px);color:#fff;letter-spacing:-.04em}.profile-hero p{margin:0;color:rgba(255,255,255,.9);line-height:1.45}.profile-eyebrow{display:inline-flex;border-radius:999px;background:rgba(255,255,255,.16);padding:6px 10px;font-size:11px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.profile-message{margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.15);font-weight:900}.profile-message.ok{background:rgba(16,185,129,.18)}.profile-message.warn{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}
-      .profile-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,.7fr);gap:16px}.profile-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.profile-address-grid{display:grid;grid-template-columns:1.4fr .7fr .5fr;gap:12px}.profile-field{display:grid;gap:6px;font-weight:850}.profile-field span{font-size:13px}.profile-field input,.profile-field select{width:100%;min-height:44px;border:1px solid var(--profile-border);border-radius:14px;padding:10px 12px;font:inherit;color:var(--profile-text);background:#fff}.profile-field input[readonly]{background:#f8fafc;color:var(--profile-muted)}.profile-field small{font-weight:650;color:var(--profile-muted);line-height:1.35}.profile-readonly{background:var(--profile-soft);border:1px solid var(--profile-border);border-radius:16px;padding:13px 14px}.profile-readonly strong{color:var(--profile-primary)}
+      .profile-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,.7fr);gap:16px}.profile-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.profile-name-grid{display:grid;grid-template-columns:1.1fr .8fr 1.1fr .55fr;gap:14px;align-items:start}.phone-grid-3{grid-template-columns:repeat(3,minmax(0,1fr))}.profile-address-grid{display:grid;grid-template-columns:1.4fr .7fr .5fr;gap:12px}.profile-emergency-grid{display:grid;grid-template-columns:1.2fr .8fr 1fr;gap:14px}.profile-subhead{margin:20px 0 10px;font-size:20px;letter-spacing:-.02em}.profile-textable{display:flex;gap:7px;align-items:center;margin-top:8px;font-size:12px;font-weight:850;color:var(--profile-muted)}.profile-field{display:grid;gap:6px;font-weight:850}.profile-field span{font-size:13px}.profile-field input,.profile-field select{width:100%;min-height:44px;border:1px solid var(--profile-border);border-radius:14px;padding:10px 12px;font:inherit;color:var(--profile-text);background:#fff}.profile-field input[readonly]{background:#f8fafc;color:var(--profile-muted)}.profile-field small{font-weight:650;color:var(--profile-muted);line-height:1.35}.profile-readonly{background:var(--profile-soft);border:1px solid var(--profile-border);border-radius:16px;padding:13px 14px}.profile-readonly strong{color:var(--profile-primary)}
       .profile-photo-card{display:grid;grid-template-columns:140px minmax(0,1fr);gap:18px;align-items:center}.profile-photo-preview{width:128px;height:128px;border-radius:24px;background:linear-gradient(135deg,var(--profile-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--profile-border);box-shadow:0 12px 28px ${rgba(cfg.primary,.16)}}.profile-photo-preview img{width:100%;height:100%;object-fit:cover}.profile-photo-preview span{font-size:38px;font-weight:950}.profile-drop{border:1px dashed var(--profile-border);border-radius:18px;background:var(--profile-soft);padding:18px;text-align:center;min-height:128px;display:grid;align-content:center;gap:8px}.profile-drop.dragover{box-shadow:0 0 0 3px var(--profile-strong-soft);border-color:var(--profile-primary)}.profile-drop strong{color:var(--profile-primary)}.profile-actions,.profile-phone-grid{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.profile-btn{border:0;border-radius:999px;background:var(--profile-primary);color:#fff;font-weight:950;padding:11px 16px;cursor:pointer}.profile-btn.secondary{background:var(--profile-strong-soft);color:var(--profile-primary)}.profile-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.profile-btn:disabled{opacity:.58;cursor:not-allowed}.profile-phone-grid{align-items:flex-end}.profile-primary-pick{display:flex;gap:7px;align-items:center;min-height:44px;padding:0 12px;border:1px solid var(--profile-border);border-radius:14px;background:var(--profile-soft);font-weight:900;color:var(--profile-primary)}.profile-summary-list{display:grid;gap:8px}.profile-summary-list div{display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--profile-border);padding-bottom:8px}.profile-summary-list span{color:var(--profile-muted);font-weight:750}.profile-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font:12px/1.45 Consolas,Monaco,monospace;max-height:260px;overflow:auto;display:${DEBUG ? "block" : "none"}}
-      @media(max-width:900px){.profile-grid,.profile-form-grid{grid-template-columns:1fr}.profile-photo-card{grid-template-columns:1fr}.profile-photo-preview{margin:auto}.profile-address-grid{grid-template-columns:1fr}}@media(max-width:640px){.profile-btn{width:100%}.profile-phone-grid{display:grid;grid-template-columns:1fr}}
+      @media(max-width:1000px){.profile-name-grid,.phone-grid-3,.profile-emergency-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:900px){.profile-grid,.profile-form-grid{grid-template-columns:1fr}.profile-photo-card{grid-template-columns:1fr}.profile-photo-preview{margin:auto}.profile-address-grid{grid-template-columns:1fr}}@media(max-width:640px){.profile-name-grid,.phone-grid-3,.profile-emergency-grid{grid-template-columns:1fr}.profile-btn{width:100%}.profile-phone-grid{display:grid;grid-template-columns:1fr}}
     `;
   }
 
@@ -242,24 +242,40 @@
     const emailReadOnly = clean(profile.primary_email || profile.email || email);
     const messageClass = messageKind ? ` ${messageKind}` : "";
     root.style.visibility = "visible";
-    root.innerHTML = `<style>${fullCss(cfg)}</style><main class="profile-wrap"><section class="profile-card profile-hero"><span class="profile-eyebrow">My Profile</span><h1>My Profile</h1><p>Update your contact information and profile photo. Access fields remain controlled by your organization.</p><div class="profile-message${messageClass}">${esc(message)}</div></section>
+    root.innerHTML = `<style>${fullCss(cfg)}</style><main class="profile-wrap"><section class="profile-card profile-hero"><span class="profile-eyebrow">My Profile</span><h1>My Profile</h1><p>Update your contact information, emergency contact, and profile photo. Membership and access settings are managed separately.</p><div class="profile-message${messageClass}">${esc(message)}</div></section>
+      <section class="profile-card"><h2>Contact Information</h2>
+        <div class="profile-name-grid">
+          <label class="profile-field"><span>Preferred first name</span><input id="profile-preferred" value="${esc(profile.preferred_first_name)}"></label>
+          <label class="profile-field"><span>Middle name / initial</span><input id="profile-middle" value="${esc(profile.middle_name)}"></label>
+          <label class="profile-field"><span>Last name</span><input value="${esc(profile.last_name)}" readonly><small>Contact your organization to change your last name.</small></label>
+          <label class="profile-field"><span>Suffix</span><input id="profile-suffix" value="${esc(profile.suffix)}" placeholder="Jr., Sr., III"></label>
+        </div>
+        <div class="profile-form-grid phone-grid-3" style="margin-top:14px;">${phoneField("mobile","Mobile phone",profile.mobile_phone)}${phoneField("home","Home phone",profile.home_phone)}${phoneField("work","Work phone",profile.work_phone)}</div>
+        <div class="profile-form-grid" style="margin-top:14px;"><label class="profile-field"><span>Street address</span><input id="profile-address1" value="${esc(profile.address_1)}"></label><label class="profile-field"><span>Address line 2</span><input id="profile-address2" value="${esc(profile.address_2)}"></label></div>
+        <div class="profile-address-grid" style="margin-top:14px;"><label class="profile-field"><span>City</span><input id="profile-city" value="${esc(profile.city)}"></label><label class="profile-field"><span>State</span><input id="profile-state" value="${esc(profile.state)}"></label><label class="profile-field"><span>Zip</span><input id="profile-zip" value="${esc(profile.zip)}"></label></div>
+        <h3 class="profile-subhead">Emergency contact</h3>
+        <div class="profile-emergency-grid"><label class="profile-field"><span>Name</span><input id="profile-emergency-name" value="${esc(profile.emergency_contact_name)}"></label><label class="profile-field"><span>Relationship</span><input id="profile-emergency-relationship" value="${esc(profile.emergency_contact_relationship)}" placeholder="Spouse, parent, friend…"></label><label class="profile-field"><span>Phone</span><input id="profile-emergency-phone" value="${esc(profile.emergency_contact_phone)}" inputmode="tel"></label></div>
+        <div class="profile-actions" style="margin-top:18px;"><button id="profile-save" class="profile-btn" type="button">Update Profile</button><button id="profile-refresh" class="profile-btn secondary" type="button">Refresh</button></div>
+      </section>
       <section class="profile-grid">
         <div class="profile-card profile-photo-card"><div class="profile-photo-preview">${photo ? `<img src="${esc(photo)}" alt="${esc(profile.display_name || "Profile photo")}">` : `<span>${esc(initialsFromProfile())}</span>`}</div><div id="profile-photo-drop" class="profile-drop"><strong>Change profile photo</strong><p>Drag one photo here or click to choose a file.</p><small>JPG, PNG, or WebP under 5 MB. Photos save immediately.</small><div class="profile-actions"><button id="profile-photo-choose" class="profile-btn secondary" type="button">Choose photo</button>${photo ? `<button id="profile-photo-remove" class="profile-btn danger" type="button">Remove photo</button>` : ""}<input id="profile-photo-input" type="file" accept="image/jpeg,image/png,image/webp" hidden></div></div></div>
         <div class="profile-card"><h2>Account email</h2><label class="profile-field"><span>Current login email</span><input value="${esc(emailReadOnly)}" readonly><small>Changing your login email requires confirmation.</small></label><div class="profile-actions" style="margin-top:12px;"><input id="profile-new-email" type="email" placeholder="New email address" style="flex:1;min-height:44px;border:1px solid var(--profile-border);border-radius:14px;padding:10px 12px;"><button id="profile-email-change" class="profile-btn" type="button">Request email change</button></div></div>
       </section>
-      <section class="profile-card"><h2>Contact Information</h2><div class="profile-form-grid"><label class="profile-field"><span>Preferred first name</span><input id="profile-preferred" value="${esc(profile.preferred_first_name)}"></label><label class="profile-field"><span>Last name</span><input value="${esc(profile.last_name)}" readonly><small>Contact your organization to change official name fields.</small></label></div><div class="profile-form-grid" style="margin-top:14px;">${phoneField("mobile","Mobile phone",profile.mobile_phone)}${phoneField("home","Home phone",profile.home_phone)}${phoneField("work","Work phone",profile.work_phone)}</div><div class="profile-form-grid" style="margin-top:14px;"><label class="profile-field"><span>Street address</span><input id="profile-address1" value="${esc(profile.address_1)}"></label><label class="profile-field"><span>Address line 2</span><input id="profile-address2" value="${esc(profile.address_2)}"></label></div><div class="profile-address-grid" style="margin-top:14px;"><label class="profile-field"><span>City</span><input id="profile-city" value="${esc(profile.city)}"></label><label class="profile-field"><span>State</span><input id="profile-state" value="${esc(profile.state)}"></label><label class="profile-field"><span>Zip</span><input id="profile-zip" value="${esc(profile.zip)}"></label></div><div class="profile-actions" style="margin-top:18px;"><button id="profile-save" class="profile-btn" type="button">Update Profile</button><button id="profile-refresh" class="profile-btn secondary" type="button">Refresh</button></div></section>
       <section class="profile-card"><h2>Membership summary</h2><p class="profile-readonly">These fields are read-only. Ask your organization administrator if they are wrong.</p><div class="profile-summary-list"><div><strong>Status</strong><span>${esc(profile.lifecycle_status_label || profile.lifecycle_status_key || "")}</span></div><div><strong>Membership class</strong><span>${esc(profile.membership_class_label || profile.membership_class_key || "")}</span></div><div><strong>Application/onboarding stage</strong><span>${esc(profile.application_stage_label || profile.application_stage_key || "")}</span></div><div><strong>Roles</strong><span>${esc(roleText)}</span></div><div><strong>Member number</strong><span>${esc(profile.member_number || "")}</span></div><div><strong>Title/position</strong><span>${esc(profile.title || "")}</span></div></div></section><pre class="profile-backend">${esc(JSON.stringify(backend || {}, null, 2))}</pre></main>`;
     bindFormEvents();
   }
 
   function phoneField(id, label, value) {
     const checked = key(profile?.primary_phone_type || "mobile") === id ? "checked" : "";
-    return `<div class="profile-phone-grid"><label class="profile-field" style="flex:1;"><span>${esc(label)}</span><input id="profile-${id}-phone" value="${esc(value)}" inputmode="tel"></label><label class="profile-primary-pick"><input type="radio" name="profile-primary-phone" value="${esc(id)}" ${checked}> Primary</label></div>`;
+    const textCapable = Boolean(profile?.mobile_can_text || profile?.can_text_mobile || profile?.sms_ok);
+    const textOption = id === "mobile" ? `<label class="profile-textable"><input id="profile-mobile-can-text" type="checkbox" ${textCapable ? "checked" : ""}> Can receive texts</label>` : "";
+    return `<div class="profile-phone-grid"><label class="profile-field" style="flex:1;"><span>${esc(label)}</span><input id="profile-${id}-phone" value="${esc(value)}" inputmode="tel">${textOption}</label><label class="profile-primary-pick"><input type="radio" name="profile-primary-phone" value="${esc(id)}" ${checked}> Preferred</label></div>`;
   }
 
   function bindFormEvents() {
-    ["profile-preferred","profile-mobile-phone","profile-home-phone","profile-work-phone","profile-address1","profile-address2","profile-city","profile-state","profile-zip"].forEach((id) => $(id)?.addEventListener("input", () => setDirty(true)));
+    ["profile-preferred","profile-middle","profile-suffix","profile-mobile-phone","profile-home-phone","profile-work-phone","profile-address1","profile-address2","profile-city","profile-state","profile-zip","profile-emergency-name","profile-emergency-relationship","profile-emergency-phone"].forEach((id) => $(id)?.addEventListener("input", () => setDirty(true)));
     document.querySelectorAll("input[name='profile-primary-phone']").forEach((el) => el.addEventListener("change", () => setDirty(true)));
+    $("profile-mobile-can-text")?.addEventListener("change", () => setDirty(true));
     $("profile-save")?.addEventListener("click", () => runButton("profile-save", "Saving…", saveProfile));
     $("profile-refresh")?.addEventListener("click", () => { if (!dirty || confirm("Discard unsaved changes and refresh?") ) { dirty = false; refresh(); } });
     $("profile-photo-choose")?.addEventListener("click", () => $("profile-photo-input")?.click());
@@ -288,15 +304,21 @@
     const payload = {
       organization_id: selectedOrgId,
       preferred_first_name: clean($("profile-preferred")?.value),
+      middle_name: clean($("profile-middle")?.value),
+      suffix: clean($("profile-suffix")?.value),
       mobile_phone: clean($("profile-mobile-phone")?.value),
       home_phone: clean($("profile-home-phone")?.value),
       work_phone: clean($("profile-work-phone")?.value),
       primary_phone_type: selectedPrimaryPhoneType(),
+      mobile_can_text: Boolean($("profile-mobile-can-text")?.checked),
       address_1: clean($("profile-address1")?.value),
       address_2: clean($("profile-address2")?.value),
       city: clean($("profile-city")?.value),
       state: clean($("profile-state")?.value),
       zip: clean($("profile-zip")?.value),
+      emergency_contact_name: clean($("profile-emergency-name")?.value),
+      emergency_contact_relationship: clean($("profile-emergency-relationship")?.value),
+      emergency_contact_phone: clean($("profile-emergency-phone")?.value),
     };
     const res = await call("member_save_my_profile", payload);
     profile = res.profile || profile;

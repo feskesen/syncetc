@@ -1,11 +1,11 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-07-021-E
+// Internal Version: 2026-06-07-021-F
 // Purpose: Public page wrapper. It never renders its own header; it feeds context to the single organization header engine.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-E";
+  const VERSION = "2026-06-07-021-F";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -229,19 +229,36 @@
     return window.SyncEtcOrganizationHeader;
   }
 
+  function isPublicNavCandidate(rawItem, computedKey) {
+    const item = obj(rawItem);
+    const pageKey = key(computedKey || item.page_key || item.key || item.template_key || item.slug || item.label || "");
+    const templateCategory = key(item.template_category || item.category || "");
+    const accessDefault = key(item.access_default || item.access || item.visibility || "");
+    const moduleKey = key(item.module_key || item.module_category || "");
+    if (["user-dashboard", "dashboard", "roster", "member-roster", "organization-admin", "admin-dashboard", "organization-people", "people", "access-admin", "platform-access-tools"].includes(pageKey)) return false;
+    if (["user", "member", "organization-admin", "customer-admin", "admin", "platform"].includes(templateCategory)) return false;
+    if (["user", "member", "organization-admin", "customer-admin", "admin", "platform"].includes(accessDefault)) return false;
+    if (["people-access", "roster", "access"].includes(moduleKey) && pageKey !== "contact") return false;
+    return true;
+  }
+
   function shellNavItems(payload) {
     const shell = obj(payload?.site_shell);
-    const raw = arr(shell.nav_items).length ? arr(shell.nav_items) : arr(shell.public_nav_items);
-    const items = raw.map((item, index) => ({
-      key: key(item.page_key || item.key || item.slug || item.label || ""),
-      label: clean(item.label || item.nav_label || item.title || item.page_key || item.key || "Page"),
-      href: safeHref(item.href || item.url || item.path || (item.page_key === "home" ? "/" : item.page_key ? `/${item.page_key}` : "#")),
-      order: Number(item.order ?? item.sort_order ?? item.nav_order ?? index + 10),
-      zone: "public",
-    })).filter((item) => item.key && item.href && item.label);
+    const raw = arr(shell.public_nav_items).length ? arr(shell.public_nav_items) : arr(shell.nav_items);
+    const items = raw.map((item, index) => {
+      const pageKey = key(item.page_key || item.key || item.template_key || item.slug || item.label || "");
+      return {
+        key: pageKey,
+        label: clean(item.label || item.nav_label || item.title || item.template_name || item.page_key || item.key || "Page"),
+        href: safeHref(item.href || item.url || item.path || (pageKey === "home" ? "/" : pageKey ? `/${pageKey}` : "#")),
+        order: Number(item.order ?? item.sort_order ?? item.nav_order ?? index + 10),
+        zone: "public",
+        raw: item
+      };
+    }).filter((item) => item.key && item.href && item.label && isPublicNavCandidate(item.raw, item.key));
 
-    if (!items.some((item) => item.key === "home")) items.push({ key: "home", label: "Home", href: "/", order: 0, zone: "public" });
-    return items;
+    if (!items.some((item) => item.key === "home" || item.href === "/")) items.push({ key: "home", label: "Home", href: "/", order: 0, zone: "public" });
+    return items.map(({ raw, ...item }) => item);
   }
 
   function footerLogoHtml(logo, orgName) {
@@ -272,6 +289,19 @@
     const result = await response.json().catch(() => null);
     if (!response.ok || !result || result.ok === false) return null;
     return result;
+  }
+
+  function withTimeout(promise, ms, fallback = null) {
+    let timer = null;
+    return Promise.race([
+      Promise.resolve(promise).catch(() => fallback),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(fallback), ms); })
+    ]).finally(() => { if (timer) clearTimeout(timer); });
+  }
+
+  async function getSessionFast(client) {
+    const result = await withTimeout(client.auth.getSession(), 1600, null);
+    return result?.data?.session || null;
   }
 
 
@@ -406,45 +436,38 @@
       return;
     }
 
-    let styleResult = requiredStyleConfig(payload);
+    const styleResult = requiredStyleConfig(payload);
     if (!styleResult.ok) {
       target.innerHTML = requiredStyleErrorHtml(styleResult);
       return;
     }
-    target.innerHTML = neutralHeaderLoadingHtml(styleResult.config);
 
-    let client = null;
-    let session = null;
-    try {
-      client = await ensureSupabase();
-      for (let i = 0; i < 6; i += 1) {
-        const { data } = await client.auth.getSession();
-        session = data?.session || null;
-        if (session?.access_token) break;
-        if (i < 5) await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-    } catch (error) {
-      session = null;
+    // Render the real shared header immediately with public context. Do not leave public pages stuck on a loading bar.
+    header.render(target, headerContext(payload, null, null, [], false));
+
+    const client = await withTimeout(ensureSupabase(), 1800, null);
+    if (!client) return;
+
+    const session = await getSessionFast(client);
+    if (!session?.access_token) {
+      header.render(target, headerContext(payload, null, null, [], false));
+      return;
     }
 
     let accessRow = null;
     let accessRows = [];
     let platformAdmin = false;
 
-    if (session?.access_token) {
-      try {
-        const facts = headerBaseFacts(payload);
-        const result = await callAccess("get_user_dashboard", facts.orgId ? { organization_id: facts.orgId } : {});
-        accessRows = arr(result?.access);
-        accessRow = chooseAccessRow(accessRows, payload);
-        platformAdmin = Boolean(result?.platform_admin);
-      } catch (error) {
-        accessRow = null;
-        accessRows = [];
-        platformAdmin = false;
-      }
+    const facts = headerBaseFacts(payload);
+    const requestPayload = facts.orgId ? { organization_id: facts.orgId } : {};
+    const result = await withTimeout(callAccess("get_user_dashboard", requestPayload), 2600, null);
+    if (result) {
+      accessRows = arr(result.access);
+      accessRow = chooseAccessRow(accessRows, payload);
+      platformAdmin = Boolean(result.platform_admin || result.platform_override);
     }
 
+    // Re-render with authenticated context even if access lookup failed, so the header still shows Log out rather than Log in.
     header.render(target, headerContext(payload, session, accessRow, accessRows, platformAdmin));
   }
 

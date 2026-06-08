@@ -1,11 +1,11 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-07-021-C
+// Internal Version: 2026-06-07-021-D
 // Purpose: Public page wrapper. It never renders its own header; it feeds context to the single organization header engine.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-C";
+  const VERSION = "2026-06-07-021-D";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -217,46 +217,33 @@
     ];
   }
 
-  async function refreshOrganizationHeader() {
-    if (!context) return;
-    const header = await ensureOrganizationHeader();
-    const target = document.getElementById(HEADER_ID);
-    if (!target) return;
-
-    const payload = context.payload || {};
+  function headerBaseFacts(payload) {
     const org = obj(payload.organization);
     const shell = obj(payload.site_shell);
     const orgId = clean(org.organization_id || shell.organization_id || "");
     const orgKey = clean(org.organization_key || shell.organization_key || "");
     const orgName = clean(shell.organization_name || org.display_name || org.legal_name || orgKey || "Organization");
     const logo = shell.logo || null;
+    const publicNavItems = defaultPublicNavIfNeeded(shellNavItems(payload));
+    return { org, shell, orgId, orgKey, orgName, logo, publicNavItems };
+  }
 
-    const client = await ensureSupabase();
-    const { data } = await client.auth.getSession();
-    const session = data?.session || null;
-
-    let accessRow = null;
-    let accessRows = [];
-    let platformAdmin = false;
-    if (session?.access_token) {
-      const result = await callAccess("get_user_dashboard", orgId ? { organization_id: orgId } : {});
-      accessRows = arr(result?.access);
-      accessRow = chooseAccessRow(accessRows, payload);
-      platformAdmin = Boolean(result?.platform_admin);
-    }
-
+  function headerContext(payload, session, accessRow, accessRows, platformAdmin) {
+    const base = headerBaseFacts(payload);
     const caps = obj(obj(accessRow).capabilities);
     const isOrgAdmin = Boolean(obj(accessRow).is_organization_admin || caps.can_view_organization_admin || platformAdmin);
     const canUser = Boolean(obj(accessRow).organization_id || caps.can_view_user_dashboard || isOrgAdmin || platformAdmin);
-    const publicNavItems = defaultPublicNavIfNeeded(shellNavItems(payload));
+
     const userLinks = canUser ? [
       { key: "user-dashboard", label: "Dashboard", href: "/user-dashboard", order: 5 },
       ...portalPageLinks(accessRow, "user")
     ] : [];
+
     const adminLinks = isOrgAdmin ? [
       { key: "organization-admin", label: "Admin Dashboard", href: "/organization-admin", order: 5 },
       ...portalPageLinks(accessRow, "admin")
     ] : [];
+
     const platformLinks = platformAdmin ? [
       { key: "platform-access-tools", label: "Platform Access Tools", href: "/access-admin", order: 10 },
       { key: "customer-builder", label: "Customer Builder", href: "/customer-builder", order: 20 },
@@ -264,34 +251,88 @@
       { key: "layout-designer", label: "Layout Designer", href: "/layout-designer", order: 40 }
     ] : [];
 
-    header.render(target, {
+    return {
       authenticated: Boolean(session?.access_token),
       email: session?.user?.email || "",
-      organizationName: orgName,
-      organization: { organization_id: orgId, organization_key: orgKey, display_name: orgName },
-      selectedOrganizationId: accessRow?.organization_id || orgId,
-      organizations: accessRows.map((row) => ({ organization_id: row.organization_id, display_name: row.organization_name, organization_key: row.organization_key })),
+      organizationName: base.orgName,
+      organization: { organization_id: base.orgId, organization_key: base.orgKey, display_name: base.orgName },
+      selectedOrganizationId: accessRow?.organization_id || base.orgId,
+      organizations: arr(accessRows).map((row) => ({ organization_id: row.organization_id, display_name: row.organization_name, organization_key: row.organization_key })),
       styleProfile: payload.style_profile || accessRow?.style_profile || null,
-      logo,
-      activePageKey: context.activePageKey || payload?.page?.page_key || "",
+      logo: base.logo,
+      activePageKey: context?.activePageKey || payload?.page?.page_key || "",
       access: {
         can_view_user_dashboard: canUser,
         can_view_organization_admin: isOrgAdmin,
-        is_platform_admin: platformAdmin
+        is_platform_admin: Boolean(platformAdmin)
       },
       nav: {
-        public: publicNavItems,
+        public: base.publicNavItems,
         user: userLinks,
         admin: adminLinks,
         platform: platformLinks
       },
       loginUrl: `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`,
       onLogout: async () => {
+        const client = await ensureSupabase();
         await client.auth.signOut();
         await refreshOrganizationHeader();
       },
       onOrganizationChange: () => {}
-    });
+    };
+  }
+
+  async function renderHeaderImmediately(header, target, payload) {
+    header.render(target, headerContext(payload, null, null, [], false));
+  }
+
+  async function refreshOrganizationHeader() {
+    if (!context) return;
+    const payload = context.payload || {};
+    const target = document.getElementById(HEADER_ID);
+    if (!target) return;
+
+    let header = null;
+    try {
+      header = await ensureOrganizationHeader();
+    } catch (error) {
+      target.innerHTML = `<div class="syncetc-public-error"><strong>Navigation unavailable.</strong><br>${escapeHtml(error?.message || "Shared header did not load.")}</div>`;
+      return;
+    }
+
+    // Always render the public organization header first. This prevents blank public-page headers
+    // if Supabase auth/access lookup is slow or unavailable.
+    renderHeaderImmediately(header, target, payload).catch(() => {});
+
+    let client = null;
+    let session = null;
+    try {
+      client = await ensureSupabase();
+      const { data } = await client.auth.getSession();
+      session = data?.session || null;
+    } catch (error) {
+      return;
+    }
+
+    let accessRow = null;
+    let accessRows = [];
+    let platformAdmin = false;
+
+    if (session?.access_token) {
+      try {
+        const facts = headerBaseFacts(payload);
+        const result = await callAccess("get_user_dashboard", facts.orgId ? { organization_id: facts.orgId } : {});
+        accessRows = arr(result?.access);
+        accessRow = chooseAccessRow(accessRows, payload);
+        platformAdmin = Boolean(result?.platform_admin);
+      } catch (error) {
+        accessRow = null;
+        accessRows = [];
+        platformAdmin = false;
+      }
+    }
+
+    header.render(target, headerContext(payload, session, accessRow, accessRows, platformAdmin));
   }
 
   function render(options) {

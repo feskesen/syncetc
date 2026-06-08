@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-07-021-M
-// Purpose: Portal shell with timing diagnostics for auth/style/header initialization. No behavior change unless ?syncetc_debug=1.
+// Internal Version: 2026-06-07-021-N
+// Purpose: Portal shell render gate: no visible header/page shell until organization style and shared header are ready. Diagnostics remain behind ?syncetc_debug=1.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-M";
+  const VERSION = "2026-06-07-021-N";
   const SHELL_ID = "syncetc-organization-header";
   const FOOTER_ID = "syncetc-portal-footer";
   const LOGIN_MODAL_ID = "syncetc-portal-login-modal";
@@ -103,32 +103,65 @@
   function hexToRgb(hex) { const c = String(hex || "").replace("#", "").trim(); if (!/^[0-9a-f]{6}$/i.test(c)) throw new Error("Missing required organization style color."); return { r:parseInt(c.slice(0,2),16), g:parseInt(c.slice(2,4),16), b:parseInt(c.slice(4,6),16) }; }
   function rgba(hex, a) { const r = hexToRgb(hex); return `rgba(${r.r}, ${r.g}, ${r.b}, ${a})`; }
 
+  const SCRIPT_PROMISES = window.__syncetcScriptPromises || (window.__syncetcScriptPromises = {});
+
   function loadScript(src) {
-    return new Promise((resolve, reject) => {
-      if (document.querySelector(`script[src="${src}"]`)) {
+    if (SCRIPT_PROMISES[src]) {
+      mark("loadScript:in-flight", src);
+      return SCRIPT_PROMISES[src];
+    }
+
+    const existing = document.querySelector(`script[src="${src}"]`);
+    if (existing) {
+      if (existing.dataset.syncetcLoaded === "true") {
         mark("loadScript:cached", src);
-        return resolve();
+        return Promise.resolve();
       }
-      mark("loadScript:start", src);
-      const s = document.createElement("script");
-      s.src = src;
-      s.onload = () => { mark("loadScript:loaded", src); resolve(); };
-      s.onerror = () => { mark("loadScript:error", src); reject(new Error(`Failed to load ${src}`)); };
-      document.head.appendChild(s);
+      mark("loadScript:existing-wait", src);
+      SCRIPT_PROMISES[src] = new Promise((resolve, reject) => {
+        existing.addEventListener("load", () => { existing.dataset.syncetcLoaded = "true"; mark("loadScript:loaded-existing", src); resolve(); }, { once: true });
+        existing.addEventListener("error", () => { mark("loadScript:error-existing", src); reject(new Error(`Failed to load ${src}`)); }, { once: true });
+      });
+      return SCRIPT_PROMISES[src];
+    }
+
+    mark("loadScript:start", src);
+    SCRIPT_PROMISES[src] = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = src;
+      script.async = true;
+      script.onload = () => { script.dataset.syncetcLoaded = "true"; mark("loadScript:loaded", src); resolve(); };
+      script.onerror = () => { mark("loadScript:error", src); reject(new Error(`Failed to load ${src}`)); };
+      document.head.appendChild(script);
     });
+    return SCRIPT_PROMISES[src];
   }
 
   function hasSharedOrganizationHeader() {
     return Boolean(window.SyncEtcOrganizationHeader && typeof window.SyncEtcOrganizationHeader.render === "function");
   }
 
+  let sharedHeaderPromise = null;
+
   async function ensureSharedOrganizationHeader() {
     mark("ensureOrganizationHeader:start");
-    if (hasSharedOrganizationHeader()) { mark("ensureOrganizationHeader:cached", window.SyncEtcOrganizationHeader.VERSION || "unknown version"); return window.SyncEtcOrganizationHeader; }
-    await loadScript(ORGANIZATION_HEADER_URL);
-    if (!hasSharedOrganizationHeader()) throw new Error("Shared organization header did not load correctly.");
-    mark("ensureOrganizationHeader:ready", window.SyncEtcOrganizationHeader.VERSION || "unknown version");
-    return window.SyncEtcOrganizationHeader;
+    if (hasSharedOrganizationHeader()) {
+      mark("ensureOrganizationHeader:cached", window.SyncEtcOrganizationHeader.VERSION || "unknown version");
+      return window.SyncEtcOrganizationHeader;
+    }
+    if (!sharedHeaderPromise) {
+      sharedHeaderPromise = loadScript(ORGANIZATION_HEADER_URL).then(() => {
+        if (!hasSharedOrganizationHeader()) throw new Error("Shared organization header did not load correctly.");
+        mark("ensureOrganizationHeader:ready", window.SyncEtcOrganizationHeader.VERSION || "unknown version");
+        return window.SyncEtcOrganizationHeader;
+      }).catch((error) => {
+        sharedHeaderPromise = null;
+        throw error;
+      });
+    } else {
+      mark("ensureOrganizationHeader:in-flight");
+    }
+    return sharedHeaderPromise;
   }
 
   async function ensureShellSupabase() {
@@ -197,8 +230,11 @@
     return hasColorSet && hasWidth;
   }
 
-  function renderWaitingForOrganizationStyle(shell) {
-    shell.innerHTML = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:1180px;margin:0 auto;padding:12px 18px;box-sizing:border-box;"><div style="border:1px solid #d8dee8;border-radius:18px;background:#fff;padding:14px 16px;color:#172033;font-weight:900;box-shadow:0 8px 22px rgba(23,32,51,.06);">Loading organization style…</div></div>`;
+  function holdPortalShellHidden(shell, reason) {
+    mark("render:held", reason || "waiting");
+    shell.style.visibility = "hidden";
+    shell.style.minHeight = "0";
+    shell.innerHTML = "";
   }
 
   function selectedOrgId() {
@@ -462,7 +498,7 @@
 
     if (!hasRequiredOrganizationStyle()) {
       mark("styleConfig:missing", state.organizationKey || state.organizationName || "no organization style yet");
-      renderWaitingForOrganizationStyle(shell);
+      holdPortalShellHidden(shell, "waiting for organization style");
       renderDebugPanel();
       return;
     }
@@ -478,16 +514,19 @@
 
     if (!hasSharedOrganizationHeader()) {
       mark("header:not-ready");
-      shell.innerHTML = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:${cfg.pageWidth};margin:0 auto;padding:12px 18px;color:${cfg.text};box-sizing:border-box"><div style="border:1px solid ${cfg.border};border-radius:${cfg.radius};background:#fff;padding:14px;font-weight:900;color:${cfg.primary}">Loading organization header...</div></div>`;
+      holdPortalShellHidden(shell, "waiting for shared organization header");
       renderDebugPanel();
       ensureSharedOrganizationHeader().then(() => render()).catch((error) => {
         mark("header:load-error", error?.message || String(error));
-        shell.innerHTML = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:${cfg.pageWidth};margin:0 auto;padding:12px 18px;color:#8a1f1f;box-sizing:border-box"><div style="border:1px solid #f0b8b8;border-radius:14px;background:#fff7f7;padding:14px;font-weight:900">Header failed to load: ${esc(error.message || String(error))}</div></div>`;
+        shell.style.visibility = "visible";
+        shell.innerHTML = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:${cfg.pageWidth};margin:0 auto;padding:12px 18px;color:#8a1f1f;box-sizing:border-box"><div style="border:3px solid #dc2626;border-radius:14px;background:#fff7f7;padding:18px;font-size:18px;font-weight:950">HEADER CONFIGURATION ERROR<br><span style="font-size:13px;font-weight:800">The shared organization header could not be loaded: ${esc(error.message || String(error))}</span></div></div>`;
         renderDebugPanel();
       });
       return;
     }
 
+    shell.style.visibility = "visible";
+    shell.style.minHeight = "";
     mark("headerRender:start");
     window.SyncEtcOrganizationHeader.render(shell, {
       organizationName,

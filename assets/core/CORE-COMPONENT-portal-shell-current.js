@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-08-027-A
-// Purpose: Portal shell logged-out repair: show login when no session, but keep logged-in portal rendering style-gated.
+// Internal Version: 2026-06-08-027-B
+// Purpose: Portal shell navigation config safety repair: initializes navigation arrays so page scripts cannot crash while setting shell state.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-08-027-A";
+  const VERSION = "2026-06-08-027-B";
   const SHELL_ID = "syncetc-organization-header";
   const FOOTER_ID = "syncetc-portal-footer";
   const LOGIN_MODAL_ID = "syncetc-portal-login-modal";
@@ -16,7 +16,14 @@
     "#syncetc-user-roster-root",
     "#syncetc-member-roster-root",
     "#syncetc-organization-admin-root",
-    "#syncetc-organization-people-root"
+    "#syncetc-organization-people-root",
+    "#syncetc-user-profile-root",
+    "#syncetc-my-profile-root",
+    "#syncetc-member-profile-root",
+    "#syncetc-user-documents-root",
+    "#syncetc-member-documents-root",
+    "#syncetc-internal-documents-root",
+    "#syncetc-organization-internal-documents-root"
   ];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -47,6 +54,9 @@
     accessRow: null,
     platformAdmin: false,
     publicNavItems: [],
+    navigationProfile: null,
+    navigationRows: [],
+    navigationItems: [],
     logo: null,
     activePageKey: "",
     shellAuthChecked: false,
@@ -237,9 +247,11 @@
   function setState(next = {}) {
     mark("setState", Object.keys(next || {}).join(",") || "empty");
     const keepPublicNav = next.publicNavItems === undefined ? state.publicNavItems : arr(next.publicNavItems);
+    const currentNavigationRows = arr(state.navigationRows);
+    const currentNavigationItems = arr(state.navigationItems);
     const keepNavigationProfile = next.navigationProfile === undefined ? (state.navigationProfile || obj(state.accessRow).navigation_profile || null) : next.navigationProfile;
-    const keepNavigationRows = next.navigationRows === undefined ? (state.navigationRows.length ? state.navigationRows : arr(obj(state.accessRow).navigation_rows)) : arr(next.navigationRows);
-    const keepNavigationItems = next.navigationItems === undefined ? (state.navigationItems.length ? state.navigationItems : arr(obj(state.accessRow).navigation_items)) : arr(next.navigationItems);
+    const keepNavigationRows = next.navigationRows === undefined ? (currentNavigationRows.length ? currentNavigationRows : arr(obj(state.accessRow).navigation_rows)) : arr(next.navigationRows);
+    const keepNavigationItems = next.navigationItems === undefined ? (currentNavigationItems.length ? currentNavigationItems : arr(obj(state.accessRow).navigation_items)) : arr(next.navigationItems);
     state = { ...state, ...next, publicNavItems: keepPublicNav, navigationProfile: keepNavigationProfile, navigationRows: keepNavigationRows, navigationItems: keepNavigationItems, shellAuthChecked: next.shellAuthChecked ?? state.shellAuthChecked };
     render();
   }

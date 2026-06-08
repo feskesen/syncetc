@@ -1,12 +1,12 @@
 // ADMIN-PAGE-header-navigation-setup-current.js
-// Internal Version: 2026-06-08-081-A
+// Internal Version: 2026-06-08-081-B
 // Purpose: Platform-admin Header / Navigation Setup Foundation. Configures labels, rows, order, visibility, and privacy-first access settings.
 // Uses core-admin-action backend actions: navigation_list_organizations, navigation_get_setup, navigation_save_setup.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-08-081-A";
+  const VERSION = "2026-06-08-081-B";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -31,6 +31,8 @@
   let organizations = [];
   let setup = null;
   let selectedOrganizationId = "";
+  let lastErrorMessage = "";
+  let hasUnsavedChanges = false;
 
   function root() {
     let el = document.getElementById(ROOT_ID);
@@ -70,9 +72,31 @@
   function setStatus(message, type = "info") {
     const el = document.getElementById("se-nav-status");
     if (!el) return;
-    el.textContent = message;
+    el.innerHTML = esc(message);
     el.dataset.type = type;
   }
+
+  function loginUrl() {
+    return `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+  }
+
+  function markDirty() {
+    hasUnsavedChanges = true;
+    const el = document.getElementById("se-unsaved-flag");
+    if (el) el.textContent = "Unsaved changes";
+  }
+
+  function clearDirty() {
+    hasUnsavedChanges = false;
+    const el = document.getElementById("se-unsaved-flag");
+    if (el) el.textContent = "";
+  }
+
+  window.addEventListener("beforeunload", (event) => {
+    if (!hasUnsavedChanges) return;
+    event.preventDefault();
+    event.returnValue = "You have unsaved Header/Nav Setup changes.";
+  });
 
   function setOutput(value) {
     const el = document.getElementById("se-nav-output");
@@ -144,6 +168,8 @@
       #${ROOT_ID} button.secondary{background:#eef3f8;color:#1f4f82;border:1px solid #cbd5e1}
       #${ROOT_ID} button.warn{background:#991b1b;color:#fff}
       #${ROOT_ID} button:disabled{opacity:.5;cursor:not-allowed}
+      #${ROOT_ID} a.se-login-link{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:#1f4f82;color:#fff;font-weight:950;padding:10px 14px;text-decoration:none}
+      #${ROOT_ID} .se-unsaved{color:#9a3412;font-size:12px;font-weight:950}
       #${ROOT_ID} .se-status{border-radius:14px;padding:10px 12px;background:#eef3f8;color:#1f4f82;font-weight:850;margin-top:12px}
       #${ROOT_ID} .se-status[data-type='success']{background:#e7f6ec;color:#14532d}
       #${ROOT_ID} .se-status[data-type='warn']{background:#fff7ed;color:#9a3412}
@@ -278,6 +304,7 @@
   function render() {
     const r = root();
     const selectedOrg = organizations.find((o) => clean(o.organization_id) === selectedOrganizationId) || {};
+    const needsLogin = !authenticatedEmail && /No active Supabase login session/i.test(lastErrorMessage || "");
     r.innerHTML = `<style>${css()}</style>
       <section class="se-card">
         <h1 class="se-title">Header / Navigation Setup</h1>
@@ -286,10 +313,11 @@
           <label>Organization<select id="se-org-select">${organizations.map((org) => `<option value="${esc(org.organization_id)}" ${clean(org.organization_id) === selectedOrganizationId ? "selected" : ""}>${esc(org.display_name || org.organization_key)}</option>`).join("")}</select></label>
           <button id="se-refresh" class="secondary" type="button">Refresh</button>
           <button id="se-save" type="button" ${setup ? "" : "disabled"}>Save Header/Nav Setup</button>
-          <span class="pill">${esc(authenticatedEmail)}</span>
+          ${authenticatedEmail ? `<span class="pill">${esc(authenticatedEmail)}</span>` : `<a class="se-login-link" href="${esc(loginUrl())}">Log in</a>`}
+          <span id="se-unsaved-flag" class="se-unsaved"></span>
           <span class="pill">${esc(VERSION)}</span>
         </div>
-        <div id="se-nav-status" class="se-status">${setup ? `Loaded ${esc(selectedOrg.display_name || "organization")}` : "Loading..."}</div>
+        <div id="se-nav-status" class="se-status">${needsLogin ? `No active Supabase login session. <a href="${esc(loginUrl())}">Log in here</a>, then return to this page.` : setup ? `Loaded ${esc(selectedOrg.display_name || "organization")}` : "Loading..."}</div>
       </section>
 
       ${setup ? `<section class="se-card">
@@ -297,8 +325,8 @@
         <div class="se-grid">
           <label>Profile name${input("profile_name", setup.profile?.profile_name || "", "data-profile='true'")}</label>
           <label>Layout style${select("header_layout_key", setup.profile?.header_layout_key || "pill-rows", [["pill-rows","Pill rows (current)"],["compact-pill-rows","Compact rows — future"],["dropdown","Dropdown menus — future"]], "data-profile='true'")}</label>
-          <label><span>Show duplicate organization context row</span><input data-profile="true" data-field="show_org_context_row" type="checkbox" ${setup.profile?.show_org_context_row ? "checked" : ""}></label>
-          <label><span>Show logout button</span><input data-profile="true" data-field="show_logout_button" type="checkbox" ${checked(setup.profile?.show_logout_button)}></label>
+          <label><span>Show organization context sub-row <small>(the duplicate org-name/key row)</small></span><input data-profile="true" data-field="show_org_context_row" type="checkbox" ${setup.profile?.show_org_context_row ? "checked" : ""}></label>
+          <label><span>Show login / logout button</span><input data-profile="true" data-field="show_logout_button" type="checkbox" ${checked(setup.profile?.show_logout_button)}></label>
         </div>
       </section>
 
@@ -388,6 +416,7 @@
     });
     setup = result.setup;
     setOutput(result);
+    clearDirty();
     setStatus("Header/Nav Setup saved. Review live pages with ?syncetc_debug=1 after upload.", "success");
     render();
   }
@@ -400,19 +429,33 @@
     setup = result.setup;
     selectedOrganizationId = clean(setup?.organization?.organization_id || selectedOrganizationId);
     setOutput(result);
+    clearDirty();
     render();
   }
 
   function bindEvents() {
-    document.getElementById("se-org-select")?.addEventListener("change", (event) => loadSetup(event.target.value).catch(showError));
-    document.getElementById("se-refresh")?.addEventListener("click", () => loadSetup(selectedOrganizationId).catch(showError));
+    document.getElementById("se-org-select")?.addEventListener("change", (event) => {
+      if (hasUnsavedChanges && !window.confirm("Discard unsaved Header/Nav Setup changes and switch organization?")) return;
+      loadSetup(event.target.value).catch(showError);
+    });
+    document.getElementById("se-refresh")?.addEventListener("click", () => {
+      if (hasUnsavedChanges && !window.confirm("Discard unsaved Header/Nav Setup changes and refresh?")) return;
+      loadSetup(selectedOrganizationId).catch(showError);
+    });
     document.getElementById("se-save")?.addEventListener("click", () => save().catch(showError));
+    root().querySelectorAll("input[data-field], select[data-field], textarea").forEach((el) => {
+      if (el.id === "se-note" || el.id === "se-danger-confirmation") return;
+      el.addEventListener("change", markDirty);
+      el.addEventListener("input", markDirty);
+    });
   }
 
   function showError(error) {
     console.error(error);
-    setStatus(error?.message || String(error), "error");
-    setOutput({ error: error?.message || String(error) });
+    lastErrorMessage = error?.message || String(error);
+    if (/No active Supabase login session/i.test(lastErrorMessage)) render();
+    setStatus(lastErrorMessage, "error");
+    setOutput({ error: lastErrorMessage });
   }
 
   async function boot() {
@@ -425,6 +468,7 @@
       if (!selectedOrganizationId) throw new Error("No organizations found.");
       await loadSetup(selectedOrganizationId);
     } catch (error) {
+      lastErrorMessage = error?.message || String(error);
       render();
       showError(error);
     }

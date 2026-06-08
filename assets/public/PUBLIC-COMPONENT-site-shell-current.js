@@ -1,11 +1,11 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-07-021-F
+// Internal Version: 2026-06-07-021-G
 // Purpose: Public page wrapper. It never renders its own header; it feeds context to the single organization header engine.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-F";
+  const VERSION = "2026-06-07-021-G";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -422,6 +422,10 @@
     header.render(target, headerContext(payload, null, null, [], false));
   }
 
+  function revealRoot() {
+    if (context && context.root) context.root.style.visibility = "visible";
+  }
+
   async function refreshOrganizationHeader() {
     if (!context) return;
     const payload = context.payload || {};
@@ -433,45 +437,42 @@
       header = await ensureOrganizationHeader();
     } catch (error) {
       target.innerHTML = `<div class="syncetc-public-error"><strong>Navigation unavailable.</strong><br>${escapeHtml(error?.message || "Shared header did not load.")}</div>`;
+      revealRoot();
       return;
     }
 
     const styleResult = requiredStyleConfig(payload);
     if (!styleResult.ok) {
       target.innerHTML = requiredStyleErrorHtml(styleResult);
+      revealRoot();
       return;
     }
-
-    // Render the real shared header immediately with public context. Do not leave public pages stuck on a loading bar.
-    header.render(target, headerContext(payload, null, null, [], false));
 
     const client = await withTimeout(ensureSupabase(), 1800, null);
-    if (!client) return;
-
-    const session = await getSessionFast(client);
-    if (!session?.access_token) {
-      header.render(target, headerContext(payload, null, null, [], false));
-      return;
-    }
+    const session = client ? await getSessionFast(client) : null;
 
     let accessRow = null;
     let accessRows = [];
     let platformAdmin = false;
 
-    const facts = headerBaseFacts(payload);
-    const requestPayload = facts.orgId ? { organization_id: facts.orgId } : {};
-    const result = await withTimeout(callAccess("get_user_dashboard", requestPayload), 2600, null);
-    if (result) {
-      accessRows = arr(result.access);
-      accessRow = chooseAccessRow(accessRows, payload);
-      platformAdmin = Boolean(result.platform_admin || result.platform_override);
+    if (session?.access_token) {
+      const facts = headerBaseFacts(payload);
+      const requestPayload = facts.orgId ? { organization_id: facts.orgId } : {};
+      const result = await withTimeout(callAccess("get_user_dashboard", requestPayload), 2600, null);
+      if (result) {
+        accessRows = arr(result.access);
+        accessRow = chooseAccessRow(accessRows, payload);
+        platformAdmin = Boolean(result.platform_admin || result.platform_override);
+      }
     }
 
-    // Re-render with authenticated context even if access lookup failed, so the header still shows Log out rather than Log in.
+    // Render once, after style + auth/session check. This prevents Home-only or logged-out flashes.
     header.render(target, headerContext(payload, session, accessRow, accessRows, platformAdmin));
+    revealRoot();
   }
 
   function render(options) {
+    if (options && options.root) options.root.style.visibility = "hidden";
     context = {
       root: options.root,
       payload: options.payload || {},
@@ -503,10 +504,16 @@
         ${footerMode === "disabled" ? "" : `<footer class="syncetc-public-footer"><div class="syncetc-public-footer-brand"><div class="syncetc-public-footer-logo">${footerLogoHtml(logo, orgName)}</div><div><h2>${escapeHtml(orgName)}</h2>${hasText(footerNote) ? `<p>${escapeHtml(footerNote)}</p>` : ""}</div></div><div class="syncetc-public-footer-links">${publicLinks.map((item) => `<a href="${escapeHtml(item.href)}">${escapeHtml(item.label)}</a>`).join("")}</div></footer>`}
       </div>`;
 
-    refreshOrganizationHeader().catch((error) => console.warn("SyncEtc organization header refresh failed", error));
+    refreshOrganizationHeader().catch((error) => {
+      console.warn("SyncEtc organization header refresh failed", error);
+      const target = document.getElementById(HEADER_ID);
+      if (target) target.innerHTML = `<div class="syncetc-public-error"><strong>Navigation unavailable.</strong><br>${escapeHtml(error?.message || "Unknown header error")}</div>`;
+      revealRoot();
+    });
   }
 
   function renderError(root, message, payload) {
+    if (root) root.style.visibility = "visible";
     const styleResult = requiredStyleConfig(payload || {});
     if (!styleResult.ok) {
       root.innerHTML = requiredStyleErrorHtml(styleResult);

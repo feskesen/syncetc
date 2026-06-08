@@ -1,15 +1,43 @@
 // CORE-COMPONENT-organization-header-current.js
-// Internal Version: 2026-06-07-021-E
+// Internal Version: 2026-06-08-026-A
 // Purpose: Single shared organization header engine. No page should render its own organization header.
 // Usage: window.SyncEtcOrganizationHeader.render(containerOrId, context)
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-E";
-  const PUBLIC_ORDER = ["home", "about", "info", "aircraft", "calendar", "events", "gallery", "documents", "documents-resources", "contact"];
-  const USER_ORDER = ["user-dashboard", "dashboard", "roster", "member-roster", "documents", "events", "gallery-submission", "submit-gallery", "my-profile", "profile"];
-  const ADMIN_ORDER = ["organization-admin", "admin-dashboard", "organization-people", "people", "events-admin", "documents-admin", "gallery-admin", "aircraft-admin", "assets"];
+  const VERSION = "2026-06-08-026-A";
+  const PUBLIC_ORDER = ["home", "about", "info", "aircraft", "calendar", "calendar-events", "events", "gallery", "documents", "documents-resources", "contact"];
+  const USER_ORDER = ["user-dashboard", "dashboard", "my-profile", "profile", "roster", "member-roster", "member-documents", "user-documents", "gallery-submission", "submit-gallery"];
+  const ADMIN_ORDER = ["organization-admin", "admin-dashboard", "organization-people", "people", "internal-documents", "board-documents", "admin-documents", "events-admin", "documents-admin", "gallery-admin", "aircraft-admin", "assets"];
+
+  const PUBLIC_KEYS = new Set(PUBLIC_ORDER);
+  const USER_KEYS = new Set(USER_ORDER);
+  const ADMIN_KEYS = new Set(ADMIN_ORDER);
+  const PROTECTED_KEY_ROW = {
+    "user-dashboard": "user",
+    "dashboard": "user",
+    "my-profile": "user",
+    "profile": "user",
+    "roster": "user",
+    "member-roster": "user",
+    "member-documents": "user",
+    "user-documents": "user",
+    "gallery-submission": "user",
+    "submit-gallery": "user",
+    "organization-admin": "admin",
+    "admin-dashboard": "admin",
+    "organization-people": "admin",
+    "people": "admin",
+    "internal-documents": "admin",
+    "board-documents": "admin",
+    "admin-documents": "admin",
+    "events-admin": "admin",
+    "documents-admin": "admin",
+    "gallery-admin": "admin",
+    "aircraft-admin": "admin",
+    "assets": "admin"
+  };
   const PLATFORM_ORDER = ["platform-access-tools", "access-admin", "customer-builder", "page-setup", "layout-designer"];
 
   function clean(value) {
@@ -163,6 +191,26 @@
       });
   }
 
+  function rowForKey(linkKey) {
+    const k = key(linkKey);
+    if (PUBLIC_KEYS.has(k)) return "public";
+    if (USER_KEYS.has(k)) return "user";
+    if (ADMIN_KEYS.has(k)) return "admin";
+    if (PROTECTED_KEY_ROW[k]) return PROTECTED_KEY_ROW[k];
+    return "unknown";
+  }
+
+  function filterLinksForRow(links, rowName) {
+    return arr(links).filter((link) => {
+      const lk = key(obj(link).key || obj(link).page_key || obj(link).template_key || obj(link).slug || obj(link).href || obj(link).label);
+      const assigned = rowForKey(lk);
+      if (rowName === "public") return assigned === "public";
+      if (rowName === "user") return assigned === "user" || (assigned === "unknown" && clean(obj(link).nav_row || obj(link).nav_group || obj(link).row) === "user");
+      if (rowName === "admin") return assigned === "admin" || (assigned === "unknown" && clean(obj(link).nav_row || obj(link).nav_group || obj(link).row) === "admin");
+      return true;
+    });
+  }
+
   function ensureHome(publicLinks) {
     const links = sortLinks(publicLinks, PUBLIC_ORDER);
     if (!links.some((link) => link.key === "home" || link.href === "/")) {
@@ -184,9 +232,19 @@
     const isSuperAdmin = Boolean(access.is_organization_super_admin || access.isOrganizationSuperAdmin || context.superAdmin);
     const isPlatform = Boolean(access.is_platform_admin || access.isPlatformAdmin || context.platformAdmin || nav.platform?.length);
 
-    const publicLinks = ensureHome(nav.public || context.publicNavItems || context.publicLinks || []);
-    const userLinks = authenticated && (isUser || isAdmin || isSuperAdmin || isPlatform) ? sortLinks(nav.user || context.userNavItems || context.userLinks || [], USER_ORDER) : [];
-    const adminLinks = authenticated && (isAdmin || isSuperAdmin || isPlatform) ? sortLinks(nav.admin || context.adminNavItems || context.adminLinks || [], ADMIN_ORDER) : [];
+    const rawPublic = filterLinksForRow(nav.public || context.publicNavItems || context.publicLinks || [], "public");
+    const rawUser = [
+      ...filterLinksForRow(nav.user || context.userNavItems || context.userLinks || [], "user"),
+      ...filterLinksForRow(nav.public || context.publicNavItems || context.publicLinks || [], "user")
+    ];
+    const rawAdmin = [
+      ...filterLinksForRow(nav.admin || context.adminNavItems || context.adminLinks || [], "admin"),
+      ...filterLinksForRow(nav.public || context.publicNavItems || context.publicLinks || [], "admin")
+    ];
+
+    const publicLinks = ensureHome(rawPublic);
+    const userLinks = authenticated && (isUser || isAdmin || isSuperAdmin || isPlatform) ? sortLinks(rawUser, USER_ORDER) : [];
+    const adminLinks = authenticated && (isAdmin || isSuperAdmin || isPlatform) ? sortLinks(rawAdmin, ADMIN_ORDER) : [];
     const platformLinks = authenticated && isPlatform ? sortLinks(nav.platform || context.platformNavItems || context.platformLinks || [], PLATFORM_ORDER) : [];
 
     return { publicLinks, userLinks, adminLinks, platformLinks, authenticated, isUser, isAdmin, isSuperAdmin, isPlatform };

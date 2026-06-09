@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-05-003";
+  const VERSION = "2026-06-08-083-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const DEFAULT_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-public-render`;
@@ -54,6 +54,28 @@
   function getBool(source, key, fallback) {
     const value = source && typeof source === "object" ? source[key] : undefined;
     return typeof value === "boolean" ? value : fallback;
+  }
+
+  function getArray(source, key) {
+    const value = source && typeof source === "object" ? source[key] : undefined;
+    return Array.isArray(value) ? value : [];
+  }
+
+  function reasonOptions(parts) {
+    const raw = getArray(parts.content, "contact_reason_options");
+    const options = raw.map((item) => {
+      if (typeof item === "string") return { key: item, label: item };
+      if (item && typeof item === "object") return { key: getText(item, "key", getText(item, "label", "general")), label: getText(item, "label", getText(item, "key", "General question")) };
+      return null;
+    }).filter(Boolean);
+    return options.length ? options : [
+      { key: "general", label: "General question" },
+      { key: "membership-application", label: "Membership / application question" },
+      { key: "aircraft-fleet", label: "Aircraft / fleet question" },
+      { key: "event", label: "Event question" },
+      { key: "website-issue", label: "Website issue" },
+      { key: "other", label: "Other" },
+    ];
   }
 
   function safeHref(value, fallback = "#") {
@@ -141,9 +163,13 @@
       .syncetc-contact-row{display:flex;gap:12px;}
       .syncetc-contact-input{width:100%;padding:13px 14px;border:1px solid ${config.border};background:#fff;border-radius:12px;color:${config.text};font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.35;outline:none;transition:border-color 180ms ease, box-shadow 180ms ease;}
       .syncetc-contact-input:focus{border-color:${config.primary};box-shadow:0 0 0 3px rgba(47,128,196,.15);}
+      .syncetc-contact-select{appearance:auto;}
+      .syncetc-contact-hint{margin-top:-7px;color:${config.muted};font-size:12px;line-height:1.35;font-weight:750;}
       .syncetc-contact-textarea{min-height:112px;resize:vertical;}
       .syncetc-contact-submit{width:100%;min-height:46px;border:0;margin-top:2px;}
       .syncetc-contact-status{font-size:13px;font-weight:800;line-height:1.45;min-height:18px;color:${config.muted};}
+      .syncetc-contact-card.syncetc-contact-highlight{animation:syncetcContactPulse 1800ms ease-out 1;}
+      @keyframes syncetcContactPulse{0%{box-shadow:0 0 0 0 rgba(185,28,28,.35),${config.shadow === "none" ? "none" : "0 8px 24px rgba(12,38,64,.08)"};border-color:rgba(185,28,28,.68)}55%{box-shadow:0 0 0 10px rgba(185,28,28,.08),${config.shadow === "none" ? "none" : "0 8px 24px rgba(12,38,64,.08)"};border-color:rgba(185,28,28,.38)}100%{box-shadow:${config.shadow === "none" ? "none" : "0 8px 24px rgba(12,38,64,.08)"};border-color:${config.border}}}
       .syncetc-contact-status.ok{color:#146c2e}.syncetc-contact-status.error{color:#9a1f1f}
       .syncetc-home-note{padding:16px 18px;color:${config.muted};font-size:13px;line-height:1.55;}
       .syncetc-home-note strong{color:${config.primary};}
@@ -271,20 +297,36 @@
     const intro = getText(parts.content, "contact_intro");
     const namePlaceholder = getText(parts.labels, "contact_name_placeholder", "Name");
     const emailPlaceholder = getText(parts.labels, "contact_email_placeholder", "Email");
+    const phonePlaceholder = getText(parts.labels, "contact_phone_placeholder", "Phone (optional)");
+    const reasonLabel = getText(parts.labels, "contact_reason_label", "What can we help with?");
     const messagePlaceholder = getText(parts.labels, "contact_message_placeholder", "Message");
     const submitLabel = getText(parts.labels, "contact_submit_label", "Send Message");
+    const requirePhone = getBool(parts.options, "contact_require_phone", false);
+    const reasons = reasonOptions(parts);
 
     return `<article class="syncetc-home-card syncetc-contact-card" id="contact-board">
       ${hasText(label) ? `<div class="syncetc-home-section-label">${escapeHtml(label)}</div>` : ""}
       ${hasText(title) ? `<h2>${escapeHtml(title)}</h2>` : ""}
       ${hasText(intro) ? paragraphHtml(intro) : ""}
-      <form class="syncetc-contact-form" data-syncetc-contact-form="true">
-        <div style="display:none!important"><input type="text" name="hp-field" tabindex="-1" autocomplete="off"></div>
+      <form class="syncetc-contact-form" data-syncetc-contact-form="true" novalidate>
+        <div style="position:absolute;left:-5000px;top:auto;width:1px;height:1px;overflow:hidden" aria-hidden="true">
+          <label>Company <input type="text" name="company" tabindex="-1" autocomplete="off"></label>
+          <label>Website <input type="text" name="website" tabindex="-1" autocomplete="off"></label>
+          <input type="text" name="hp-field" tabindex="-1" autocomplete="off">
+        </div>
+        <input type="hidden" name="form_started_at" value="">
         <div class="syncetc-contact-row">
           <input class="syncetc-contact-input" name="name" type="text" required placeholder="${escapeHtml(namePlaceholder)}" autocomplete="name">
           <input class="syncetc-contact-input" name="email" type="email" required placeholder="${escapeHtml(emailPlaceholder)}" autocomplete="email">
         </div>
-        <textarea class="syncetc-contact-input syncetc-contact-textarea" name="message" required placeholder="${escapeHtml(messagePlaceholder)}"></textarea>
+        <div class="syncetc-contact-row">
+          <input class="syncetc-contact-input" name="phone" type="tel" ${requirePhone ? "required" : ""} placeholder="${escapeHtml(phonePlaceholder)}" autocomplete="tel">
+          <select class="syncetc-contact-input syncetc-contact-select" name="reason_key" required aria-label="${escapeHtml(reasonLabel)}">
+            ${reasons.map((reason) => `<option value="${escapeHtml(reason.key)}">${escapeHtml(reason.label)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="syncetc-contact-hint">${escapeHtml(reasonLabel)}</div>
+        <textarea class="syncetc-contact-input syncetc-contact-textarea" name="message" required minlength="4" placeholder="${escapeHtml(messagePlaceholder)}"></textarea>
         <button class="syncetc-home-button syncetc-contact-submit" type="submit">${escapeHtml(submitLabel)}</button>
         <div class="syncetc-contact-status" data-syncetc-contact-status="true"></div>
       </form>
@@ -366,6 +408,9 @@
     }
 
     const formData = new FormData(form);
+    const reasonSelect = form.querySelector("[name='reason_key']");
+    const selectedReasonLabel = reasonSelect && reasonSelect.options && reasonSelect.selectedIndex >= 0 ? reasonSelect.options[reasonSelect.selectedIndex].textContent : "";
+    const startedAt = Number(form.dataset.startedAt || formData.get("form_started_at") || 0);
     const payloadBody = {
       action: "submit_contact_inquiry",
       organization_key: root.getAttribute("data-organization-key") || root.getAttribute("data-customer-key") || root.getAttribute("data-org-key") || "",
@@ -374,8 +419,14 @@
       source_url: window.location.href,
       name: formData.get("name"),
       email: formData.get("email"),
+      phone: formData.get("phone"),
+      reason_key: formData.get("reason_key"),
+      subject: selectedReasonLabel || formData.get("reason_key"),
       message: formData.get("message"),
       hp_field: formData.get("hp-field"),
+      website: formData.get("website"),
+      company: formData.get("company"),
+      form_elapsed_ms: startedAt ? Date.now() - startedAt : null,
     };
 
     setStatus("Sending...", "");
@@ -402,6 +453,9 @@
     root.querySelectorAll("form[data-syncetc-contact-form='true']").forEach((form) => {
       if (form.dataset.bound === "true") return;
       form.dataset.bound = "true";
+      form.dataset.startedAt = String(Date.now());
+      const startedInput = form.querySelector("[name='form_started_at']");
+      if (startedInput) startedInput.value = form.dataset.startedAt;
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         const statusEl = form.querySelector("[data-syncetc-contact-status='true']");
@@ -481,6 +535,19 @@
     }
   }
 
+  function maybeHighlightContactAnchor(root) {
+    const hash = String(window.location.hash || "").replace(/^#/, "");
+    if (!hash || !["contact", "contact-board", "contact-us"].includes(hash)) return;
+    const target = root.querySelector("#contact-board");
+    if (!target) return;
+    window.setTimeout(() => {
+      try { target.scrollIntoView({ behavior: "smooth", block: "center" }); } catch { target.scrollIntoView(); }
+      target.classList.remove("syncetc-contact-highlight");
+      void target.offsetWidth;
+      target.classList.add("syncetc-contact-highlight");
+    }, 120);
+  }
+
   function render(root, payload) {
     const config = styleConfig(payload);
     const parts = getPageParts(payload);
@@ -502,6 +569,7 @@
 
     bindContactForms(root, payload);
     initializeMarquees(root);
+    maybeHighlightContactAnchor(root);
   }
 
   async function initOne(root) {

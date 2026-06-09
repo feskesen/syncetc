@@ -1,11 +1,11 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-07-021-L
+// Internal Version: 2026-06-08-022-A
 // Purpose: Public page wrapper. It never renders its own header; it feeds context to the single organization header engine.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-07-021-L";
+  const VERSION = "2026-06-08-022-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -580,7 +580,10 @@
     const orgName = clean(shell.organization_name || org.display_name || org.legal_name || orgKey || "Organization");
     const logo = shell.logo || null;
     const publicNavItems = defaultPublicNavIfNeeded(shellNavItems(payload));
-    return { org, shell, orgId, orgKey, orgName, logo, publicNavItems };
+    const navigationProfile = payload.navigation_profile || shell.navigation_profile || null;
+    const navigationRows = arr(payload.navigation_rows).length ? arr(payload.navigation_rows) : arr(shell.navigation_rows);
+    const navigationItems = arr(payload.navigation_items).length ? arr(payload.navigation_items) : arr(shell.navigation_items);
+    return { org, shell, orgId, orgKey, orgName, logo, publicNavItems, navigationProfile, navigationRows, navigationItems };
   }
 
   function headerContext(payload, session, accessRow, accessRows, platformAdmin) {
@@ -616,6 +619,9 @@
       styleProfile: payload.style_profile || accessRow?.style_profile || null,
       logo: base.logo,
       activePageKey: context?.activePageKey || payload?.page?.page_key || "",
+      navigationProfile: obj(accessRow).navigation_profile || base.navigationProfile || null,
+      navigationRows: arr(obj(accessRow).navigation_rows).length ? arr(obj(accessRow).navigation_rows) : base.navigationRows,
+      navigationItems: arr(obj(accessRow).navigation_items).length ? arr(obj(accessRow).navigation_items) : base.navigationItems,
       access: {
         can_view_user_dashboard: canUser,
         can_view_organization_admin: isOrgAdmin,

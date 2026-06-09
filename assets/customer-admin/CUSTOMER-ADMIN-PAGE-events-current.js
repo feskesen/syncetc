@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-events-current.js
-// Internal Version: 2026-06-09-092-E
-// Purpose: Customer-admin Events Manager cleanup: preserve form on save errors, simplify RSVP attendee-list visibility, duplicate-protect reusable type/location saves, and keep 0092-D layout fixes. Uses portal shell + core-access-action.
+// Internal Version: 2026-06-09-092-F
+// Purpose: Customer-admin Events Manager hotfix: prevent native submit/reset, preserve draft form state across validation/save errors, fix all-day required-date validation diagnostics, and keep 0092-E cleanup behavior. Uses portal shell + core-access-action.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-09-092-E";
+  const VERSION = "2026-06-09-092-F";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -42,6 +42,9 @@
     dirty: false,
     last: null,
     filters: { search: "", status: "active", type: "", date: "all" },
+    formDraft: null,
+    lastValidationSnapshot: null,
+    lastValidationMessage: "",
   };
 
   function root() { return document.querySelector(ROOT_SELECTOR); }
@@ -256,6 +259,8 @@
       setShellState();
       state.draftNotice = false;
       state.saving = false;
+      state.formDraft = null;
+      state.lastValidationMessage = "";
       setDirty(false);
     } catch (error) {
       state.error = error.message || String(error);
@@ -270,12 +275,13 @@
   function selectedLocation() { const key = val("event-location-key"); return state.locations.find(l => clean(l.location_key) === key) || null; }
   function classKey(row) { return clean(row.class_key || row.membership_class_key); }
   function roleKey(row) { return clean(row.role_key); }
-  function activeEventForForm() {
-    if (state.creating) return {
+  function defaultNewEvent() {
+    return {
       status: "draft",
       visibility_audience: "public",
       timezone: "America/New_York",
       sort_order: 100,
+      event_type_key: "",
       event_type_label: "General",
       category: "General",
       event_accent_color: styleConfig().primary || FALLBACK_COLORS[0],
@@ -284,9 +290,68 @@
       allow_guests: true,
       max_guests_per_rsvp: 0,
       rsvp_capacity_behavior: "waitlist",
-      attendee_list_visibility: "eligible",
+      attendee_list_visibility: "members",
       show_attendee_list: true,
+      all_day_event: false,
+      no_end_time: true,
     };
+  }
+
+  function currentFormToEvent(payload) {
+    const p = payload || {};
+    const type = selectedType();
+    const loc = selectedLocation();
+    return {
+      ...(state.creating ? defaultNewEvent() : (selectedEvent() || {})),
+      event_id: state.creating ? null : (state.selectedId || p.event_id || null),
+      title: p.title ?? val("event-title"),
+      event_key: p.event_key ?? val("event-key"),
+      status: p.status ?? (val("event-status") || "draft"),
+      visibility_audience: p.visibility_audience ?? val("event-visibility"),
+      starts_at: p.starts_at ?? combineDateTime("event-start", { allDay: checked("event-all-day") }),
+      ends_at: (p.no_end_time ?? checked("event-no-end")) ? null : (p.ends_at ?? combineDateTime("event-end", { allDay: checked("event-all-day") })),
+      timezone: p.timezone ?? (val("event-timezone") || "America/New_York"),
+      all_day_event: p.all_day_event ?? checked("event-all-day"),
+      no_end_time: p.no_end_time ?? checked("event-no-end"),
+      event_type_key: p.event_type_key ?? (val("event-type-key") || keyify(val("event-type-label") || "general")),
+      event_type_label: p.event_type_label ?? (val("event-type-label") || (type && type.label) || "General"),
+      category: p.category ?? (val("event-type-label") || (type && type.label) || "General"),
+      event_accent_color: p.event_accent_color ?? (val("event-accent") || (type && type.accent_color) || ""),
+      event_image_url: p.event_image_url ?? (val("event-image") || (type && type.image_url) || ""),
+      location_key: p.location_key ?? (val("event-location-key") || keyify(val("event-location-name") || val("event-address"))),
+      location_label: p.location_label ?? (val("event-location-name") || (loc && loc.label) || ""),
+      location_name: p.location_name ?? (val("event-location-name") || (loc && loc.location_name) || ""),
+      location_address: p.location_address ?? (val("event-address") || (loc && loc.location_address) || ""),
+      map_query: p.map_query ?? (val("event-map-query") || val("event-address") || ""),
+      map_embed_url: p.map_embed_url ?? val("event-map-embed"),
+      summary: p.summary ?? val("event-summary"),
+      description: p.description ?? val("event-description"),
+      rsvp_enabled: p.rsvp_enabled ?? checked("event-rsvp-enabled"),
+      rsvp_audience: p.rsvp_audience ?? val("event-rsvp-audience"),
+      rsvp_deadline_at: p.rsvp_deadline_at ?? (checked("event-no-rsvp-close") ? null : combineDateTime("event-deadline", {})),
+      capacity: p.capacity ?? (val("event-capacity") === "" ? null : Number(val("event-capacity"))),
+      allow_guests: p.allow_guests ?? checked("event-allow-guests"),
+      max_guests_per_rsvp: p.max_guests_per_rsvp ?? Number(val("event-max-guests") || 0),
+      rsvp_capacity_behavior: p.rsvp_capacity_behavior ?? val("event-capacity-behavior"),
+      waitlist_enabled: p.waitlist_enabled ?? (val("event-capacity-behavior") === "waitlist"),
+      attendee_list_visibility: p.attendee_list_visibility ?? (checked("event-show-attendees") ? "members" : "admin"),
+      show_attendee_list: p.show_attendee_list ?? checked("event-show-attendees"),
+      allowed_membership_class_keys: p.allowed_membership_class_keys ?? (val("event-rsvp-audience") === "selected_classes" ? checkedValues("class-key") : []),
+      allowed_role_keys: p.allowed_role_keys ?? (val("event-rsvp-audience") === "selected_roles" ? checkedValues("role-key") : []),
+      featured: p.featured ?? checked("event-featured"),
+      sort_order: p.sort_order ?? Number(val("event-sort") || 100),
+      needed_items: p.event_needed_items ?? selectedNeedsPayload(),
+    };
+  }
+
+  function captureFormDraft(payload) {
+    if (!state.creating && !state.selectedId) return;
+    try { state.formDraft = currentFormToEvent(payload); } catch (_) { /* keep current draft if capture fails */ }
+  }
+
+  function activeEventForForm() {
+    if (state.formDraft && (state.creating || state.dirty)) return state.formDraft;
+    if (state.creating) return defaultNewEvent();
     return selectedEvent();
   }
 
@@ -420,15 +485,16 @@
     document.querySelectorAll(".event-record").forEach(button => button.addEventListener("click", () => selectEvent(button.dataset.eventId || "")));
     document.getElementById("events-refresh")?.addEventListener("click", refresh);
     document.querySelectorAll(".event-new").forEach(button => button.addEventListener("click", newEvent));
-    document.querySelectorAll(".event-save").forEach(button => button.addEventListener("click", () => saveEvent(button.dataset.saveStatus || "")));
+    document.querySelectorAll(".event-save").forEach(button => button.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); captureFormDraft(); saveEvent(button.dataset.saveStatus || ""); }));
     document.getElementById("event-archive")?.addEventListener("click", toggleArchive);
     document.getElementById("event-type-key")?.addEventListener("change", applyType);
     document.getElementById("event-location-key")?.addEventListener("change", applyLocation);
     document.getElementById("event-use-address-map")?.addEventListener("click", useAddressAsMapQuery);
     document.getElementById("event-preview-map")?.addEventListener("click", () => { syncMapQueryFromAddress(true); updateMapPreview(true); setDirty(true); });
     document.getElementById("event-publish-now")?.addEventListener("click", () => { const st = document.getElementById("event-status"); if (st) st.value = "published"; state.draftNotice = false; setDirty(true); saveEvent(""); });
-    document.getElementById("event-keep-draft")?.addEventListener("click", () => { state.draftNotice = false; render(); });
+    document.getElementById("event-keep-draft")?.addEventListener("click", () => { state.draftNotice = false; captureFormDraft(); renderStatusOnly(); });
 
+    guardNativeSubmit();
     bindFilters();
     bindDefaults();
     bindColorPicker();
@@ -440,6 +506,28 @@
     bindEditorDirty();
     updateEventKeyPreview();
     setDirty(state.dirty);
+  }
+
+  function guardNativeSubmit() {
+    const r = root();
+    const forms = [];
+    if (r) {
+      forms.push(...Array.from(r.querySelectorAll("form")));
+      const parentForm = r.closest && r.closest("form");
+      if (parentForm) forms.push(parentForm);
+    }
+    Array.from(new Set(forms)).forEach(form => {
+      if (form.dataset.syncetcEventsGuarded === "1") return;
+      form.dataset.syncetcEventsGuarded = "1";
+      form.addEventListener("submit", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        captureFormDraft();
+        state.status = "Use the Save Changes button to save this event.";
+        state.statusKind = "warn";
+        renderStatusOnly();
+      });
+    });
   }
 
   function bindFilters() {
@@ -492,8 +580,8 @@
   function bindEditorDirty() {
     document.querySelectorAll(".events-editor input,.events-editor select,.events-editor textarea,.events-control-panel .events-control-input").forEach(el => {
       if (el.classList.contains("events-filter")) return;
-      el.addEventListener("input", () => { state.draftNotice = false; updateEventKeyPreview(); setDirty(true); });
-      el.addEventListener("change", () => { state.draftNotice = false; updateEventKeyPreview(); setDirty(true); });
+      el.addEventListener("input", () => { state.draftNotice = false; updateEventKeyPreview(); captureFormDraft(); setDirty(true); });
+      el.addEventListener("change", () => { state.draftNotice = false; updateEventKeyPreview(); captureFormDraft(); setDirty(true); });
     });
   }
 
@@ -662,7 +750,7 @@
     const loc = selectedLocation();
     const allDay = checked("event-all-day");
     const noEnd = checked("event-no-end");
-    return {
+    const payload = {
       organization_id: state.orgId,
       event_id: state.creating ? null : (state.selectedId || null),
       title: val("event-title"),
@@ -705,21 +793,40 @@
       sort_order: Number(val("event-sort") || 100),
       event_needed_items: selectedNeedsPayload(),
     };
+    captureFormDraft(payload);
+    return payload;
   }
 
-  function validationError(message) {
+  function validationError(message, payload) {
+    captureFormDraft(payload);
+    state.lastValidationMessage = message || "";
     state.status = message;
     state.statusKind = "error";
     state.saving = false;
+    setDirty(true);
     renderStatusOnly();
     return false;
   }
 
   function validatePayload(payload) {
+    const startDateValue = val("event-start-date");
+    const endDateValue = val("event-end-date");
+    state.lastValidationSnapshot = {
+      title: payload.title || "",
+      allDay: !!payload.all_day_event,
+      noEnd: !!payload.no_end_time,
+      startDateValue,
+      endDateValue,
+      startsAt: payload.starts_at || "",
+      endsAt: payload.ends_at || "",
+      status: payload.status || "",
+      typeLabel: payload.event_type_label || "",
+      selectedId: state.selectedId || "",
+      creating: !!state.creating,
+    };
     if (!payload.title) return "Event title is required.";
-    if (!val("event-start-date")) return "Start date is required.";
-    if (!payload.starts_at) return "Start date is required.";
-    if (!checked("event-no-end") && !val("event-end-date")) return "Either check No end time or enter an end date.";
+    if (!startDateValue || !payload.starts_at) return "Start date is required.";
+    if (!payload.no_end_time && !endDateValue) return "Either check No end time or enter an end date.";
     if (!clean(payload.event_type_label)) return "Event type label is required.";
     if (checked("event-save-type")) {
       const selectedKey = val("event-type-key");
@@ -746,7 +853,7 @@
     const payload = makePayload();
     const validationMessage = validatePayload(payload);
     if (validationMessage) {
-      validationError(validationMessage);
+      validationError(validationMessage, payload);
       return;
     }
     try {
@@ -770,11 +877,14 @@
       state.statusKind = payload.status === "draft" ? "warn" : "good";
       state.draftNotice = payload.status === "draft";
       state.saving = false;
+      state.formDraft = null;
+      state.lastValidationMessage = "";
       state.error = "";
       setShellState();
       setDirty(false);
       render();
     } catch (error) {
+      captureFormDraft(payload);
       state.status = error.message || String(error);
       state.statusKind = "error";
       state.saving = false;
@@ -805,6 +915,7 @@
     if (state.dirty && !confirm("You have unsaved event changes. Discard them?")) return;
     state.selectedId = "";
     state.creating = true;
+    state.formDraft = defaultNewEvent();
     state.status = "";
     state.statusKind = "";
     state.draftNotice = false;
@@ -818,6 +929,7 @@
     if (state.dirty && !confirm("You have unsaved event changes. Discard them?")) return;
     state.selectedId = clean(id);
     state.creating = false;
+    state.formDraft = null;
     state.status = "";
     state.statusKind = "";
     state.draftNotice = false;
@@ -839,7 +951,7 @@
       return;
     }
     const visibleCount = filteredEvents().length;
-    r.innerHTML = `${css()}<div class="syncetc-events-page"><div class="events-shell"><div class="events-hero"><span class="events-badge">Organization Admin</span><h1>Events Manager</h1><p>Create events, reuse event types and locations, configure RSVP rules, and prepare later checklist support.</p></div>${state.error ? `<div class="events-editor" style="max-height:none"><div class="events-error">${esc(state.error)}</div></div>` : ""}<div class="events-main"><aside class="events-sidebar"><div class="events-sidebar-head"><div><b><span id="events-visible-count">${visibleCount}</span> / ${state.events.length} events</b></div><div class="events-side-buttons"><button type="button" class="events-btn primary event-new">New Event</button><button type="button" class="events-btn" id="events-refresh">Refresh</button></div></div>${sidebarControlsHtml()}${filterOptions()}<div class="events-list">${eventListHtml()}</div></aside><main class="events-editor">${formHtml()}</main></div></div>${state.debug ? `<pre class="events-debug">SyncEtc Events Manager Diagnostics ${VERSION}\nOrg: ${esc(state.accessRow && state.accessRow.organization_key || "")}\nEvents: ${state.events.length}\nTypes: ${state.eventTypes.length}\nLocations: ${state.locations.length}\nSelected: ${esc(state.selectedId || (state.creating ? "new" : "none"))}\n\n${esc(JSON.stringify(state.last, null, 2)).slice(0, 12000)}</pre>` : ""}</div>`;
+    r.innerHTML = `${css()}<div class="syncetc-events-page"><div class="events-shell"><div class="events-hero"><span class="events-badge">Organization Admin</span><h1>Events Manager</h1><p>Create events, reuse event types and locations, configure RSVP rules, and prepare later checklist support.</p></div>${state.error ? `<div class="events-editor" style="max-height:none"><div class="events-error">${esc(state.error)}</div></div>` : ""}<div class="events-main"><aside class="events-sidebar"><div class="events-sidebar-head"><div><b><span id="events-visible-count">${visibleCount}</span> / ${state.events.length} events</b></div><div class="events-side-buttons"><button type="button" class="events-btn primary event-new">New Event</button><button type="button" class="events-btn" id="events-refresh">Refresh</button></div></div>${sidebarControlsHtml()}${filterOptions()}<div class="events-list">${eventListHtml()}</div></aside><main class="events-editor">${formHtml()}</main></div></div>${state.debug ? `<pre class="events-debug">SyncEtc Events Manager Diagnostics ${VERSION}\nOrg: ${esc(state.accessRow && state.accessRow.organization_key || "")}\nEvents: ${state.events.length}\nTypes: ${state.eventTypes.length}\nLocations: ${state.locations.length}\nSelected: ${esc(state.selectedId || (state.creating ? "new" : "none"))}\nDirty: ${state.dirty ? "yes" : "no"}\nForm draft: ${state.formDraft ? "yes" : "no"}\nLast validation: ${esc(state.lastValidationMessage || "")}\nValidation snapshot: ${esc(JSON.stringify(state.lastValidationSnapshot || {}, null, 2))}\n\n${esc(JSON.stringify(state.last, null, 2)).slice(0, 12000)}</pre>` : ""}</div>`;
     bind();
   }
 

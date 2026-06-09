@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-events-current.js
-// Internal Version: 2026-06-09-092-D
-// Purpose: Customer-admin Events Manager cleanup: draft-save warning, fixed help tooltips, RSVP close-date controls, RSVP layout cleanup, and map preview. Uses portal shell + core-access-action.
+// Internal Version: 2026-06-09-092-E
+// Purpose: Customer-admin Events Manager cleanup: preserve form on save errors, simplify RSVP attendee-list visibility, duplicate-protect reusable type/location saves, and keep 0092-D layout fixes. Uses portal shell + core-access-action.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-09-092-D";
+  const VERSION = "2026-06-09-092-E";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -23,6 +23,7 @@
     loading: true,
     error: "",
     status: "",
+    statusKind: "",
     draftNotice: false,
     saving: false,
     token: "",
@@ -55,6 +56,8 @@
   function val(id) { const el = document.getElementById(id); return el ? String(el.value || "").trim() : ""; }
   function checked(id) { const el = document.getElementById(id); return !!(el && el.checked); }
   function checkedValues(name) { return Array.from(document.querySelectorAll(`input[name="${name}"]:checked`)).map(el => el.value).filter(Boolean); }
+  function sameText(a, b) { return clean(a).toLowerCase() === clean(b).toLowerCase(); }
+  function sameKey(a, b) { return keyify(a) === keyify(b); }
   function pad2(value) { return String(value).padStart(2, "0"); }
 
   function styleConfig() {
@@ -277,7 +280,7 @@
       category: "General",
       event_accent_color: styleConfig().primary || FALLBACK_COLORS[0],
       rsvp_enabled: true,
-      rsvp_audience: "member",
+      rsvp_audience: "public",
       allow_guests: true,
       max_guests_per_rsvp: 0,
       rsvp_capacity_behavior: "waitlist",
@@ -293,7 +296,7 @@
       .syncetc-events-page{max-width:${c.width};margin:28px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:${c.text}}
       .syncetc-events-page *{box-sizing:border-box}.events-shell{border:1px solid ${c.border};border-radius:26px;background:#fff;box-shadow:${c.shadow};overflow:hidden}.events-hero{padding:28px 32px;background:linear-gradient(135deg,${c.primary},color-mix(in srgb,${c.primary} 70%,#4b9bd4));color:#fff}.events-hero h1{margin:10px 0 0;font-size:clamp(32px,4vw,48px);line-height:1}.events-hero p{margin:10px 0 0;max-width:760px}.events-badge{display:inline-flex;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.16);font-weight:900;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
       .events-main{display:grid;grid-template-columns:330px minmax(0,1fr);background:linear-gradient(180deg,${c.soft},rgba(255,255,255,.96));min-height:640px}.events-sidebar{padding:16px;border-right:1px solid ${c.border};background:#fff;max-height:calc(100vh - 190px);overflow:auto}.events-editor{padding:18px;max-height:calc(100vh - 190px);overflow:auto}.events-list{display:grid;gap:8px;padding-right:3px}.events-sidebar-head{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;margin-bottom:12px}.events-side-buttons{display:flex;gap:8px;flex-wrap:wrap}.events-filters{display:grid;gap:8px;margin-bottom:12px;padding:12px;border:1px solid ${c.border};border-radius:18px;background:${c.soft}}
-      .events-control-panel{display:grid;gap:10px;margin:0 0 12px;padding:14px;border:1px solid ${c.border};border-radius:20px;background:linear-gradient(180deg,#fff,${c.soft})}.events-control-title{display:grid;gap:5px}.events-control-title strong{font-size:17px}.events-control-actions{display:flex;gap:8px;flex-wrap:wrap}.events-control-panel .events-btn{width:100%}.events-control-panel .events-status{justify-content:center}.events-status{display:inline-flex;padding:9px 12px;border-radius:14px;background:${c.soft};font-weight:900}.events-status.good{background:#e7f6e7;color:${c.primary}}.events-draft-notice{padding:10px 12px;border:1px solid #facc15;border-radius:14px;background:#fffbeb;color:#713f12;font-size:12.5px;font-weight:800;line-height:1.35}.events-draft-actions{display:flex;gap:8px;margin-top:9px}.events-draft-actions .events-btn{width:auto;padding:8px 11px;font-size:12px}
+      .events-control-panel{display:grid;gap:10px;margin:0 0 12px;padding:14px;border:1px solid ${c.border};border-radius:20px;background:linear-gradient(180deg,#fff,${c.soft})}.events-control-title{display:grid;gap:5px}.events-control-title strong{font-size:17px}.events-control-actions{display:flex;gap:8px;flex-wrap:wrap}.events-control-panel .events-btn{width:100%}.events-control-panel .events-status{justify-content:center}.events-status{display:inline-flex;padding:9px 12px;border-radius:14px;background:${c.soft};font-weight:900}.events-status.good{background:#e7f6e7;color:${c.primary}}.event-status-message.error{color:#991b1b;font-weight:900}.event-status-message.warn{color:#713f12;font-weight:900}.event-status-message.good{color:${c.primary};font-weight:900}.events-draft-notice{padding:10px 12px;border:1px solid #facc15;border-radius:14px;background:#fffbeb;color:#713f12;font-size:12.5px;font-weight:800;line-height:1.35}.events-draft-actions{display:flex;gap:8px;margin-top:9px}.events-draft-actions .events-btn{width:auto;padding:8px 11px;font-size:12px}
       .event-record{display:block;width:100%;text-align:left;border:1px solid ${c.border};border-left:6px solid var(--event-accent,${c.primary});background:#fff;border-radius:16px;padding:12px;cursor:pointer;color:${c.text}}.event-record[hidden]{display:none}.event-record.selected{border-color:${c.primary};border-left-color:var(--event-accent,${c.primary});box-shadow:0 0 0 3px color-mix(in srgb,${c.primary} 13%,transparent)}.event-record.archived{opacity:.55}.event-record b{display:block}.event-record span,.event-record small{display:block;color:rgba(20,36,23,.70);font-size:12px;margin-top:4px}
       .events-card{background:#fff;border:1px solid ${c.border};border-radius:20px;padding:18px;margin-bottom:16px}.events-card h2,.events-card h3{margin:0 0 12px}.events-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.events-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.events-field{display:grid;gap:5px;font-size:12px;font-weight:900;color:${c.primary}}.events-label-line{display:flex;align-items:center;gap:6px}.events-input,.events-select,.events-textarea{width:100%;border:1px solid ${c.border};border-radius:12px;padding:10px 12px;font:inherit;color:${c.text};background:#fff}.events-input[readonly],.events-input:disabled,.events-select:disabled{background:#f3f7f3;color:rgba(20,36,23,.58);cursor:not-allowed}.events-textarea{min-height:88px;resize:vertical}.events-btn{border:1px solid ${c.border};border-radius:999px;background:#fff;color:${c.primary};padding:10px 14px;font-weight:900;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:7px}.events-btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(0,0,0,.08)}.events-btn.primary{background:${c.primary};color:#fff}.events-btn.danger{background:#fff7ec;color:#9a3412;border-color:#fed7aa}.events-btn:disabled{opacity:.55;cursor:not-allowed}
       .events-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 12px}.events-check,.events-inline-check{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:800;color:${c.text}}.events-check input,.events-inline-check input{width:auto}.events-error{padding:12px;border-radius:14px;background:#fee2e2;color:#991b1b;font-weight:900}.events-empty{padding:18px;border:1px dashed ${c.border};border-radius:16px;color:rgba(20,36,23,.65);background:#fff}.events-empty.big{padding:34px;text-align:center}.events-color-row{display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:8px;align-items:end}.events-color-picker{width:44px;height:42px;border:1px solid ${c.border};border-radius:12px;padding:3px;background:#fff;cursor:pointer}.events-muted{color:rgba(20,36,23,.62);font-size:12.5px;line-height:1.4}.events-topline{display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap}.events-time-block{display:grid;gap:8px;margin-top:10px}.events-time-title{font-weight:900;color:${c.primary};font-size:12px;text-transform:uppercase;letter-spacing:.03em}.events-time-grid{display:grid;grid-template-columns:minmax(160px,1.4fr) 88px 98px 98px;gap:10px}.events-timing-flags{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 14px}.events-map-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.events-map-preview{margin-top:12px;border:1px solid ${c.border};border-radius:16px;overflow:hidden;background:${c.soft};min-height:170px;display:grid;place-items:center}.events-map-preview iframe{width:100%;height:220px;border:0;display:block}.events-map-preview .events-muted{padding:18px;text-align:center}.events-details{margin-top:12px}.events-details summary{cursor:pointer;font-weight:900;color:${c.primary};margin-bottom:10px}.events-rsvp-flags{margin:0 0 14px;display:flex;gap:14px;flex-wrap:wrap}.events-rsvp-row{margin-top:12px}.events-conditional[hidden]{display:none!important}.events-advanced{border-style:dashed}.events-debug{max-width:${c.width};margin:16px auto;padding:14px;border-radius:16px;background:#0f172a;color:#dbeafe;overflow:auto;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace}
@@ -377,7 +380,7 @@
     const archived = !!(ev && (ev.archived_at || ev.status === "archived"));
     const normalizedStatus = currentStatus === "hidden" ? "draft" : currentStatus;
     const draftNotice = state.draftNotice && normalizedStatus === "draft" ? `<div class="events-draft-notice">Draft saved. This event will not appear on the public calendar until it is published.<div class="events-draft-actions"><button type="button" class="events-btn primary" id="event-publish-now">Publish now</button><button type="button" class="events-btn" id="event-keep-draft">Keep as draft</button></div></div>` : "";
-    return `<div class="events-control-panel"><div class="events-control-title"><strong>${esc(title)}</strong><span class="events-dirty-flag events-status ${state.dirty ? "" : "good"}">${state.dirty ? "Unsaved changes" : "No unsaved changes"}</span><span class="event-status-message events-muted">${esc(state.status || "")}</span></div>${draftNotice}<label class="events-field"><span class="events-label-line">Status ${help("Drafts are saved but do not appear on the public calendar. Published events appear according to event visibility. Archived events are retired from ordinary views.")}</span><select class="events-select events-control-input" id="event-status" ${canSave ? "" : "disabled"}><option value="draft" ${normalizedStatus === "draft" ? "selected" : ""}>Draft</option><option value="published" ${normalizedStatus === "published" ? "selected" : ""}>Published</option><option value="archived" ${normalizedStatus === "archived" ? "selected" : ""}>Archived</option></select></label><div class="events-control-actions"><button type="button" class="events-btn primary event-save" data-save-status="" ${canSave ? "" : "disabled"}>${state.saving ? "Saving..." : "Save Changes"}</button>${(ev && ev.event_id) ? `<button type="button" class="events-btn danger" id="event-archive">${archived ? "Restore" : "Archive"}</button>` : ""}</div></div>`;
+    return `<div class="events-control-panel"><div class="events-control-title"><strong>${esc(title)}</strong><span class="events-dirty-flag events-status ${state.dirty ? "" : "good"}">${state.dirty ? "Unsaved changes" : "No unsaved changes"}</span><span class="event-status-message events-muted ${attr(state.statusKind || "")}">${esc(state.status || "")}</span></div>${draftNotice}<label class="events-field"><span class="events-label-line">Status ${help("Drafts are saved but do not appear on the public calendar. Published events appear according to event visibility. Archived events are retired from ordinary views.")}</span><select class="events-select events-control-input" id="event-status" ${canSave ? "" : "disabled"}><option value="draft" ${normalizedStatus === "draft" ? "selected" : ""}>Draft</option><option value="published" ${normalizedStatus === "published" ? "selected" : ""}>Published</option><option value="archived" ${normalizedStatus === "archived" ? "selected" : ""}>Archived</option></select></label><div class="events-control-actions"><button type="button" class="events-btn primary event-save" data-save-status="" ${canSave ? "" : "disabled"}>${state.saving ? "Saving..." : "Save Changes"}</button>${(ev && ev.event_id) ? `<button type="button" class="events-btn danger" id="event-archive">${archived ? "Restore" : "Archive"}</button>` : ""}</div></div>`;
   }
 
   function editorEmptyHtml() {
@@ -394,18 +397,19 @@
     const accent = clean(ev.event_accent_color || typeJson.accent_color || styleConfig().primary || FALLBACK_COLORS[0]);
     const keyPreview = ev.event_id ? clean(ev.event_key) : "";
     const noEnd = !ev.ends_at;
-    const rsvpAudience = clean(ev.rsvp_audience || "member");
+    const rsvpAudience = clean(ev.rsvp_audience || "public");
+    const showRsvpList = ev.show_attendee_list !== false && clean(ev.attendee_list_visibility || "members") !== "admin";
     return `<div class="events-card"><h2>${ev.event_id ? "Event details" : "New Event Draft"}</h2><div class="events-grid"><label class="events-field">Title<input class="events-input" id="event-title" value="${attr(ev.title || "")}" placeholder="Event title"></label><label class="events-field"><span class="events-label-line">Event key ${help("Auto-generated identifier used internally and in URLs. Users should not edit this directly.")}</span><input class="events-input" id="event-key" value="${attr(keyPreview)}" placeholder="Generated automatically from title and date" readonly></label><label class="events-field"><span class="events-label-line">Event visibility ${help("Who can see the event listing at all.")}</span><select class="events-select" id="event-visibility"><option value="public">Public</option><option value="logged_in">Logged-in users</option><option value="member">Members/users</option><option value="admin">Admins/board only</option></select></label></div></div>
 
     <div class="events-card"><h3>Timing</h3><div class="events-timing-flags"><label class="events-inline-check"><input type="checkbox" id="event-all-day" ${ev.all_day_event ? "checked" : ""}> All-day event ${help("For events without a specific start time. Time selectors are disabled when this is checked.")}</label><label class="events-inline-check"><input type="checkbox" id="event-no-end" ${noEnd ? "checked" : ""}> No end time ${help("Use when the event has a start time but no listed ending time. End controls are disabled when this is checked.")}</label></div>${dateTimeControls("event-start", "Starts", ev.starts_at, {})}${dateTimeControls("event-end", "Ends", ev.ends_at, { optional: true })}<label class="events-field" style="margin-top:12px">Timezone<input class="events-input" id="event-timezone" value="${attr(ev.timezone || "America/New_York")}"></label></div>
 
-    <div class="events-card"><h3>Event type</h3><div class="events-grid"><label class="events-field">Saved type<select class="events-select" id="event-type-key">${typeOptions(ev)}</select></label><label class="events-field">Type label<input class="events-input" id="event-type-label" value="${attr(ev.event_type_label || ev.category || typeJson.label || "General")}"></label><label class="events-field">Accent color<div class="events-color-row"><input class="events-input" id="event-accent" value="${attr(accent)}"><input class="events-color-picker" id="event-color-picker" type="color" value="${attr(accent)}" title="Choose accent color"></div></label><label class="events-field">Image URL<input class="events-input" id="event-image" value="${attr(ev.event_image_url || ev.image_url || typeJson.image_url || "")}" placeholder="Image URL for now; upload support later"></label></div><label class="events-inline-check"><input type="checkbox" id="event-save-type"> Save/update this as a reusable event type</label><div class="events-muted">Event-type color is used as a subtle accent. Drag-and-drop image upload will be a later storage pass.</div></div>
+    <div class="events-card"><h3>Event type</h3><div class="events-grid"><label class="events-field">Saved type<select class="events-select" id="event-type-key">${typeOptions(ev)}</select></label><label class="events-field">Type label<input class="events-input" id="event-type-label" value="${attr(ev.event_type_label || ev.category || typeJson.label || "General")}"></label><label class="events-field">Accent color<div class="events-color-row"><input class="events-input" id="event-accent" value="${attr(accent)}"><input class="events-color-picker" id="event-color-picker" type="color" value="${attr(accent)}" title="Choose accent color"></div></label><label class="events-field">Image URL<input class="events-input" id="event-image" value="${attr(ev.event_image_url || ev.image_url || typeJson.image_url || "")}" placeholder="Image URL for now; upload support later"></label></div><label class="events-inline-check"><input type="checkbox" id="event-save-type"> Also save these type settings as reusable</label><div class="events-muted">Checked: Save Changes will update the selected saved type, or create a new reusable type if Custom is selected. Duplicate names are blocked. Event-type color is used as a subtle accent. Drag-and-drop image upload will be a later storage pass.</div></div>
 
-    <div class="events-card"><h3>Location</h3><div class="events-grid"><label class="events-field">Saved location<select class="events-select" id="event-location-key">${locationOptions(ev)}</select></label><label class="events-field">Location name<input class="events-input" id="event-location-name" value="${attr(ev.location_name || locJson.location_name || locJson.label || "")}"></label></div><label class="events-field">Written address<input class="events-input" id="event-address" value="${attr(ev.location_address || locJson.location_address || "")}" placeholder="Always enter a written address when there is a physical location"></label><div class="events-map-actions"><button type="button" class="events-btn" id="event-preview-map">Preview map from address</button></div><div class="events-map-preview" id="event-map-preview"></div><details class="events-details"><summary>Advanced map options</summary><div class="events-grid"><label class="events-field">Map search text / query<input class="events-input" id="event-map-query" value="${attr(ev.map_query || locJson.map_query || ev.location_address || "")}" placeholder="Usually the written address"></label><label class="events-field">Map embed URL optional<input class="events-input" id="event-map-embed" value="${attr(ev.map_embed_url || locJson.map_embed_url || "")}"></label></div><div class="events-muted">Use these only if the automatic map preview does not find the right place.</div></details><label class="events-inline-check" style="margin-top:10px"><input type="checkbox" id="event-save-location"> Save/update this as a reusable location</label><div class="events-muted">Selecting a saved location refreshes these fields from that saved record.</div></div>
+    <div class="events-card"><h3>Location</h3><div class="events-grid"><label class="events-field">Saved location<select class="events-select" id="event-location-key">${locationOptions(ev)}</select></label><label class="events-field">Location name<input class="events-input" id="event-location-name" value="${attr(ev.location_name || locJson.location_name || locJson.label || "")}"></label></div><label class="events-field">Written address<input class="events-input" id="event-address" value="${attr(ev.location_address || locJson.location_address || "")}" placeholder="Always enter a written address when there is a physical location"></label><div class="events-map-actions"><button type="button" class="events-btn" id="event-preview-map">Preview map from address</button></div><div class="events-map-preview" id="event-map-preview"></div><details class="events-details"><summary>Advanced map options</summary><div class="events-grid"><label class="events-field">Map search text / query<input class="events-input" id="event-map-query" value="${attr(ev.map_query || locJson.map_query || ev.location_address || "")}" placeholder="Usually the written address"></label><label class="events-field">Map embed URL optional<input class="events-input" id="event-map-embed" value="${attr(ev.map_embed_url || locJson.map_embed_url || "")}"></label></div><div class="events-muted">Use these only if the automatic map preview does not find the right place.</div></details><label class="events-inline-check" style="margin-top:10px"><input type="checkbox" id="event-save-location"> Also save these location settings as reusable</label><div class="events-muted">Checked: Save Changes will update the selected saved location, or create a new reusable location if Custom is selected. Duplicate names are blocked. Selecting a saved location refreshes these fields from that saved record.</div></div>
 
     <div class="events-card"><h3>Content</h3><label class="events-field">Short summary<textarea class="events-textarea" id="event-summary">${esc(ev.summary || "")}</textarea></label><label class="events-field">Full description / notes<textarea class="events-textarea" id="event-description">${esc(ev.description || "")}</textarea></label></div>
 
-    <div class="events-card"><h3>RSVP rules</h3><div class="events-rsvp-flags"><label class="events-inline-check"><input type="checkbox" id="event-rsvp-enabled" ${ev.rsvp_enabled ? "checked" : ""}> RSVP enabled</label><label class="events-inline-check"><input type="checkbox" id="event-allow-guests" ${ev.allow_guests !== false ? "checked" : ""}> Allow guests</label><label class="events-inline-check"><input type="checkbox" id="event-show-attendees" ${ev.show_attendee_list !== false ? "checked" : ""}> Show attendee list when allowed</label><label class="events-inline-check"><input type="checkbox" id="event-featured" ${ev.featured ? "checked" : ""}> Featured</label></div><div class="events-grid three"><label class="events-field">Capacity<input class="events-input" id="event-capacity" type="number" min="0" value="${attr(ev.capacity ?? "")}"></label><label class="events-field"><span class="events-label-line">Capacity behavior ${help("What happens if the event reaches capacity.")}</span><select class="events-select" id="event-capacity-behavior"><option value="waitlist">Waitlist when full</option><option value="block">Block when full</option></select></label><label class="events-field">Max guests per RSVP<input class="events-input" id="event-max-guests" type="number" min="0" value="${attr(ev.max_guests_per_rsvp ?? 0)}"></label></div><div class="events-grid events-rsvp-row"><label class="events-field"><span class="events-label-line">Attendee list visibility ${help("Who is allowed to see who has RSVP'd.")}</span><select class="events-select" id="event-attendee-vis"><option value="eligible">Eligible viewers</option><option value="members">Members/users</option><option value="admin">Admins only</option><option value="public">Public</option></select></label><label class="events-inline-check" style="align-self:end;min-height:42px"><input type="checkbox" id="event-no-rsvp-close" ${ev.rsvp_deadline_at ? "" : "checked"}> No RSVP close date ${help("Leave checked when RSVPs do not have a separate cutoff date. Uncheck to set a close date and time.")}</label></div><div class="events-rsvp-row">${dateTimeControls("event-deadline", "RSVP close", ev.rsvp_deadline_at, { optional: true })}</div><div class="events-rsvp-row"><label class="events-field"><span class="events-label-line">RSVP audience ${help("Who is allowed to submit an RSVP.")}</span><select class="events-select" id="event-rsvp-audience"><option value="public">Public</option><option value="logged_in">Logged-in users</option><option value="member">Members/users</option><option value="selected_classes">Selected classes</option><option value="selected_roles">Selected roles</option><option value="admin">Admins/board only</option></select></label></div><div class="events-grid" style="margin-top:12px"><div class="events-conditional events-class-filter" ${rsvpAudience === "selected_classes" ? "" : "hidden"}><b>Eligible membership classes</b><div class="events-check-grid">${checkboxList("class-key", state.membershipClasses, classKey, row => row.label || row.class_label || row.class_key, classKeys)}</div></div><div class="events-conditional events-role-filter" ${rsvpAudience === "selected_roles" ? "" : "hidden"}><b>Eligible roles</b><div class="events-check-grid">${checkboxList("role-key", state.roles, roleKey, row => row.label || row.role_label || row.role_key, roleKeys)}</div></div></div></div>
+    <div class="events-card"><h3>RSVP rules</h3><div class="events-rsvp-flags"><label class="events-inline-check"><input type="checkbox" id="event-rsvp-enabled" ${ev.rsvp_enabled ? "checked" : ""}> RSVP enabled</label><label class="events-inline-check"><input type="checkbox" id="event-allow-guests" ${ev.allow_guests !== false ? "checked" : ""}> Allow guests</label><label class="events-inline-check"><input type="checkbox" id="event-show-attendees" ${showRsvpList ? "checked" : ""}> Show RSVP list to logged-in users ${help("Organizers/admins can always see RSVP details. When checked, logged-in users may see the attendee list. When unchecked, only admins/organizers see it.")}</label><label class="events-inline-check"><input type="checkbox" id="event-featured" ${ev.featured ? "checked" : ""}> Featured</label></div><div class="events-grid three"><label class="events-field">Capacity<input class="events-input" id="event-capacity" type="number" min="0" value="${attr(ev.capacity ?? "")}"></label><label class="events-field"><span class="events-label-line">Capacity behavior ${help("What happens if the event reaches capacity.")}</span><select class="events-select" id="event-capacity-behavior"><option value="waitlist">Waitlist when full</option><option value="block">Block when full</option></select></label><label class="events-field">Max guests per RSVP<input class="events-input" id="event-max-guests" type="number" min="0" value="${attr(ev.max_guests_per_rsvp ?? 0)}"></label></div><div class="events-rsvp-row"><label class="events-inline-check" style="min-height:42px"><input type="checkbox" id="event-no-rsvp-close" ${ev.rsvp_deadline_at ? "" : "checked"}> No RSVP close date ${help("Leave checked when RSVPs do not have a separate cutoff date. Uncheck to set a close date and time.")}</label></div><div class="events-rsvp-row">${dateTimeControls("event-deadline", "RSVP close", ev.rsvp_deadline_at, { optional: true })}</div><div class="events-rsvp-row"><label class="events-field"><span class="events-label-line">RSVP audience ${help("Who is allowed to submit an RSVP.")}</span><select class="events-select" id="event-rsvp-audience"><option value="public">Public</option><option value="logged_in">Logged-in users</option><option value="member">Members/users</option><option value="selected_classes">Selected classes</option><option value="selected_roles">Selected roles</option><option value="admin">Admins/board only</option></select></label></div><div class="events-grid" style="margin-top:12px"><div class="events-conditional events-class-filter" ${rsvpAudience === "selected_classes" ? "" : "hidden"}><b>Eligible membership classes</b><div class="events-check-grid">${checkboxList("class-key", state.membershipClasses, classKey, row => row.label || row.class_label || row.class_key, classKeys)}</div></div><div class="events-conditional events-role-filter" ${rsvpAudience === "selected_roles" ? "" : "hidden"}><b>Eligible roles</b><div class="events-check-grid">${checkboxList("role-key", state.roles, roleKey, row => row.label || row.role_label || row.role_key, roleKeys)}</div></div></div></div>
 
     <div class="events-card events-advanced"><h3>Advanced</h3><div class="events-grid"><label class="events-field"><span class="events-label-line">Sort order ${help("Optional ordering number for future list ordering. Lower numbers can appear first when used.")}</span><input class="events-input" id="event-sort" type="number" value="${attr(ev.sort_order ?? 100)}"></label></div></div>
 
@@ -468,9 +472,8 @@
     const defaults = {
       "event-status": ev.status === "hidden" ? "draft" : (ev.status || "draft"),
       "event-visibility": ev.visibility_audience || ev.visibility || "public",
-      "event-rsvp-audience": ev.rsvp_audience || "member",
+      "event-rsvp-audience": ev.rsvp_audience || "public",
       "event-capacity-behavior": ev.rsvp_capacity_behavior || (ev.waitlist_enabled === false ? "block" : "waitlist"),
-      "event-attendee-vis": ev.attendee_list_visibility === "hidden" ? "admin" : (ev.attendee_list_visibility || "eligible"),
     };
     Object.entries(defaults).forEach(([id, value]) => { const el = document.getElementById(id); if (el) el.value = value; });
   }
@@ -694,7 +697,7 @@
       max_guests_per_rsvp: Number(val("event-max-guests") || 0),
       rsvp_capacity_behavior: val("event-capacity-behavior"),
       waitlist_enabled: val("event-capacity-behavior") === "waitlist",
-      attendee_list_visibility: val("event-attendee-vis") === "hidden" ? "admin" : val("event-attendee-vis"),
+      attendee_list_visibility: checked("event-show-attendees") ? "members" : "admin",
       show_attendee_list: checked("event-show-attendees"),
       allowed_membership_class_keys: val("event-rsvp-audience") === "selected_classes" ? checkedValues("class-key") : [],
       allowed_role_keys: val("event-rsvp-audience") === "selected_roles" ? checkedValues("role-key") : [],
@@ -704,20 +707,55 @@
     };
   }
 
+  function validationError(message) {
+    state.status = message;
+    state.statusKind = "error";
+    state.saving = false;
+    renderStatusOnly();
+    return false;
+  }
+
+  function validatePayload(payload) {
+    if (!payload.title) return "Event title is required.";
+    if (!val("event-start-date")) return "Start date is required.";
+    if (!payload.starts_at) return "Start date is required.";
+    if (!checked("event-no-end") && !val("event-end-date")) return "Either check No end time or enter an end date.";
+    if (!clean(payload.event_type_label)) return "Event type label is required.";
+    if (checked("event-save-type")) {
+      const selectedKey = val("event-type-key");
+      const label = val("event-type-label");
+      if (!label) return "Reusable event type name is required.";
+      const duplicate = state.eventTypes.find(t => clean(t.type_key) !== selectedKey && (sameText(t.label || t.type_label || t.type_key, label) || sameKey(t.type_key, label)));
+      if (duplicate) return `A reusable event type named "${label}" already exists. Select it from Saved type to update it, or use a different name.`;
+    }
+    if (checked("event-save-location")) {
+      const selectedKey = val("event-location-key");
+      const label = val("event-location-name") || val("event-address");
+      if (!label) return "Reusable location name or address is required.";
+      const duplicate = state.locations.find(l => clean(l.location_key) !== selectedKey && (sameText(l.label || l.location_name || l.location_key, label) || sameText(l.location_name, label) || sameKey(l.location_key, label)));
+      if (duplicate) return `A reusable location named "${label}" already exists. Select it from Saved location to update it, or use a different name.`;
+    }
+    return "";
+  }
+
   async function saveEvent(forcedStatus) {
+    if (forcedStatus) {
+      const status = document.getElementById("event-status");
+      if (status) status.value = forcedStatus;
+    }
+    const payload = makePayload();
+    const validationMessage = validatePayload(payload);
+    if (validationMessage) {
+      validationError(validationMessage);
+      return;
+    }
     try {
-      if (forcedStatus) {
-        const status = document.getElementById("event-status");
-        if (status) status.value = forcedStatus;
-      }
       state.status = "Saving...";
+      state.statusKind = "";
       state.saving = true;
       state.draftNotice = false;
       renderStatusOnly();
       document.querySelectorAll(".event-save").forEach(btn => { btn.textContent = "Saving..."; btn.disabled = true; });
-      const payload = makePayload();
-      if (!payload.title) throw new Error("Event title is required.");
-      if (!payload.starts_at) throw new Error("Start date is required.");
       const result = await call("organization_save_event", payload);
       state.accessRow = result.access;
       state.events = arr(result.events);
@@ -729,6 +767,7 @@
       if (found) state.selectedId = clean(found.event_id);
       state.creating = false;
       state.status = payload.status === "published" ? "Published." : (payload.status === "draft" ? "Draft saved." : "Saved.");
+      state.statusKind = payload.status === "draft" ? "warn" : "good";
       state.draftNotice = payload.status === "draft";
       state.saving = false;
       state.error = "";
@@ -736,9 +775,10 @@
       setDirty(false);
       render();
     } catch (error) {
-      state.error = error.message || String(error);
+      state.status = error.message || String(error);
+      state.statusKind = "error";
       state.saving = false;
-      render();
+      renderStatusOnly();
     }
   }
 
@@ -751,6 +791,7 @@
       const result = await call(archived ? "organization_restore_event" : "organization_archive_event", { organization_id: state.orgId, event_id: ev.event_id });
       state.events = arr(result.events);
       state.status = archived ? "Restored." : "Archived.";
+      state.statusKind = "good";
       state.error = "";
       setDirty(false);
       render();
@@ -765,6 +806,7 @@
     state.selectedId = "";
     state.creating = true;
     state.status = "";
+    state.statusKind = "";
     state.draftNotice = false;
     setDirty(false);
     render();
@@ -777,6 +819,7 @@
     state.selectedId = clean(id);
     state.creating = false;
     state.status = "";
+    state.statusKind = "";
     state.draftNotice = false;
     setDirty(false);
     render();
@@ -785,6 +828,7 @@
   function renderStatusOnly() {
     document.querySelectorAll(".event-status-message").forEach(el => { el.textContent = state.status || ""; });
     document.querySelectorAll(".event-save").forEach(btn => { btn.textContent = state.saving ? "Saving..." : "Save Changes"; btn.disabled = !!state.saving; });
+    document.querySelectorAll(".event-status-message").forEach(el => { el.classList.remove("error", "warn", "good"); if (state.statusKind) el.classList.add(state.statusKind); });
   }
 
   function render() {

@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-events-current.js
-// Internal Version: 2026-06-09-092-C
-// Purpose: Customer-admin Events Manager UI cleanup: left-side event controls, clearer RSVP visibility help, conditional RSVP filters, date-search, saved-location refresh, and simpler save/status behavior. Uses portal shell + core-access-action.
+// Internal Version: 2026-06-09-092-D
+// Purpose: Customer-admin Events Manager cleanup: draft-save warning, fixed help tooltips, RSVP close-date controls, RSVP layout cleanup, and map preview. Uses portal shell + core-access-action.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-09-092-C";
+  const VERSION = "2026-06-09-092-D";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -23,6 +23,8 @@
     loading: true,
     error: "",
     status: "",
+    draftNotice: false,
+    saving: false,
     token: "",
     email: "",
     platformAdmin: false,
@@ -48,7 +50,7 @@
   function obj(value) { return value && typeof value === "object" && !Array.isArray(value) ? value : {}; }
   function esc(value) { return String(value ?? "").replace(/[&<>'"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" }[c])); }
   function attr(value) { return esc(value); }
-  function help(text) { return `<span class="events-help" tabindex="0" aria-label="${attr(text)}" data-tip="${attr(text)}">i</span>`; }
+  function help(text) { return `<span class="events-help" tabindex="0" aria-label="${attr(text)}" title="${attr(text)}" data-tip="${attr(text)}">i</span>`; }
   function keyify(value) { return clean(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, ""); }
   function val(id) { const el = document.getElementById(id); return el ? String(el.value || "").trim() : ""; }
   function checked(id) { const el = document.getElementById(id); return !!(el && el.checked); }
@@ -121,6 +123,14 @@
     const d = new Date(value);
     return Number.isNaN(d.getTime()) ? "No date" : d.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
   }
+
+  function mapPreviewUrl(query, embedUrl) {
+    const embed = clean(embedUrl);
+    if (embed && /^https?:\/\//i.test(embed)) return embed;
+    const q = clean(query);
+    return q ? `https://www.google.com/maps?q=${encodeURIComponent(q)}&output=embed` : "";
+  }
+
 
 
   function dateSearchTokens(value) {
@@ -241,6 +251,8 @@
       state.roles = arr(result.roles);
       if (state.selectedId && !state.events.some(ev => clean(ev.event_id) === clean(state.selectedId))) state.selectedId = "";
       setShellState();
+      state.draftNotice = false;
+      state.saving = false;
       setDirty(false);
     } catch (error) {
       state.error = error.message || String(error);
@@ -281,11 +293,11 @@
       .syncetc-events-page{max-width:${c.width};margin:28px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:${c.text}}
       .syncetc-events-page *{box-sizing:border-box}.events-shell{border:1px solid ${c.border};border-radius:26px;background:#fff;box-shadow:${c.shadow};overflow:hidden}.events-hero{padding:28px 32px;background:linear-gradient(135deg,${c.primary},color-mix(in srgb,${c.primary} 70%,#4b9bd4));color:#fff}.events-hero h1{margin:10px 0 0;font-size:clamp(32px,4vw,48px);line-height:1}.events-hero p{margin:10px 0 0;max-width:760px}.events-badge{display:inline-flex;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.16);font-weight:900;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
       .events-main{display:grid;grid-template-columns:330px minmax(0,1fr);background:linear-gradient(180deg,${c.soft},rgba(255,255,255,.96));min-height:640px}.events-sidebar{padding:16px;border-right:1px solid ${c.border};background:#fff;max-height:calc(100vh - 190px);overflow:auto}.events-editor{padding:18px;max-height:calc(100vh - 190px);overflow:auto}.events-list{display:grid;gap:8px;padding-right:3px}.events-sidebar-head{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;margin-bottom:12px}.events-side-buttons{display:flex;gap:8px;flex-wrap:wrap}.events-filters{display:grid;gap:8px;margin-bottom:12px;padding:12px;border:1px solid ${c.border};border-radius:18px;background:${c.soft}}
-      .events-control-panel{display:grid;gap:10px;margin:0 0 12px;padding:14px;border:1px solid ${c.border};border-radius:20px;background:linear-gradient(180deg,#fff,${c.soft})}.events-control-title{display:grid;gap:5px}.events-control-title strong{font-size:17px}.events-control-actions{display:flex;gap:8px;flex-wrap:wrap}.events-control-panel .events-btn{width:100%}.events-control-panel .events-status{justify-content:center}.events-status{display:inline-flex;padding:9px 12px;border-radius:14px;background:${c.soft};font-weight:900}.events-status.good{background:#e7f6e7;color:${c.primary}}
+      .events-control-panel{display:grid;gap:10px;margin:0 0 12px;padding:14px;border:1px solid ${c.border};border-radius:20px;background:linear-gradient(180deg,#fff,${c.soft})}.events-control-title{display:grid;gap:5px}.events-control-title strong{font-size:17px}.events-control-actions{display:flex;gap:8px;flex-wrap:wrap}.events-control-panel .events-btn{width:100%}.events-control-panel .events-status{justify-content:center}.events-status{display:inline-flex;padding:9px 12px;border-radius:14px;background:${c.soft};font-weight:900}.events-status.good{background:#e7f6e7;color:${c.primary}}.events-draft-notice{padding:10px 12px;border:1px solid #facc15;border-radius:14px;background:#fffbeb;color:#713f12;font-size:12.5px;font-weight:800;line-height:1.35}.events-draft-actions{display:flex;gap:8px;margin-top:9px}.events-draft-actions .events-btn{width:auto;padding:8px 11px;font-size:12px}
       .event-record{display:block;width:100%;text-align:left;border:1px solid ${c.border};border-left:6px solid var(--event-accent,${c.primary});background:#fff;border-radius:16px;padding:12px;cursor:pointer;color:${c.text}}.event-record[hidden]{display:none}.event-record.selected{border-color:${c.primary};border-left-color:var(--event-accent,${c.primary});box-shadow:0 0 0 3px color-mix(in srgb,${c.primary} 13%,transparent)}.event-record.archived{opacity:.55}.event-record b{display:block}.event-record span,.event-record small{display:block;color:rgba(20,36,23,.70);font-size:12px;margin-top:4px}
       .events-card{background:#fff;border:1px solid ${c.border};border-radius:20px;padding:18px;margin-bottom:16px}.events-card h2,.events-card h3{margin:0 0 12px}.events-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.events-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.events-field{display:grid;gap:5px;font-size:12px;font-weight:900;color:${c.primary}}.events-label-line{display:flex;align-items:center;gap:6px}.events-input,.events-select,.events-textarea{width:100%;border:1px solid ${c.border};border-radius:12px;padding:10px 12px;font:inherit;color:${c.text};background:#fff}.events-input[readonly],.events-input:disabled,.events-select:disabled{background:#f3f7f3;color:rgba(20,36,23,.58);cursor:not-allowed}.events-textarea{min-height:88px;resize:vertical}.events-btn{border:1px solid ${c.border};border-radius:999px;background:#fff;color:${c.primary};padding:10px 14px;font-weight:900;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:7px}.events-btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(0,0,0,.08)}.events-btn.primary{background:${c.primary};color:#fff}.events-btn.danger{background:#fff7ec;color:#9a3412;border-color:#fed7aa}.events-btn:disabled{opacity:.55;cursor:not-allowed}
-      .events-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 12px}.events-check,.events-inline-check{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:800;color:${c.text}}.events-check input,.events-inline-check input{width:auto}.events-error{padding:12px;border-radius:14px;background:#fee2e2;color:#991b1b;font-weight:900}.events-empty{padding:18px;border:1px dashed ${c.border};border-radius:16px;color:rgba(20,36,23,.65);background:#fff}.events-empty.big{padding:34px;text-align:center}.events-color-row{display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:8px;align-items:end}.events-color-picker{width:44px;height:42px;border:1px solid ${c.border};border-radius:12px;padding:3px;background:#fff;cursor:pointer}.events-muted{color:rgba(20,36,23,.62);font-size:12.5px;line-height:1.4}.events-topline{display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap}.events-time-block{display:grid;gap:8px;margin-top:10px}.events-time-title{font-weight:900;color:${c.primary};font-size:12px;text-transform:uppercase;letter-spacing:.03em}.events-time-grid{display:grid;grid-template-columns:minmax(160px,1.4fr) 88px 98px 98px;gap:10px}.events-timing-flags{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 14px}.events-map-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.events-conditional[hidden]{display:none!important}.events-advanced{border-style:dashed}.events-debug{max-width:${c.width};margin:16px auto;padding:14px;border-radius:16px;background:#0f172a;color:#dbeafe;overflow:auto;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace}
-      .events-help{position:relative;display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:999px;border:1px solid ${c.border};background:#fff;color:${c.primary};font-size:11px;font-weight:900;cursor:help}.events-help::after{content:attr(data-tip);position:absolute;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%);width:min(280px,80vw);padding:10px 12px;border-radius:12px;background:#102a16;color:#fff;font-size:12px;line-height:1.35;text-transform:none;letter-spacing:0;font-weight:700;box-shadow:0 12px 30px rgba(0,0,0,.2);opacity:0;pointer-events:none;transition:opacity .12s ease;z-index:20}.events-help::before{content:"";position:absolute;left:50%;bottom:100%;transform:translateX(-50%);border:6px solid transparent;border-top-color:#102a16;opacity:0;transition:opacity .12s ease;z-index:21}.events-help:hover::after,.events-help:focus::after,.events-help:hover::before,.events-help:focus::before{opacity:1}
+      .events-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 12px}.events-check,.events-inline-check{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:800;color:${c.text}}.events-check input,.events-inline-check input{width:auto}.events-error{padding:12px;border-radius:14px;background:#fee2e2;color:#991b1b;font-weight:900}.events-empty{padding:18px;border:1px dashed ${c.border};border-radius:16px;color:rgba(20,36,23,.65);background:#fff}.events-empty.big{padding:34px;text-align:center}.events-color-row{display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:8px;align-items:end}.events-color-picker{width:44px;height:42px;border:1px solid ${c.border};border-radius:12px;padding:3px;background:#fff;cursor:pointer}.events-muted{color:rgba(20,36,23,.62);font-size:12.5px;line-height:1.4}.events-topline{display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap}.events-time-block{display:grid;gap:8px;margin-top:10px}.events-time-title{font-weight:900;color:${c.primary};font-size:12px;text-transform:uppercase;letter-spacing:.03em}.events-time-grid{display:grid;grid-template-columns:minmax(160px,1.4fr) 88px 98px 98px;gap:10px}.events-timing-flags{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 14px}.events-map-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.events-map-preview{margin-top:12px;border:1px solid ${c.border};border-radius:16px;overflow:hidden;background:${c.soft};min-height:170px;display:grid;place-items:center}.events-map-preview iframe{width:100%;height:220px;border:0;display:block}.events-map-preview .events-muted{padding:18px;text-align:center}.events-details{margin-top:12px}.events-details summary{cursor:pointer;font-weight:900;color:${c.primary};margin-bottom:10px}.events-rsvp-flags{margin:0 0 14px;display:flex;gap:14px;flex-wrap:wrap}.events-rsvp-row{margin-top:12px}.events-conditional[hidden]{display:none!important}.events-advanced{border-style:dashed}.events-debug{max-width:${c.width};margin:16px auto;padding:14px;border-radius:16px;background:#0f172a;color:#dbeafe;overflow:auto;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace}
+      .events-help{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:999px;border:1px solid ${c.border};background:#fff;color:${c.primary};font-size:11px;font-weight:900;cursor:help}.events-fixed-tip{position:fixed;max-width:min(320px,calc(100vw - 28px));padding:10px 12px;border-radius:12px;background:#102a16;color:#fff;font-size:12px;line-height:1.35;font-weight:800;box-shadow:0 12px 30px rgba(0,0,0,.22);z-index:2147483000;pointer-events:none}
       @media(max-width:900px){.events-main{grid-template-columns:1fr;min-height:0}.events-sidebar,.events-editor{max-height:none;overflow:visible}.events-sidebar{border-right:none;border-bottom:1px solid ${c.border}}.events-grid,.events-grid.three{grid-template-columns:1fr}.events-check-grid{grid-template-columns:1fr}.events-time-grid{grid-template-columns:1fr 1fr}.events-sidebar-head{grid-template-columns:1fr}.events-control-panel .events-btn{width:auto}.events-control-actions{justify-content:flex-start}}
       @media(max-width:560px){.events-time-grid{grid-template-columns:1fr}.events-hero{padding:24px 22px}.events-card{padding:14px}.events-editor{padding:14px}.events-btn{width:100%}.events-control-panel .events-btn{width:100%}.events-side-buttons{display:grid}}
     </style>`;
@@ -310,7 +322,7 @@
     }).join("");
   }
 
-  function eventStatus(ev) { return ev.status === "archived" || ev.archived_at ? "archived" : clean(ev.status || "draft"); }
+  function eventStatus(ev) { const status = clean(ev.status || "draft"); return status === "archived" || ev.archived_at ? "archived" : (status === "hidden" ? "draft" : status); }
   function eventDateClass(ev) {
     if (!ev.starts_at) return "none";
     const d = new Date(ev.starts_at);
@@ -343,7 +355,7 @@
       const label = clean(ev.event_type_label || ev.category || obj(ev.event_type_json).label || key);
       if (key) typeSet.set(key, label || key);
     });
-    return `<div class="events-filters"><label class="events-field">Search<input class="events-input events-filter" id="events-filter-search" value="${attr(state.filters.search)}" placeholder="Search title, date, type, location..."></label><div class="events-grid" style="grid-template-columns:1fr 1fr"><label class="events-field">Status<select class="events-select events-filter" id="events-filter-status"><option value="active">Active</option><option value="all">All</option><option value="draft">Draft</option><option value="published">Published</option><option value="hidden">Hidden</option><option value="archived">Archived</option></select></label><label class="events-field">Dates<select class="events-select events-filter" id="events-filter-date"><option value="all">All dates</option><option value="upcoming">Upcoming</option><option value="past">Past</option></select></label></div><label class="events-field">Event type<select class="events-select events-filter" id="events-filter-type"><option value="">All types</option>${Array.from(typeSet.entries()).map(([key, label]) => `<option value="${attr(key)}">${esc(label)}</option>`).join("")}</select></label></div>`;
+    return `<div class="events-filters"><label class="events-field">Search<input class="events-input events-filter" id="events-filter-search" value="${attr(state.filters.search)}" placeholder="Search title, date, type, location..."></label><div class="events-grid" style="grid-template-columns:1fr 1fr"><label class="events-field">Status<select class="events-select events-filter" id="events-filter-status"><option value="active">Active</option><option value="all">All</option><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></label><label class="events-field">Dates<select class="events-select events-filter" id="events-filter-date"><option value="all">All dates</option><option value="upcoming">Upcoming</option><option value="past">Past</option></select></label></div><label class="events-field">Event type<select class="events-select events-filter" id="events-filter-type"><option value="">All types</option>${Array.from(typeSet.entries()).map(([key, label]) => `<option value="${attr(key)}">${esc(label)}</option>`).join("")}</select></label></div>`;
   }
 
   function eventListHtml() {
@@ -363,7 +375,9 @@
     const canSave = !!ev;
     const currentStatus = clean(ev && ev.status) || "draft";
     const archived = !!(ev && (ev.archived_at || ev.status === "archived"));
-    return `<div class="events-control-panel"><div class="events-control-title"><strong>${esc(title)}</strong><span class="events-dirty-flag events-status ${state.dirty ? "" : "good"}">${state.dirty ? "Unsaved changes" : "No unsaved changes"}</span><span class="event-status-message events-muted">${esc(state.status || "")}</span></div><label class="events-field"><span class="events-label-line">Status ${help("Choose whether this event is saved as a draft, visible as published, hidden from ordinary views, or archived.")}</span><select class="events-select events-control-input" id="event-status" ${canSave ? "" : "disabled"}><option value="draft" ${currentStatus === "draft" ? "selected" : ""}>Draft</option><option value="published" ${currentStatus === "published" ? "selected" : ""}>Published</option><option value="hidden" ${currentStatus === "hidden" ? "selected" : ""}>Hidden</option><option value="archived" ${currentStatus === "archived" ? "selected" : ""}>Archived</option></select></label><div class="events-control-actions"><button type="button" class="events-btn primary event-save" data-save-status="" ${canSave ? "" : "disabled"}>Save Changes</button>${(ev && ev.event_id) ? `<button type="button" class="events-btn danger" id="event-archive">${archived ? "Restore" : "Archive"}</button>` : ""}</div></div>`;
+    const normalizedStatus = currentStatus === "hidden" ? "draft" : currentStatus;
+    const draftNotice = state.draftNotice && normalizedStatus === "draft" ? `<div class="events-draft-notice">Draft saved. This event will not appear on the public calendar until it is published.<div class="events-draft-actions"><button type="button" class="events-btn primary" id="event-publish-now">Publish now</button><button type="button" class="events-btn" id="event-keep-draft">Keep as draft</button></div></div>` : "";
+    return `<div class="events-control-panel"><div class="events-control-title"><strong>${esc(title)}</strong><span class="events-dirty-flag events-status ${state.dirty ? "" : "good"}">${state.dirty ? "Unsaved changes" : "No unsaved changes"}</span><span class="event-status-message events-muted">${esc(state.status || "")}</span></div>${draftNotice}<label class="events-field"><span class="events-label-line">Status ${help("Drafts are saved but do not appear on the public calendar. Published events appear according to event visibility. Archived events are retired from ordinary views.")}</span><select class="events-select events-control-input" id="event-status" ${canSave ? "" : "disabled"}><option value="draft" ${normalizedStatus === "draft" ? "selected" : ""}>Draft</option><option value="published" ${normalizedStatus === "published" ? "selected" : ""}>Published</option><option value="archived" ${normalizedStatus === "archived" ? "selected" : ""}>Archived</option></select></label><div class="events-control-actions"><button type="button" class="events-btn primary event-save" data-save-status="" ${canSave ? "" : "disabled"}>${state.saving ? "Saving..." : "Save Changes"}</button>${(ev && ev.event_id) ? `<button type="button" class="events-btn danger" id="event-archive">${archived ? "Restore" : "Archive"}</button>` : ""}</div></div>`;
   }
 
   function editorEmptyHtml() {
@@ -387,11 +401,11 @@
 
     <div class="events-card"><h3>Event type</h3><div class="events-grid"><label class="events-field">Saved type<select class="events-select" id="event-type-key">${typeOptions(ev)}</select></label><label class="events-field">Type label<input class="events-input" id="event-type-label" value="${attr(ev.event_type_label || ev.category || typeJson.label || "General")}"></label><label class="events-field">Accent color<div class="events-color-row"><input class="events-input" id="event-accent" value="${attr(accent)}"><input class="events-color-picker" id="event-color-picker" type="color" value="${attr(accent)}" title="Choose accent color"></div></label><label class="events-field">Image URL<input class="events-input" id="event-image" value="${attr(ev.event_image_url || ev.image_url || typeJson.image_url || "")}" placeholder="Image URL for now; upload support later"></label></div><label class="events-inline-check"><input type="checkbox" id="event-save-type"> Save/update this as a reusable event type</label><div class="events-muted">Event-type color is used as a subtle accent. Drag-and-drop image upload will be a later storage pass.</div></div>
 
-    <div class="events-card"><h3>Location</h3><div class="events-grid"><label class="events-field">Saved location<select class="events-select" id="event-location-key">${locationOptions(ev)}</select></label><label class="events-field">Location name<input class="events-input" id="event-location-name" value="${attr(ev.location_name || locJson.location_name || locJson.label || "")}"></label></div><label class="events-field">Written address<input class="events-input" id="event-address" value="${attr(ev.location_address || locJson.location_address || "")}" placeholder="Always enter a written address when there is a physical location"></label><div class="events-grid"><label class="events-field">Map query<input class="events-input" id="event-map-query" value="${attr(ev.map_query || locJson.map_query || ev.location_address || "")}"></label><label class="events-field">Map embed URL optional<input class="events-input" id="event-map-embed" value="${attr(ev.map_embed_url || locJson.map_embed_url || "")}"></label></div><div class="events-map-actions"><button type="button" class="events-btn" id="event-use-address-map">Use address as map query</button><a class="events-btn" id="event-open-google-map" href="#" target="_blank" rel="noopener">Open address in Google Maps</a></div><label class="events-inline-check" style="margin-top:10px"><input type="checkbox" id="event-save-location"> Save/update this as a reusable location</label><div class="events-muted">Selecting a saved location refreshes these fields from that saved record.</div></div>
+    <div class="events-card"><h3>Location</h3><div class="events-grid"><label class="events-field">Saved location<select class="events-select" id="event-location-key">${locationOptions(ev)}</select></label><label class="events-field">Location name<input class="events-input" id="event-location-name" value="${attr(ev.location_name || locJson.location_name || locJson.label || "")}"></label></div><label class="events-field">Written address<input class="events-input" id="event-address" value="${attr(ev.location_address || locJson.location_address || "")}" placeholder="Always enter a written address when there is a physical location"></label><div class="events-map-actions"><button type="button" class="events-btn" id="event-preview-map">Preview map from address</button></div><div class="events-map-preview" id="event-map-preview"></div><details class="events-details"><summary>Advanced map options</summary><div class="events-grid"><label class="events-field">Map search text / query<input class="events-input" id="event-map-query" value="${attr(ev.map_query || locJson.map_query || ev.location_address || "")}" placeholder="Usually the written address"></label><label class="events-field">Map embed URL optional<input class="events-input" id="event-map-embed" value="${attr(ev.map_embed_url || locJson.map_embed_url || "")}"></label></div><div class="events-muted">Use these only if the automatic map preview does not find the right place.</div></details><label class="events-inline-check" style="margin-top:10px"><input type="checkbox" id="event-save-location"> Save/update this as a reusable location</label><div class="events-muted">Selecting a saved location refreshes these fields from that saved record.</div></div>
 
     <div class="events-card"><h3>Content</h3><label class="events-field">Short summary<textarea class="events-textarea" id="event-summary">${esc(ev.summary || "")}</textarea></label><label class="events-field">Full description / notes<textarea class="events-textarea" id="event-description">${esc(ev.description || "")}</textarea></label></div>
 
-    <div class="events-card"><h3>RSVP rules</h3><div style="margin:0 0 14px;display:flex;gap:14px;flex-wrap:wrap"><label class="events-inline-check"><input type="checkbox" id="event-rsvp-enabled" ${ev.rsvp_enabled ? "checked" : ""}> RSVP enabled</label><label class="events-inline-check"><input type="checkbox" id="event-allow-guests" ${ev.allow_guests !== false ? "checked" : ""}> Allow guests</label><label class="events-inline-check"><input type="checkbox" id="event-show-attendees" ${ev.show_attendee_list !== false ? "checked" : ""}> Show attendee list when allowed</label><label class="events-inline-check"><input type="checkbox" id="event-featured" ${ev.featured ? "checked" : ""}> Featured</label></div><div class="events-grid three"><label class="events-field">Capacity<input class="events-input" id="event-capacity" type="number" min="0" value="${attr(ev.capacity ?? "")}"></label><label class="events-field"><span class="events-label-line">Capacity behavior ${help("What happens if the event reaches capacity.")}</span><select class="events-select" id="event-capacity-behavior"><option value="waitlist">Waitlist when full</option><option value="block">Block when full</option></select></label><label class="events-field">Max guests per RSVP<input class="events-input" id="event-max-guests" type="number" min="0" value="${attr(ev.max_guests_per_rsvp ?? 0)}"></label><label class="events-field"><span class="events-label-line">Attendee list visibility ${help("Who is allowed to see who has RSVP'd.")}</span><select class="events-select" id="event-attendee-vis"><option value="eligible">Eligible viewers</option><option value="members">Members/users</option><option value="admin">Admins only</option><option value="public">Public</option><option value="hidden">Hidden</option></select></label><div>${dateTimeControls("event-deadline", "RSVP close", ev.rsvp_deadline_at, { optional: true })}</div><label class="events-field"><span class="events-label-line">RSVP audience ${help("Who is allowed to submit an RSVP.")}</span><select class="events-select" id="event-rsvp-audience"><option value="public">Public</option><option value="logged_in">Logged-in users</option><option value="member">Members/users</option><option value="selected_classes">Selected classes</option><option value="selected_roles">Selected roles</option><option value="admin">Admins/board only</option></select></label></div><div class="events-grid" style="margin-top:12px"><div class="events-conditional events-class-filter" ${rsvpAudience === "selected_classes" ? "" : "hidden"}><b>Eligible membership classes</b><div class="events-check-grid">${checkboxList("class-key", state.membershipClasses, classKey, row => row.label || row.class_label || row.class_key, classKeys)}</div></div><div class="events-conditional events-role-filter" ${rsvpAudience === "selected_roles" ? "" : "hidden"}><b>Eligible roles</b><div class="events-check-grid">${checkboxList("role-key", state.roles, roleKey, row => row.label || row.role_label || row.role_key, roleKeys)}</div></div></div></div>
+    <div class="events-card"><h3>RSVP rules</h3><div class="events-rsvp-flags"><label class="events-inline-check"><input type="checkbox" id="event-rsvp-enabled" ${ev.rsvp_enabled ? "checked" : ""}> RSVP enabled</label><label class="events-inline-check"><input type="checkbox" id="event-allow-guests" ${ev.allow_guests !== false ? "checked" : ""}> Allow guests</label><label class="events-inline-check"><input type="checkbox" id="event-show-attendees" ${ev.show_attendee_list !== false ? "checked" : ""}> Show attendee list when allowed</label><label class="events-inline-check"><input type="checkbox" id="event-featured" ${ev.featured ? "checked" : ""}> Featured</label></div><div class="events-grid three"><label class="events-field">Capacity<input class="events-input" id="event-capacity" type="number" min="0" value="${attr(ev.capacity ?? "")}"></label><label class="events-field"><span class="events-label-line">Capacity behavior ${help("What happens if the event reaches capacity.")}</span><select class="events-select" id="event-capacity-behavior"><option value="waitlist">Waitlist when full</option><option value="block">Block when full</option></select></label><label class="events-field">Max guests per RSVP<input class="events-input" id="event-max-guests" type="number" min="0" value="${attr(ev.max_guests_per_rsvp ?? 0)}"></label></div><div class="events-grid events-rsvp-row"><label class="events-field"><span class="events-label-line">Attendee list visibility ${help("Who is allowed to see who has RSVP'd.")}</span><select class="events-select" id="event-attendee-vis"><option value="eligible">Eligible viewers</option><option value="members">Members/users</option><option value="admin">Admins only</option><option value="public">Public</option></select></label><label class="events-inline-check" style="align-self:end;min-height:42px"><input type="checkbox" id="event-no-rsvp-close" ${ev.rsvp_deadline_at ? "" : "checked"}> No RSVP close date ${help("Leave checked when RSVPs do not have a separate cutoff date. Uncheck to set a close date and time.")}</label></div><div class="events-rsvp-row">${dateTimeControls("event-deadline", "RSVP close", ev.rsvp_deadline_at, { optional: true })}</div><div class="events-rsvp-row"><label class="events-field"><span class="events-label-line">RSVP audience ${help("Who is allowed to submit an RSVP.")}</span><select class="events-select" id="event-rsvp-audience"><option value="public">Public</option><option value="logged_in">Logged-in users</option><option value="member">Members/users</option><option value="selected_classes">Selected classes</option><option value="selected_roles">Selected roles</option><option value="admin">Admins/board only</option></select></label></div><div class="events-grid" style="margin-top:12px"><div class="events-conditional events-class-filter" ${rsvpAudience === "selected_classes" ? "" : "hidden"}><b>Eligible membership classes</b><div class="events-check-grid">${checkboxList("class-key", state.membershipClasses, classKey, row => row.label || row.class_label || row.class_key, classKeys)}</div></div><div class="events-conditional events-role-filter" ${rsvpAudience === "selected_roles" ? "" : "hidden"}><b>Eligible roles</b><div class="events-check-grid">${checkboxList("role-key", state.roles, roleKey, row => row.label || row.role_label || row.role_key, roleKeys)}</div></div></div></div>
 
     <div class="events-card events-advanced"><h3>Advanced</h3><div class="events-grid"><label class="events-field"><span class="events-label-line">Sort order ${help("Optional ordering number for future list ordering. Lower numbers can appear first when used.")}</span><input class="events-input" id="event-sort" type="number" value="${attr(ev.sort_order ?? 100)}"></label></div></div>
 
@@ -407,14 +421,18 @@
     document.getElementById("event-type-key")?.addEventListener("change", applyType);
     document.getElementById("event-location-key")?.addEventListener("change", applyLocation);
     document.getElementById("event-use-address-map")?.addEventListener("click", useAddressAsMapQuery);
-    document.getElementById("event-open-google-map")?.addEventListener("click", updateGoogleMapLink);
+    document.getElementById("event-preview-map")?.addEventListener("click", () => { syncMapQueryFromAddress(true); updateMapPreview(true); setDirty(true); });
+    document.getElementById("event-publish-now")?.addEventListener("click", () => { const st = document.getElementById("event-status"); if (st) st.value = "published"; state.draftNotice = false; setDirty(true); saveEvent(""); });
+    document.getElementById("event-keep-draft")?.addEventListener("click", () => { state.draftNotice = false; render(); });
 
     bindFilters();
     bindDefaults();
     bindColorPicker();
     bindTimingControls();
     bindMapControls();
+    bindTooltipControls();
     bindRsvpConditional();
+    bindRsvpDeadlineControls();
     bindEditorDirty();
     updateEventKeyPreview();
     setDirty(state.dirty);
@@ -448,11 +466,11 @@
   function bindDefaults() {
     const ev = activeEventForForm() || {};
     const defaults = {
-      "event-status": ev.status || "draft",
+      "event-status": ev.status === "hidden" ? "draft" : (ev.status || "draft"),
       "event-visibility": ev.visibility_audience || ev.visibility || "public",
       "event-rsvp-audience": ev.rsvp_audience || "member",
       "event-capacity-behavior": ev.rsvp_capacity_behavior || (ev.waitlist_enabled === false ? "block" : "waitlist"),
-      "event-attendee-vis": ev.attendee_list_visibility || "eligible",
+      "event-attendee-vis": ev.attendee_list_visibility === "hidden" ? "admin" : (ev.attendee_list_visibility || "eligible"),
     };
     Object.entries(defaults).forEach(([id, value]) => { const el = document.getElementById(id); if (el) el.value = value; });
   }
@@ -471,8 +489,8 @@
   function bindEditorDirty() {
     document.querySelectorAll(".events-editor input,.events-editor select,.events-editor textarea,.events-control-panel .events-control-input").forEach(el => {
       if (el.classList.contains("events-filter")) return;
-      el.addEventListener("input", () => { updateEventKeyPreview(); setDirty(true); });
-      el.addEventListener("change", () => { updateEventKeyPreview(); setDirty(true); });
+      el.addEventListener("input", () => { state.draftNotice = false; updateEventKeyPreview(); setDirty(true); });
+      el.addEventListener("change", () => { state.draftNotice = false; updateEventKeyPreview(); setDirty(true); });
     });
   }
 
@@ -501,23 +519,80 @@
   }
 
   function bindMapControls() {
-    updateGoogleMapLink();
-    ["event-address", "event-map-query", "event-location-name"].forEach(id => document.getElementById(id)?.addEventListener("input", updateGoogleMapLink));
+    ["event-address", "event-map-query", "event-map-embed", "event-location-name"].forEach(id => document.getElementById(id)?.addEventListener("input", () => updateMapPreview(false)));
+    updateMapPreview(false);
+  }
+
+  function syncMapQueryFromAddress(force) {
+    const address = val("event-address") || val("event-location-name");
+    const query = document.getElementById("event-map-query");
+    if (query && address && (force || !query.value)) query.value = address;
   }
 
   function useAddressAsMapQuery() {
-    const address = val("event-address") || val("event-location-name");
-    const query = document.getElementById("event-map-query");
-    if (query && address) query.value = address;
-    updateGoogleMapLink();
+    syncMapQueryFromAddress(true);
+    updateMapPreview(true);
     setDirty(true);
   }
 
-  function updateGoogleMapLink(event) {
+  function updateMapPreview(force) {
+    const box = document.getElementById("event-map-preview");
+    if (!box) return;
+    syncMapQueryFromAddress(false);
     const query = val("event-map-query") || val("event-address") || val("event-location-name");
-    const link = document.getElementById("event-open-google-map");
-    if (link) link.href = query ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}` : "#";
-    if (event && !query) event.preventDefault();
+    const src = mapPreviewUrl(query, val("event-map-embed"));
+    if (!src) {
+      box.innerHTML = `<div class="events-muted">Enter an address, then preview the map.</div>`;
+      return;
+    }
+    if (!force && box.dataset.src === src) return;
+    box.dataset.src = src;
+    box.innerHTML = `<iframe loading="lazy" referrerpolicy="no-referrer-when-downgrade" src="${attr(src)}"></iframe>`;
+  }
+
+  function bindTooltipControls() {
+    let tip = document.getElementById("syncetc-events-tooltip");
+    if (!tip) {
+      tip = document.createElement("div");
+      tip.id = "syncetc-events-tooltip";
+      tip.className = "events-fixed-tip";
+      tip.hidden = true;
+      document.body.appendChild(tip);
+    }
+    const show = el => {
+      const text = el.getAttribute("data-tip") || "";
+      if (!text) return;
+      tip.textContent = text;
+      tip.hidden = false;
+      const rect = el.getBoundingClientRect();
+      const width = Math.min(320, window.innerWidth - 28);
+      tip.style.maxWidth = `${width}px`;
+      const left = Math.max(14, Math.min(window.innerWidth - width - 14, rect.left + rect.width / 2 - width / 2));
+      let top = rect.top - 12;
+      tip.style.left = `${left}px`;
+      tip.style.top = `0px`;
+      const height = tip.offsetHeight || 60;
+      if (top - height < 8) top = rect.bottom + 12 + height;
+      tip.style.top = `${Math.max(8, top - height)}px`;
+    };
+    const hide = () => { if (tip) tip.hidden = true; };
+    document.querySelectorAll(".events-help").forEach(el => {
+      el.addEventListener("mouseenter", () => show(el));
+      el.addEventListener("focus", () => show(el));
+      el.addEventListener("mouseleave", hide);
+      el.addEventListener("blur", hide);
+      el.addEventListener("click", event => { event.preventDefault(); tip.hidden ? show(el) : hide(); });
+    });
+  }
+
+  function bindRsvpDeadlineControls() {
+    const noClose = document.getElementById("event-no-rsvp-close");
+    const sync = () => {
+      const disabled = !!noClose?.checked;
+      ["event-deadline-date", "event-deadline-hour", "event-deadline-minute", "event-deadline-ampm"].forEach(id => { const el = document.getElementById(id); if (el) el.disabled = disabled; });
+    };
+    noClose?.addEventListener("change", sync);
+    sync();
   }
 
   function updateEventKeyPreview() {
@@ -549,7 +624,7 @@
     set("event-address", loc.location_address, true);
     set("event-map-query", loc.map_query || loc.location_address || loc.label, true);
     set("event-map-embed", loc.map_embed_url, true);
-    updateGoogleMapLink();
+    updateMapPreview(true);
     setDirty(true);
   }
 
@@ -589,7 +664,7 @@
       event_id: state.creating ? null : (state.selectedId || null),
       title: val("event-title"),
       event_key: val("event-key"),
-      status: val("event-status") || "draft",
+      status: (val("event-status") === "hidden" ? "draft" : (val("event-status") || "draft")),
       visibility_audience: val("event-visibility"),
       starts_at: combineDateTime("event-start", { allDay }),
       ends_at: noEnd ? null : combineDateTime("event-end", { allDay }),
@@ -613,13 +688,13 @@
       description: val("event-description"),
       rsvp_enabled: checked("event-rsvp-enabled"),
       rsvp_audience: val("event-rsvp-audience"),
-      rsvp_deadline_at: combineDateTime("event-deadline", {}),
+      rsvp_deadline_at: checked("event-no-rsvp-close") ? null : combineDateTime("event-deadline", {}),
       capacity: val("event-capacity") === "" ? null : Number(val("event-capacity")),
       allow_guests: checked("event-allow-guests"),
       max_guests_per_rsvp: Number(val("event-max-guests") || 0),
       rsvp_capacity_behavior: val("event-capacity-behavior"),
       waitlist_enabled: val("event-capacity-behavior") === "waitlist",
-      attendee_list_visibility: val("event-attendee-vis"),
+      attendee_list_visibility: val("event-attendee-vis") === "hidden" ? "admin" : val("event-attendee-vis"),
       show_attendee_list: checked("event-show-attendees"),
       allowed_membership_class_keys: val("event-rsvp-audience") === "selected_classes" ? checkedValues("class-key") : [],
       allowed_role_keys: val("event-rsvp-audience") === "selected_roles" ? checkedValues("role-key") : [],
@@ -636,7 +711,10 @@
         if (status) status.value = forcedStatus;
       }
       state.status = "Saving...";
+      state.saving = true;
+      state.draftNotice = false;
       renderStatusOnly();
+      document.querySelectorAll(".event-save").forEach(btn => { btn.textContent = "Saving..."; btn.disabled = true; });
       const payload = makePayload();
       if (!payload.title) throw new Error("Event title is required.");
       if (!payload.starts_at) throw new Error("Start date is required.");
@@ -650,13 +728,16 @@
       const found = state.events.find(ev => clean(ev.event_id) === clean(payload.event_id)) || state.events.find(ev => clean(ev.event_key) === clean(payload.event_key)) || state.events.find(ev => clean(ev.title) === clean(payload.title));
       if (found) state.selectedId = clean(found.event_id);
       state.creating = false;
-      state.status = payload.status === "published" ? "Published." : (payload.status === "draft" ? "Saved as draft." : "Saved.");
+      state.status = payload.status === "published" ? "Published." : (payload.status === "draft" ? "Draft saved." : "Saved.");
+      state.draftNotice = payload.status === "draft";
+      state.saving = false;
       state.error = "";
       setShellState();
       setDirty(false);
       render();
     } catch (error) {
       state.error = error.message || String(error);
+      state.saving = false;
       render();
     }
   }
@@ -684,6 +765,7 @@
     state.selectedId = "";
     state.creating = true;
     state.status = "";
+    state.draftNotice = false;
     setDirty(false);
     render();
     setDirty(true);
@@ -695,12 +777,14 @@
     state.selectedId = clean(id);
     state.creating = false;
     state.status = "";
+    state.draftNotice = false;
     setDirty(false);
     render();
   }
 
   function renderStatusOnly() {
     document.querySelectorAll(".event-status-message").forEach(el => { el.textContent = state.status || ""; });
+    document.querySelectorAll(".event-save").forEach(btn => { btn.textContent = state.saving ? "Saving..." : "Save Changes"; btn.disabled = !!state.saving; });
   }
 
   function render() {

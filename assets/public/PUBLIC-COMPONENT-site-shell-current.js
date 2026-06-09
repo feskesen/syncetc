@@ -1,11 +1,11 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-08-022-A
+// Internal Version: 2026-06-09-091-A
 // Purpose: Public page wrapper. It never renders its own header; it feeds context to the single organization header engine.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-08-022-A";
+  const VERSION = "2026-06-09-091-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -306,12 +306,48 @@
   function loadScript(src) {
     debugStep("loadScript:start", src);
     return new Promise((resolve, reject) => {
-      if (document.querySelector(`script[src="${src}"]`)) { debugStep("loadScript:already-present", src); return resolve(); }
+      const existing = document.querySelector(`script[src="${src}"]`);
+      if (existing) {
+        if (existing.getAttribute("data-syncetc-loaded") === "true") {
+          debugStep("loadScript:cached", src);
+          return resolve();
+        }
+        if (src === SUPABASE_JS && window.supabase && typeof window.supabase.createClient === "function") {
+          existing.setAttribute("data-syncetc-loaded", "true");
+          debugStep("loadScript:already-ready", src);
+          return resolve();
+        }
+        debugStep("loadScript:existing-wait", src);
+        const cleanup = () => {
+          existing.removeEventListener("load", onLoad);
+          existing.removeEventListener("error", onError);
+        };
+        const onLoad = () => { cleanup(); existing.setAttribute("data-syncetc-loaded", "true"); debugStep("loadScript:existing-loaded", src); resolve(); };
+        const onError = () => { cleanup(); const error = new Error(`Failed to load existing ${src}`); debugError("loadScript:existing-error", error); reject(error); };
+        existing.addEventListener("load", onLoad, { once: true });
+        existing.addEventListener("error", onError, { once: true });
+        if (src === SUPABASE_JS) {
+          waitForSupabaseLibrary(10000).then(() => { cleanup(); existing.setAttribute("data-syncetc-loaded", "true"); resolve(); }).catch(() => { /* keep waiting for load/error */ });
+        }
+        return;
+      }
       const script = document.createElement("script");
       script.src = src;
-      script.onload = () => { debugStep("loadScript:loaded", src); resolve(); };
+      script.onload = () => { script.setAttribute("data-syncetc-loaded", "true"); debugStep("loadScript:loaded", src); resolve(); };
       script.onerror = () => { const error = new Error(`Failed to load ${src}`); debugError("loadScript:error", error); reject(error); };
       document.head.appendChild(script);
+    });
+  }
+
+  function waitForSupabaseLibrary(timeoutMs = 10000) {
+    const started = Date.now();
+    return new Promise((resolve, reject) => {
+      const check = () => {
+        if (window.supabase && typeof window.supabase.createClient === "function") return resolve(window.supabase);
+        if (Date.now() - started >= timeoutMs) return reject(new Error("Supabase library loaded but createClient is not ready."));
+        setTimeout(check, 25);
+      };
+      check();
     });
   }
 
@@ -321,7 +357,8 @@
     if (supabaseClientPromise) { debugStep("ensureSupabase:join-inflight"); return supabaseClientPromise; }
 
     supabaseClientPromise = (async () => {
-      if (!window.supabase) await loadScript(SUPABASE_JS);
+      await loadScript(SUPABASE_JS);
+      await waitForSupabaseLibrary(10000);
       supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
       debugStep("ensureSupabase:created-client");
 

@@ -1,14 +1,15 @@
 // CUSTOMER-ADMIN-PAGE-contact-tracker-current.js
-// Internal Version: 2026-06-08-083-A
+// Internal Version: 2026-06-08-083-B
 // Purpose: Organization-admin Contact Tracker for public website inquiries. Uses core-access-action; no Make webhooks.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-08-083-A";
+  const VERSION = "2026-06-08-083-B";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
+  const SUPABASE_JS_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
   const ROOT_SELECTOR = "#syncetc-contact-tracker-root, [data-syncetc-page='contact-tracker']";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
 
@@ -94,19 +95,64 @@
     return `<pre class="sct-debug">${esc(lines.join("\n"))}</pre>`;
   }
 
-  async function loadScript(src) {
-    if (document.querySelector(`script[src="${src}"]`)) return;
-    await new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = src; script.async = true;
-      script.onload = resolve; script.onerror = () => reject(new Error(`Unable to load ${src}`));
-      document.head.appendChild(script);
+  function findExistingScript(src) {
+    const scripts = Array.from(document.querySelectorAll("script[src]"));
+    return scripts.find((script) => script.src === src || script.getAttribute("src") === src || script.src.includes("@supabase/supabase-js@2")) || null;
+  }
+
+  function waitForCondition(check, timeoutMs, label) {
+    const started = Date.now();
+    return new Promise((resolve, reject) => {
+      const tick = () => {
+        try {
+          if (check()) return resolve(true);
+        } catch (_) {}
+        if (Date.now() - started >= timeoutMs) return reject(new Error(`${label || "Required script"} did not become ready in time.`));
+        setTimeout(tick, 25);
+      };
+      tick();
     });
   }
 
+  async function loadScript(src) {
+    const existing = findExistingScript(src);
+    if (existing) {
+      mark("loadScript:existing", src);
+      if (window.supabase?.createClient) return;
+      await Promise.race([
+        new Promise((resolve, reject) => {
+          existing.addEventListener("load", resolve, { once: true });
+          existing.addEventListener("error", () => reject(new Error(`Unable to load ${src}`)), { once: true });
+        }),
+        waitForCondition(() => window.supabase?.createClient, 8000, "Supabase client library"),
+      ]).catch(async () => {
+        await waitForCondition(() => window.supabase?.createClient, 1500, "Supabase client library");
+      });
+      return;
+    }
+
+    mark("loadScript:start", src);
+    await new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = src;
+      script.async = true;
+      script.onload = resolve;
+      script.onerror = () => reject(new Error(`Unable to load ${src}`));
+      document.head.appendChild(script);
+    });
+    mark("loadScript:loaded", src);
+  }
+
   async function ensureSupabase() {
-    if (!window.supabase?.createClient) await loadScript("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2");
-    if (!window.__syncetcContactSupabase) window.__syncetcContactSupabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+    mark("ensureSupabase:start");
+    if (!window.supabase?.createClient) await loadScript(SUPABASE_JS_URL);
+    if (!window.supabase?.createClient) await waitForCondition(() => window.supabase?.createClient, 8000, "Supabase client library");
+    if (!window.__syncetcContactSupabase) {
+      window.__syncetcContactSupabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+      mark("ensureSupabase:created-client");
+    } else {
+      mark("ensureSupabase:cached");
+    }
     return window.__syncetcContactSupabase;
   }
 

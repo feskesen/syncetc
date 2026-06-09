@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-contact-tracker-current.js
-// Internal Version: 2026-06-08-083-B
+// Internal Version: 2026-06-08-085-A
 // Purpose: Organization-admin Contact Tracker for public website inquiries. Uses core-access-action; no Make webhooks.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-08-083-B";
+  const VERSION = "2026-06-08-085-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -35,6 +35,7 @@
     expandedIds: new Set(),
     replyContact: null,
     customContact: null,
+    editingTemplate: null,
     lastBackend: null,
   };
 
@@ -50,6 +51,51 @@
   function esc(value) { return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&#039;"); }
   function obj(value) { return value && typeof value === "object" && !Array.isArray(value) ? value : {}; }
   function arr(value) { return Array.isArray(value) ? value : []; }
+  function bool(value) { return value === true; }
+  function templateId(t) { return clean(t?.contact_reply_template_id || t?.template_id || t?.template_key); }
+  function activeTemplates() { return state.templates.filter((t) => clean(t.status || "active") === "active" && !t.archived_at); }
+  function defaultTemplate() { return activeTemplates().find((t) => t.is_default === true) || activeTemplates()[0] || null; }
+  function textToHtml(value) {
+    const text = raw(value);
+    if (!text) return "";
+    return text.split(/\n{2,}/).map((part) => `<p>${esc(part).replace(/\n/g, "<br>")}</p>`).join("");
+  }
+  function htmlToText(html) {
+    const div = document.createElement("div");
+    div.innerHTML = sanitizeRichHtml(html || "");
+    return clean(div.textContent || "");
+  }
+  function sanitizeRichHtml(html) {
+    const allowed = new Set(["B", "STRONG", "I", "EM", "U", "A", "UL", "OL", "LI", "P", "BR", "DIV", "SPAN"]);
+    const template = document.createElement("template");
+    template.innerHTML = String(html || "");
+    function walk(node) {
+      Array.from(node.childNodes).forEach((child) => {
+        if (child.nodeType === Node.TEXT_NODE) return;
+        if (child.nodeType !== Node.ELEMENT_NODE) { child.remove(); return; }
+        const tag = child.tagName;
+        if (!allowed.has(tag)) {
+          const text = document.createTextNode(child.textContent || "");
+          child.replaceWith(text);
+          return;
+        }
+        Array.from(child.attributes).forEach((attr) => {
+          const name = attr.name.toLowerCase();
+          if (tag === "A" && name === "href") {
+            const href = String(attr.value || "").trim();
+            if (/^(https?:|mailto:)/i.test(href)) {
+              child.setAttribute("href", href);
+              child.setAttribute("target", "_blank");
+              child.setAttribute("rel", "noopener noreferrer");
+            } else child.removeAttribute(attr.name);
+          } else child.removeAttribute(attr.name);
+        });
+        walk(child);
+      });
+    }
+    walk(template.content);
+    return template.innerHTML;
+  }
 
   function styleConfig() {
     const style = obj(state.accessRow?.style_profile || state.accessRow?.styleProfile || {});
@@ -74,7 +120,7 @@
     const cfg = styleConfig();
     return `
       .syncetc-contact-tracker{font-family:Arial,Helvetica,sans-serif;color:${cfg.text};max-width:${cfg.pageWidth};margin:18px auto 52px;padding:0 18px;box-sizing:border-box}
-      .syncetc-contact-tracker *{box-sizing:border-box}.sct-card{background:rgba(255,255,255,.94);border:1px solid ${cfg.border};border-radius:${cfg.radius};box-shadow:${cfg.shadow};overflow:hidden}.sct-head{padding:24px 26px;background:linear-gradient(135deg,${cfg.primary},rgba(47,128,196,.88));color:#fff}.sct-eyebrow{display:inline-flex;margin-bottom:10px;padding:6px 11px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.24);font-size:11px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.sct-head h1{margin:0;color:#fff;font-size:clamp(30px,4vw,48px);line-height:1;font-weight:950;letter-spacing:-.04em}.sct-head p{max-width:860px;margin:12px 0 0;color:rgba(255,255,255,.9);font-size:15px;line-height:1.6}.sct-body{padding:20px 22px 24px;background:linear-gradient(180deg,${cfg.secondary},rgba(255,255,255,.86))}.sct-info{margin:0 0 14px;padding:13px 15px;border-radius:16px;background:#fff;border:1px solid ${cfg.border};border-left:6px solid ${cfg.primary};color:${cfg.text};font-size:13px;font-weight:750;line-height:1.5}.sct-toolbar{display:grid;gap:10px;margin-bottom:14px;padding:12px;border-radius:20px;background:rgba(255,255,255,.86);border:1px solid ${cfg.border};box-shadow:0 8px 20px rgba(12,38,64,.08)}.sct-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.sct-tabs{display:inline-flex;gap:4px;padding:4px;border-radius:999px;background:${cfg.secondary};border:1px solid ${cfg.border}}.sct-tab,.sct-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:34px;padding:8px 13px;border-radius:999px;border:1px solid ${cfg.border};background:#fff;color:${cfg.primary};font:900 13px/1 Arial,Helvetica,sans-serif;text-decoration:none;cursor:pointer}.sct-tab.active,.sct-btn.primary{background:${cfg.primary};color:#fff;border-color:${cfg.primary}}.sct-tab-count{min-width:24px;padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.85);color:${cfg.primary};font-size:12px}.sct-tab.active .sct-tab-count{background:#fff;color:${cfg.primary}}.sct-btn.danger{background:#fee2e2;color:#991b1b;border-color:#fecaca}.sct-btn:disabled{opacity:.5;cursor:not-allowed}.sct-search{min-height:36px;min-width:260px;flex:1 1 300px;padding:9px 13px;border-radius:999px;border:1px solid ${cfg.border};font:800 13px/1 Arial,Helvetica,sans-serif;color:${cfg.text};outline:none}.sct-search:focus{border-color:${cfg.primary};box-shadow:0 0 0 3px rgba(47,128,196,.14)}.sct-list{display:grid;gap:11px}.sct-empty{padding:28px 18px;text-align:center;border-radius:20px;background:#fff;border:1px solid ${cfg.border};color:${cfg.muted};font-weight:850}.sct-item{background:#fff;border:1px solid ${cfg.border};border-radius:18px;box-shadow:0 5px 14px rgba(12,38,64,.07);overflow:hidden}.sct-item-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:11px;align-items:center;padding:14px 16px;cursor:pointer}.sct-name{font-size:15px;font-weight:950;color:${cfg.primary};overflow-wrap:anywhere}.sct-email{margin-top:3px;color:#2f80c4;font-size:13px;font-weight:800;word-break:break-all}.sct-meta{text-align:right;color:${cfg.muted};font-size:12px;font-weight:800}.sct-pill{display:inline-flex;margin-top:5px;padding:5px 9px;border-radius:999px;background:${cfg.secondary};color:${cfg.primary};font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:.08em}.sct-pill.resolved{background:#edf0f3;color:#4b5563}.sct-pill.spam{background:#fee2e2;color:#991b1b}.sct-details{display:none;padding:0 16px 15px;border-top:1px solid ${cfg.border}}.sct-item.open .sct-details{display:block}.sct-section-label{margin:13px 0 6px;color:${cfg.primary};font-size:10px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.sct-box{padding:12px;border-radius:14px;background:${cfg.secondary};border:1px solid ${cfg.border};font-size:13px;line-height:1.5;white-space:pre-wrap}.sct-notes{width:100%;min-height:90px;padding:11px 12px;border-radius:14px;border:1px solid ${cfg.border};font:13px/1.45 Arial,Helvetica,sans-serif;color:${cfg.text};resize:vertical}.sct-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.sct-status{margin-top:10px;font-size:13px;font-weight:850;color:${cfg.muted}}.sct-status.error{color:#991b1b}.sct-status.ok{color:#15803d}.sct-modal-cover{position:fixed;inset:0;display:none;align-items:flex-start;justify-content:center;z-index:999999;padding:24px 16px;background:rgba(15,23,42,.58);overflow:auto}.sct-modal-cover.active{display:flex}.sct-modal{width:100%;max-width:720px;margin:auto 0;background:#fff;border-radius:22px;box-shadow:0 18px 60px rgba(0,0,0,.35);overflow:hidden}.sct-modal h2{margin:0;padding:17px 20px;background:linear-gradient(135deg,${cfg.primary},rgba(47,128,196,.88));color:#fff;font-size:19px}.sct-modal-body{padding:18px 20px;display:grid;gap:11px}.sct-label{display:grid;gap:5px;color:${cfg.primary};font-size:12px;font-weight:950}.sct-input,.sct-textarea,.sct-select{width:100%;padding:10px 12px;border-radius:13px;border:1px solid ${cfg.border};font:14px/1.45 Arial,Helvetica,sans-serif;color:${cfg.text}}.sct-textarea{min-height:180px;resize:vertical}.sct-modal-footer{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;padding:14px 20px 18px;background:${cfg.secondary};border-top:1px solid ${cfg.border}}.sct-debug{margin-top:14px;padding:14px;border-radius:18px;background:#0f172a;color:#dbeafe;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow:auto}.sct-checkbox{width:18px;height:18px;accent-color:${cfg.primary}}@media(max-width:760px){.syncetc-contact-tracker{padding:0 10px}.sct-body{padding:14px}.sct-row{align-items:stretch;flex-direction:column}.sct-search,.sct-btn{width:100%}.sct-item-head{grid-template-columns:auto minmax(0,1fr)}.sct-meta{grid-column:2;text-align:left}.sct-actions,.sct-modal-footer{flex-direction:column}.sct-tabs{width:100%}.sct-tab{flex:1}}
+      .syncetc-contact-tracker *{box-sizing:border-box}.sct-card{background:rgba(255,255,255,.94);border:1px solid ${cfg.border};border-radius:${cfg.radius};box-shadow:${cfg.shadow};overflow:hidden}.sct-head{padding:24px 26px;background:linear-gradient(135deg,${cfg.primary},rgba(47,128,196,.88));color:#fff}.sct-eyebrow{display:inline-flex;margin-bottom:10px;padding:6px 11px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.24);font-size:11px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.sct-head h1{margin:0;color:#fff;font-size:clamp(30px,4vw,48px);line-height:1;font-weight:950;letter-spacing:-.04em}.sct-head p{max-width:860px;margin:12px 0 0;color:rgba(255,255,255,.9);font-size:15px;line-height:1.6}.sct-body{padding:20px 22px 24px;background:linear-gradient(180deg,${cfg.secondary},rgba(255,255,255,.86))}.sct-info{margin:0 0 14px;padding:13px 15px;border-radius:16px;background:#fff;border:1px solid ${cfg.border};border-left:6px solid ${cfg.primary};color:${cfg.text};font-size:13px;font-weight:750;line-height:1.5}.sct-toolbar{display:grid;gap:10px;margin-bottom:14px;padding:12px;border-radius:20px;background:rgba(255,255,255,.86);border:1px solid ${cfg.border};box-shadow:0 8px 20px rgba(12,38,64,.08)}.sct-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.sct-tabs{display:inline-flex;gap:4px;padding:4px;border-radius:999px;background:${cfg.secondary};border:1px solid ${cfg.border}}.sct-tab,.sct-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:34px;padding:8px 13px;border-radius:999px;border:1px solid ${cfg.border};background:#fff;color:${cfg.primary};font:900 13px/1 Arial,Helvetica,sans-serif;text-decoration:none;cursor:pointer}.sct-tab.active,.sct-btn.primary{background:${cfg.primary};color:#fff;border-color:${cfg.primary}}.sct-tab-count{min-width:24px;padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.85);color:${cfg.primary};font-size:12px}.sct-tab.active .sct-tab-count{background:#fff;color:${cfg.primary}}.sct-btn.danger{background:#fee2e2;color:#991b1b;border-color:#fecaca}.sct-btn:disabled{opacity:.5;cursor:not-allowed}.sct-search{min-height:36px;min-width:260px;flex:1 1 300px;padding:9px 13px;border-radius:999px;border:1px solid ${cfg.border};font:800 13px/1 Arial,Helvetica,sans-serif;color:${cfg.text};outline:none}.sct-search:focus{border-color:${cfg.primary};box-shadow:0 0 0 3px rgba(47,128,196,.14)}.sct-list{display:grid;gap:11px}.sct-empty{padding:28px 18px;text-align:center;border-radius:20px;background:#fff;border:1px solid ${cfg.border};color:${cfg.muted};font-weight:850}.sct-item{background:#fff;border:1px solid ${cfg.border};border-radius:18px;box-shadow:0 5px 14px rgba(12,38,64,.07);overflow:hidden}.sct-item-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:11px;align-items:center;padding:14px 16px;cursor:pointer}.sct-name{font-size:15px;font-weight:950;color:${cfg.primary};overflow-wrap:anywhere}.sct-email{margin-top:3px;color:#2f80c4;font-size:13px;font-weight:800;word-break:break-all}.sct-meta{text-align:right;color:${cfg.muted};font-size:12px;font-weight:800}.sct-pill{display:inline-flex;margin-top:5px;padding:5px 9px;border-radius:999px;background:${cfg.secondary};color:${cfg.primary};font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:.08em}.sct-pill.resolved{background:#edf0f3;color:#4b5563}.sct-pill.spam{background:#fee2e2;color:#991b1b}.sct-details{display:none;padding:0 16px 15px;border-top:1px solid ${cfg.border}}.sct-item.open .sct-details{display:block}.sct-section-label{margin:13px 0 6px;color:${cfg.primary};font-size:10px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.sct-box{padding:12px;border-radius:14px;background:${cfg.secondary};border:1px solid ${cfg.border};font-size:13px;line-height:1.5;white-space:pre-wrap}.sct-notes{width:100%;min-height:90px;padding:11px 12px;border-radius:14px;border:1px solid ${cfg.border};font:13px/1.45 Arial,Helvetica,sans-serif;color:${cfg.text};resize:vertical}.sct-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.sct-status{margin-top:10px;font-size:13px;font-weight:850;color:${cfg.muted}}.sct-status.error{color:#991b1b}.sct-status.ok{color:#15803d}.sct-modal-cover{position:fixed;inset:0;display:none;align-items:flex-start;justify-content:center;z-index:999999;padding:24px 16px;background:rgba(15,23,42,.58);overflow:auto}.sct-modal-cover.active{display:flex}.sct-modal{width:100%;max-width:720px;margin:auto 0;background:#fff;border-radius:22px;box-shadow:0 18px 60px rgba(0,0,0,.35);overflow:hidden}.sct-modal h2{margin:0;padding:17px 20px;background:linear-gradient(135deg,${cfg.primary},rgba(47,128,196,.88));color:#fff;font-size:19px}.sct-modal-body{padding:18px 20px;display:grid;gap:11px}.sct-label{display:grid;gap:5px;color:${cfg.primary};font-size:12px;font-weight:950}.sct-input,.sct-textarea,.sct-select{width:100%;padding:10px 12px;border-radius:13px;border:1px solid ${cfg.border};font:14px/1.45 Arial,Helvetica,sans-serif;color:${cfg.text}}.sct-textarea{min-height:180px;resize:vertical}.sct-modal-footer{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;padding:14px 20px 18px;background:${cfg.secondary};border-top:1px solid ${cfg.border}}.sct-debug{margin-top:14px;padding:14px;border-radius:18px;background:#0f172a;color:#dbeafe;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow:auto}.sct-checkbox{width:18px;height:18px;accent-color:${cfg.primary}}.sct-template-panel{margin:0 0 14px;padding:14px;border-radius:20px;background:rgba(255,255,255,.9);border:1px solid ${cfg.border};box-shadow:0 8px 20px rgba(12,38,64,.08)}.sct-template-title{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}.sct-template-title h2{margin:0;color:${cfg.primary};font-size:18px;letter-spacing:-.02em}.sct-template-grid{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:10px;align-items:center}.sct-template-help{margin-top:8px;color:${cfg.muted};font-size:12px;font-weight:800;line-height:1.45}.sct-editor-toolbar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}.sct-editor{min-height:210px;padding:11px 12px;border:1px solid ${cfg.border};border-radius:14px;background:#fff;outline:none;font:14px/1.5 Arial,Helvetica,sans-serif;color:${cfg.text};overflow:auto}.sct-editor:focus{border-color:${cfg.primary};box-shadow:0 0 0 3px rgba(47,128,196,.14)}.sct-preview{max-height:260px;overflow:auto;padding:12px;border-radius:14px;border:1px solid ${cfg.border};background:${cfg.secondary};font-size:14px;line-height:1.5}.sct-placeholder-row{display:flex;gap:6px;flex-wrap:wrap}.sct-muted{color:${cfg.muted};font-size:12px;font-weight:800}@media(max-width:760px){.syncetc-contact-tracker{padding:0 10px}.sct-body{padding:14px}.sct-row{align-items:stretch;flex-direction:column}.sct-search,.sct-btn{width:100%}.sct-item-head{grid-template-columns:auto minmax(0,1fr)}.sct-meta{grid-column:2;text-align:left}.sct-actions,.sct-modal-footer{flex-direction:column}.sct-tabs{width:100%}.sct-tab{flex:1}}
     `;
   }
 
@@ -276,10 +322,21 @@
         <div class="sct-actions">
           <button class="sct-btn" data-action="save-notes" data-contact-id="${esc(id)}">Save Notes</button>
           ${item.status !== "resolved" ? `<button class="sct-btn danger" data-action="resolve" data-contact-id="${esc(id)}">Mark Resolved</button>` : `<button class="sct-btn" data-action="reopen" data-contact-id="${esc(id)}">Reopen</button>`}
-          ${item.status === "open" ? `<button class="sct-btn primary" data-action="prefab" data-contact-id="${esc(id)}">Send Prefab Reply</button><button class="sct-btn" data-action="custom" data-contact-id="${esc(id)}">Send Custom Reply</button>` : ""}
+          ${item.status === "open" ? `<button class="sct-btn primary" data-action="prefab" data-contact-id="${esc(id)}">Send Selected Prefab</button><button class="sct-btn" data-action="custom" data-contact-id="${esc(id)}">Send Custom Reply</button>` : ""}
         </div>
       </div>
     </article>`;
+  }
+
+
+  function templateManagerHtml() {
+    const templates = activeTemplates();
+    const selected = defaultTemplate();
+    return `<section class="sct-template-panel">
+      <div class="sct-template-title"><h2>Prefab Reply Templates</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="sct-btn primary" data-action="new-template">Add Template</button><button class="sct-btn" data-action="edit-template" ${selected ? "" : "disabled"}>Edit Selected</button><button class="sct-btn danger" data-action="archive-template" ${selected ? "" : "disabled"}>Archive Selected</button></div></div>
+      <div class="sct-template-grid"><select class="sct-select" data-template-manager-select>${templateOptions(selected?.template_key || "")}</select><button class="sct-btn" data-action="template-manager-preview" ${selected ? "" : "disabled"}>Preview</button></div>
+      <div class="sct-template-help">Use templates for common replies. Supported placeholders: <strong>{{first_name}}</strong>, <strong>{{organization_name}}</strong>, <strong>{{info_url}}</strong>, <strong>{{sender_name}}</strong>. Archive hides a template without deleting history.</div>
+    </section>`;
   }
 
   function mainHtml() {
@@ -294,6 +351,7 @@
         <div class="sct-head"><div class="sct-eyebrow">Organization Admin</div><h1>Contact Tracker</h1><p>Review public website inquiries, add internal notes, send a reply when appropriate, and move completed contacts out of the active workflow.</p></div>
         <div class="sct-body">
           <div class="sct-info"><strong>Workflow note:</strong> New public contact submissions are saved here. The system does not email the board/admins for each submission. Suspected spam is separated from the Open count by default.</div>
+          ${templateManagerHtml()}
           <div class="sct-toolbar">
             <div class="sct-row">
               <div class="sct-tabs">
@@ -328,10 +386,15 @@
     </div>`;
   }
 
+  function templateOptions(selectedKey = "") {
+    return activeTemplates().map((t) => `<option value="${esc(t.template_key)}" ${clean(t.template_key) === clean(selectedKey) ? "selected" : ""}>${esc(t.template_name || t.template_key)}${t.is_default ? " • default" : ""}</option>`).join("");
+  }
+
   function modalHtml() {
-    const templates = state.templates.map((t) => `<option value="${esc(t.template_key)}">${esc(t.template_name || t.template_key)}</option>`).join("");
-    return `<div class="sct-modal-cover" data-modal="reply"><div class="sct-modal"><h2>Send Prefab Reply</h2><div class="sct-modal-body"><label class="sct-label">Template<select class="sct-select" data-prefab-template>${templates}</select></label><label style="display:flex;gap:8px;align-items:center;font-size:13px;font-weight:850"><input class="sct-checkbox" type="checkbox" data-prefab-resolve checked> Mark resolved after sending</label><div class="sct-status" data-prefab-status></div></div><div class="sct-modal-footer"><button class="sct-btn" data-action="close-modal">Cancel</button><button class="sct-btn primary" data-action="send-prefab">Send Prefab Reply</button></div></div></div>
-    <div class="sct-modal-cover" data-modal="custom"><div class="sct-modal"><h2>Send Custom Reply</h2><div class="sct-modal-body"><label class="sct-label">To<input class="sct-input" data-custom-to></label><label class="sct-label">Subject<input class="sct-input" data-custom-subject></label><label class="sct-label">Message<textarea class="sct-textarea" data-custom-body></textarea></label><label style="display:flex;gap:8px;align-items:center;font-size:13px;font-weight:850"><input class="sct-checkbox" type="checkbox" data-custom-cc> Send me a copy</label><div class="sct-status" data-custom-status></div></div><div class="sct-modal-footer"><button class="sct-btn" data-action="close-modal">Cancel</button><button class="sct-btn primary" data-action="send-custom">Send Custom Reply</button></div></div></div>`;
+    return `<div class="sct-modal-cover" data-modal="reply"><div class="sct-modal"><h2>Send Prefab Reply</h2><div class="sct-modal-body"><label class="sct-label">Template<select class="sct-select" data-prefab-template>${templateOptions(defaultTemplate()?.template_key || "")}</select></label><div class="sct-preview" data-prefab-preview></div><label style="display:flex;gap:8px;align-items:center;font-size:13px;font-weight:850"><input class="sct-checkbox" type="checkbox" data-prefab-resolve checked> Mark resolved after sending</label><div class="sct-status" data-prefab-status></div></div><div class="sct-modal-footer"><button class="sct-btn" data-action="close-modal">Cancel</button><button class="sct-btn" data-action="refresh-prefab-preview">Preview</button><button class="sct-btn primary" data-action="send-prefab">Send Selected Reply</button></div></div></div>
+    <div class="sct-modal-cover" data-modal="custom"><div class="sct-modal"><h2>Send Custom Reply</h2><div class="sct-modal-body"><label class="sct-label">To<input class="sct-input" data-custom-to></label><label class="sct-label">Subject<input class="sct-input" data-custom-subject></label><label class="sct-label">Message<textarea class="sct-textarea" data-custom-body></textarea></label><label style="display:flex;gap:8px;align-items:center;font-size:13px;font-weight:850"><input class="sct-checkbox" type="checkbox" data-custom-cc> Send me a copy</label><div class="sct-status" data-custom-status></div></div><div class="sct-modal-footer"><button class="sct-btn" data-action="close-modal">Cancel</button><button class="sct-btn primary" data-action="send-custom">Send Custom Reply</button></div></div></div>
+    <div class="sct-modal-cover" data-modal="template"><div class="sct-modal"><h2 data-template-modal-title>Prefab Reply Template</h2><div class="sct-modal-body"><input type="hidden" data-template-id><label class="sct-label">Template name<input class="sct-input" data-template-name placeholder="Application info"></label><label class="sct-label">Template key<input class="sct-input" data-template-key placeholder="application-info"></label><label class="sct-label">Subject<input class="sct-input" data-template-subject placeholder="Information from {{organization_name}}"></label><label class="sct-label">Rich-text-lite message<div class="sct-editor-toolbar"><button type="button" class="sct-btn" data-editor-command="bold"><b>B</b></button><button type="button" class="sct-btn" data-editor-command="italic"><i>I</i></button><button type="button" class="sct-btn" data-editor-command="insertUnorderedList">Bullets</button><button type="button" class="sct-btn" data-editor-command="insertOrderedList">Numbers</button><button type="button" class="sct-btn" data-editor-link>Link</button></div><div class="sct-editor" data-template-body-editor contenteditable="true"></div></label><div class="sct-placeholder-row"><button type="button" class="sct-btn" data-insert-token="{{first_name}}">first name</button><button type="button" class="sct-btn" data-insert-token="{{organization_name}}">organization</button><button type="button" class="sct-btn" data-insert-token="{{info_url}}">info URL</button><button type="button" class="sct-btn" data-insert-token="{{sender_name}}">sender</button></div><label style="display:flex;gap:8px;align-items:center;font-size:13px;font-weight:850"><input class="sct-checkbox" type="checkbox" data-template-default> Make this the default prefab reply</label><label class="sct-label">Sort order<input class="sct-input" type="number" data-template-sort value="100"></label><div class="sct-status" data-template-status></div></div><div class="sct-modal-footer"><button class="sct-btn" data-action="close-modal">Cancel</button><button class="sct-btn" data-action="preview-template-edit">Preview</button><button class="sct-btn primary" data-action="save-template">Save Template</button></div></div></div>
+    <div class="sct-modal-cover" data-modal="preview"><div class="sct-modal"><h2>Template Preview</h2><div class="sct-modal-body"><div class="sct-preview" data-template-preview-box></div></div><div class="sct-modal-footer"><button class="sct-btn primary" data-action="close-modal">Close</button></div></div></div>`;
   }
 
   function renderAll() {
@@ -366,6 +429,92 @@
     renderAll();
   }
 
+
+  function selectedManagerTemplate(root = document) {
+    const keyVal = root.querySelector("[data-template-manager-select]")?.value || defaultTemplate()?.template_key || "";
+    return activeTemplates().find((t) => clean(t.template_key) === clean(keyVal)) || defaultTemplate();
+  }
+
+  function sampleTokens(contact) {
+    const name = contact?.name || "Frank Example";
+    return {
+      first_name: clean(name).split(/\s+/)[0] || "there",
+      contact_name: name,
+      organization_name: state.accessRow?.organization_name || "Organization",
+      sender_name: state.email || "Organization Admin",
+      sender_email: state.email || "admin@example.com",
+      info_url: "https://syncetc.webflow.io/info",
+    };
+  }
+
+  function replaceTokensClient(value, tokens) {
+    return String(value || "").replace(/{{\s*([a-z0-9_:-]+)\s*}}/gi, (_m, k) => esc(tokens[key(k).replace(/-/g, "_")] ?? ""));
+  }
+
+  function renderTemplatePreview(template, contact) {
+    if (!template) return "<em>No active prefab reply templates.</em>";
+    const tokens = sampleTokens(contact);
+    const subject = replaceTokensClient(template.subject || "", tokens);
+    const html = replaceTokensClient(template.body_html || textToHtml(template.body_text || ""), tokens);
+    return `<div class="sct-section-label">Subject</div><div class="sct-box">${subject || "(no subject)"}</div><div class="sct-section-label">Message</div><div class="sct-preview">${sanitizeRichHtml(html)}</div>`;
+  }
+
+  function openTemplateEditor(template) {
+    state.editingTemplate = template || null;
+    const cover = document.querySelector("[data-modal='template']");
+    if (!cover) return;
+    cover.querySelector("[data-template-modal-title]").textContent = template ? "Edit Prefab Reply Template" : "Add Prefab Reply Template";
+    cover.querySelector("[data-template-id]").value = templateId(template || {});
+    cover.querySelector("[data-template-name]").value = template?.template_name || "";
+    cover.querySelector("[data-template-key]").value = template?.template_key || "";
+    cover.querySelector("[data-template-subject]").value = template?.subject || "";
+    cover.querySelector("[data-template-body-editor]").innerHTML = sanitizeRichHtml(template?.body_html || textToHtml(template?.body_text || ""));
+    cover.querySelector("[data-template-default]").checked = template?.is_default === true || !activeTemplates().length;
+    cover.querySelector("[data-template-sort]").value = template?.sort_order ?? 100;
+    const status = cover.querySelector("[data-template-status]");
+    if (status) { status.textContent = ""; status.className = "sct-status"; }
+    cover.classList.add("active");
+  }
+
+  function insertAtSelection(html) {
+    const editor = document.querySelector("[data-template-body-editor]");
+    if (!editor) return;
+    editor.focus();
+    try { document.execCommand("insertHTML", false, html); } catch (_) { editor.innerHTML += html; }
+  }
+
+  async function saveTemplateFromModal() {
+    const cover = document.querySelector("[data-modal='template']");
+    const status = cover?.querySelector("[data-template-status]");
+    try {
+      const id = cover.querySelector("[data-template-id]").value;
+      const templateName = cover.querySelector("[data-template-name]").value;
+      const templateKey = cover.querySelector("[data-template-key]").value;
+      const subject = cover.querySelector("[data-template-subject]").value;
+      const bodyHtml = sanitizeRichHtml(cover.querySelector("[data-template-body-editor]").innerHTML);
+      const bodyText = htmlToText(bodyHtml);
+      const isDefault = !!cover.querySelector("[data-template-default]").checked;
+      const sortOrder = Number(cover.querySelector("[data-template-sort]").value || 100);
+      if (!clean(templateName)) throw new Error("Enter a template name.");
+      if (!clean(subject)) throw new Error("Enter a subject.");
+      if (!clean(bodyText)) throw new Error("Enter a message body.");
+      if (status) { status.textContent = "Saving..."; status.className = "sct-status"; }
+      await callAccess("organization_upsert_contact_reply_template", { organization_id: state.selectedOrgId, contact_reply_template_id: id || undefined, template_name: templateName, template_key: templateKey, subject, body_text: bodyText, body_html: bodyHtml, is_default: isDefault, sort_order: sortOrder });
+      closeModals();
+      await refresh();
+    } catch (error) {
+      if (status) { status.textContent = error.message || String(error); status.className = "sct-status error"; }
+    }
+  }
+
+  async function archiveSelectedTemplate(root) {
+    const template = selectedManagerTemplate(root);
+    if (!template) return;
+    if (!confirm(`Archive prefab template "${template.template_name || template.template_key}"?`)) return;
+    await callAccess("organization_archive_contact_reply_template", { organization_id: state.selectedOrgId, contact_reply_template_id: template.contact_reply_template_id, template_key: template.template_key });
+    await refresh();
+  }
+
   function openModal(name, contact) {
     state.replyContact = contact;
     state.customContact = contact;
@@ -377,6 +526,12 @@
       cover.querySelector("[data-custom-subject]").value = "";
       cover.querySelector("[data-custom-body]").value = "";
     }
+    if (name === "reply") {
+      const sel = cover.querySelector("[data-prefab-template]");
+      const template = activeTemplates().find((t) => clean(t.template_key) === clean(sel?.value)) || defaultTemplate();
+      const preview = cover.querySelector("[data-prefab-preview]");
+      if (preview) preview.innerHTML = renderTemplatePreview(template, contact);
+    }
   }
 
   function closeModals() { document.querySelectorAll(".sct-modal-cover").forEach((el) => el.classList.remove("active")); }
@@ -384,7 +539,7 @@
   async function sendPrefab(root) {
     const contact = state.replyContact;
     if (!contact) return;
-    const templateKey = root.querySelector("[data-prefab-template]")?.value || "application-info";
+    const templateKey = root.querySelector("[data-prefab-template]")?.value || defaultTemplate()?.template_key || "application-info";
     const resolveAfter = !!root.querySelector("[data-prefab-resolve]")?.checked;
     const status = root.querySelector("[data-prefab-status]");
     try {
@@ -435,6 +590,18 @@
     root.querySelectorAll("[data-action='reopen']").forEach((btn) => btn.addEventListener("click", async () => { try { await updateInquiry(btn.dataset.contactId, { status: "open" }); renderAll(); } catch (e) { setStatus(root, e.message || String(e), "error"); } }));
     root.querySelectorAll("[data-action='prefab']").forEach((btn) => btn.addEventListener("click", () => openModal("reply", findInquiry(btn.dataset.contactId))));
     root.querySelectorAll("[data-action='custom']").forEach((btn) => btn.addEventListener("click", () => openModal("custom", findInquiry(btn.dataset.contactId))));
+
+    root.querySelector("[data-action='new-template']")?.addEventListener("click", () => openTemplateEditor(null));
+    root.querySelector("[data-action='edit-template']")?.addEventListener("click", () => openTemplateEditor(selectedManagerTemplate(root)));
+    root.querySelector("[data-action='archive-template']")?.addEventListener("click", () => archiveSelectedTemplate(root).catch((e) => setStatus(root, e.message || String(e), "error")));
+    root.querySelector("[data-action='template-manager-preview']")?.addEventListener("click", () => { const box = document.querySelector("[data-template-preview-box]"); if (box) box.innerHTML = renderTemplatePreview(selectedManagerTemplate(root)); document.querySelector("[data-modal='preview']")?.classList.add("active"); });
+    root.querySelectorAll("[data-editor-command]").forEach((btn) => btn.addEventListener("click", () => { document.querySelector("[data-template-body-editor]")?.focus(); try { document.execCommand(btn.dataset.editorCommand, false, null); } catch (_) {} }));
+    root.querySelector("[data-editor-link]")?.addEventListener("click", () => { const url = prompt("Enter link URL (https:// or mailto:)"); if (!url) return; if (!/^(https?:|mailto:)/i.test(url)) return alert("Use an https:// or mailto: link."); insertAtSelection(`<a href="${esc(url)}">${esc(url)}</a>`); });
+    root.querySelectorAll("[data-insert-token]").forEach((btn) => btn.addEventListener("click", () => insertAtSelection(esc(btn.dataset.insertToken || ""))));
+    root.querySelector("[data-action='save-template']")?.addEventListener("click", () => saveTemplateFromModal());
+    root.querySelector("[data-action='preview-template-edit']")?.addEventListener("click", () => { const cover = document.querySelector("[data-modal='template']"); const tmp = { subject: cover?.querySelector("[data-template-subject]")?.value || "", body_html: sanitizeRichHtml(cover?.querySelector("[data-template-body-editor]")?.innerHTML || "") }; const box = document.querySelector("[data-template-preview-box]"); if (box) box.innerHTML = renderTemplatePreview(tmp); document.querySelector("[data-modal='preview']")?.classList.add("active"); });
+    root.querySelector("[data-action='refresh-prefab-preview']")?.addEventListener("click", () => { const cover = document.querySelector("[data-modal='reply']"); const tkey = cover?.querySelector("[data-prefab-template]")?.value || ""; const template = activeTemplates().find((t) => clean(t.template_key) === clean(tkey)) || defaultTemplate(); const preview = cover?.querySelector("[data-prefab-preview]"); if (preview) preview.innerHTML = renderTemplatePreview(template, state.replyContact); });
+    root.querySelector("[data-prefab-template]")?.addEventListener("change", () => { const cover = document.querySelector("[data-modal='reply']"); const tkey = cover?.querySelector("[data-prefab-template]")?.value || ""; const template = activeTemplates().find((t) => clean(t.template_key) === clean(tkey)) || defaultTemplate(); const preview = cover?.querySelector("[data-prefab-preview]"); if (preview) preview.innerHTML = renderTemplatePreview(template, state.replyContact); });
     root.querySelectorAll("[data-action='close-modal']").forEach((btn) => btn.addEventListener("click", closeModals));
     root.querySelector("[data-action='send-prefab']")?.addEventListener("click", () => sendPrefab(root.querySelector("[data-modal='reply']")).catch((e) => setStatus(root, e.message || String(e), "error")));
     root.querySelector("[data-action='send-custom']")?.addEventListener("click", (e) => sendCustom(e.target).catch((err) => setStatus(root, err.message || String(err), "error")));

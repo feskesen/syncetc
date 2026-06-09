@@ -1,1 +1,0 @@
-Admin page files go here.

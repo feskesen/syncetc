@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-events-current.js
-// Internal Version: 2026-06-09-092-H
-// Purpose: Customer-admin Events Manager guided accordion flow: required sections, continue/back navigation, no default General type, and retain 0092-F/G validation/state preservation behavior. Uses portal shell + core-access-action.
+// Internal Version: 2026-06-09-092-I
+// Purpose: Customer-admin Events Manager Event Basics merge, smarter reusable type/location prompts, date-sorted manageable event list, hidden sort-order UI, and retain 0092-F/G/H validation/state preservation behavior. Uses portal shell + core-access-action.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-09-092-H";
+  const VERSION = "2026-06-09-092-I";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -273,6 +273,20 @@
   function selectedEvent() { return state.events.find(ev => clean(ev.event_id) === clean(state.selectedId)) || null; }
   function selectedType() { const key = val("event-type-key"); return state.eventTypes.find(t => clean(t.type_key) === key) || null; }
   function selectedLocation() { const key = val("event-location-key"); return state.locations.find(l => clean(l.location_key) === key) || null; }
+  function typeDisplayName(type) { return clean(type && (type.label || type.type_label || type.type_key)); }
+  function locationDisplayName(loc) { return clean(loc && (loc.label || loc.location_name || loc.location_key)); }
+  function typeChangedFromSaved(type) {
+    if (!type) return false;
+    return !sameText(val("event-type-label"), typeDisplayName(type)) || clean(val("event-accent")) !== clean(type.accent_color) || clean(val("event-image")) !== clean(type.image_url);
+  }
+  function locationChangedFromSaved(loc) {
+    if (!loc) return false;
+    return !sameText(val("event-location-name"), locationDisplayName(loc)) || clean(val("event-address")) !== clean(loc.location_address) || clean(val("event-map-query")) !== clean(loc.map_query || loc.location_address || locationDisplayName(loc)) || clean(val("event-map-embed")) !== clean(loc.map_embed_url);
+  }
+  function reuseMode(kind) {
+    const box = document.getElementById(kind === "type" ? "event-type-reuse-box" : "event-location-reuse-box");
+    return clean(box && box.dataset && box.dataset.mode);
+  }
   function classKey(row) { return clean(row.class_key || row.membership_class_key); }
   function roleKey(row) { return clean(row.role_key); }
   function defaultNewEvent() {
@@ -339,7 +353,7 @@
       allowed_membership_class_keys: p.allowed_membership_class_keys ?? (val("event-rsvp-audience") === "selected_classes" ? checkedValues("class-key") : []),
       allowed_role_keys: p.allowed_role_keys ?? (val("event-rsvp-audience") === "selected_roles" ? checkedValues("role-key") : []),
       featured: p.featured ?? checked("event-featured"),
-      sort_order: p.sort_order ?? Number(val("event-sort") || 100),
+      sort_order: p.sort_order ?? Number((selectedEvent() && selectedEvent().sort_order) || 100),
       needed_items: p.event_needed_items ?? selectedNeedsPayload(),
     };
   }
@@ -364,7 +378,7 @@
       .events-control-panel{display:grid;gap:10px;margin:0 0 12px;padding:14px;border:1px solid ${c.border};border-radius:20px;background:linear-gradient(180deg,#fff,${c.soft})}.events-control-title{display:grid;gap:5px}.events-control-title strong{font-size:17px}.events-control-actions{display:flex;gap:8px;flex-wrap:wrap}.events-control-panel .events-btn{width:100%}.events-control-panel .events-status{justify-content:center}.events-status{display:inline-flex;padding:9px 12px;border-radius:14px;background:${c.soft};font-weight:900}.events-status.good{background:#e7f6e7;color:${c.primary}}.event-status-message.error{color:#991b1b;font-weight:900}.event-status-message.warn{color:#713f12;font-weight:900}.event-status-message.good{color:${c.primary};font-weight:900}.events-draft-notice{padding:10px 12px;border:1px solid #facc15;border-radius:14px;background:#fffbeb;color:#713f12;font-size:12.5px;font-weight:800;line-height:1.35}.events-draft-actions{display:flex;gap:8px;margin-top:9px}.events-draft-actions .events-btn{width:auto;padding:8px 11px;font-size:12px}
       .event-record{display:block;width:100%;text-align:left;border:1px solid ${c.border};border-left:6px solid var(--event-accent,${c.primary});background:#fff;border-radius:16px;padding:12px;cursor:pointer;color:${c.text}}.event-record[hidden]{display:none}.event-record.selected{border-color:${c.primary};border-left-color:var(--event-accent,${c.primary});box-shadow:0 0 0 3px color-mix(in srgb,${c.primary} 13%,transparent)}.event-record.archived{opacity:.55}.event-record b{display:block}.event-record span,.event-record small{display:block;color:rgba(20,36,23,.70);font-size:12px;margin-top:4px}
       .events-card{background:#fff;border:1px solid ${c.border};border-radius:20px;padding:18px;margin-bottom:16px}.events-card h2,.events-card h3{margin:0 0 12px}.events-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.events-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.events-field{display:grid;gap:5px;font-size:12px;font-weight:900;color:${c.primary}}.events-label-line{display:flex;align-items:center;gap:6px}.events-input,.events-select,.events-textarea{width:100%;border:1px solid ${c.border};border-radius:12px;padding:10px 12px;font:inherit;color:${c.text};background:#fff}.events-input[readonly],.events-input:disabled,.events-select:disabled{background:#f3f7f3;color:rgba(20,36,23,.58);cursor:not-allowed}.events-textarea{min-height:88px;resize:vertical}.events-btn{border:1px solid ${c.border};border-radius:999px;background:#fff;color:${c.primary};padding:10px 14px;font-weight:900;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:7px}.events-btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(0,0,0,.08)}.events-btn.primary{background:${c.primary};color:#fff}.events-btn.danger{background:#fff7ec;color:#9a3412;border-color:#fed7aa}.events-btn:disabled{opacity:.55;cursor:not-allowed}
-      .events-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 12px}.events-check,.events-inline-check{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:800;color:${c.text}}.events-check input,.events-inline-check input{width:auto}.events-error{padding:12px;border-radius:14px;background:#fee2e2;color:#991b1b;font-weight:900}.events-empty{padding:18px;border:1px dashed ${c.border};border-radius:16px;color:rgba(20,36,23,.65);background:#fff}.events-empty.big{padding:34px;text-align:center}.events-color-row{display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:8px;align-items:end}.events-color-picker{width:44px;height:42px;border:1px solid ${c.border};border-radius:12px;padding:3px;background:#fff;cursor:pointer}.events-muted{color:rgba(20,36,23,.62);font-size:12.5px;line-height:1.4}.events-topline{display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap}.events-time-block{display:grid;gap:8px;margin-top:10px}.events-time-title{font-weight:900;color:${c.primary};font-size:12px;text-transform:uppercase;letter-spacing:.03em}.events-time-grid{display:grid;grid-template-columns:minmax(160px,1.4fr) 88px 98px 98px;gap:10px}.events-timing-flags{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 14px}.events-map-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.events-map-preview{margin-top:12px;border:1px solid ${c.border};border-radius:16px;overflow:hidden;background:${c.soft};min-height:170px;display:grid;place-items:center}.events-map-preview iframe{width:100%;height:220px;border:0;display:block}.events-map-preview .events-muted{padding:18px;text-align:center}.events-details{margin-top:12px}.events-details summary{cursor:pointer;font-weight:900;color:${c.primary};margin-bottom:10px}.events-rsvp-flags{margin:0 0 14px;display:flex;gap:14px;flex-wrap:wrap}.events-rsvp-row{margin-top:12px}.events-conditional[hidden]{display:none!important}.events-advanced{border-style:dashed}.events-debug{max-width:${c.width};margin:16px auto;padding:14px;border-radius:16px;background:#0f172a;color:#dbeafe;overflow:auto;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace}
+      .events-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 12px}.events-check,.events-inline-check{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:800;color:${c.text}}.events-check input,.events-inline-check input{width:auto}.events-error{padding:12px;border-radius:14px;background:#fee2e2;color:#991b1b;font-weight:900}.events-empty{padding:18px;border:1px dashed ${c.border};border-radius:16px;color:rgba(20,36,23,.65);background:#fff}.events-empty.big{padding:34px;text-align:center}.events-color-row{display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:8px;align-items:end}.events-color-picker{width:44px;height:42px;border:1px solid ${c.border};border-radius:12px;padding:3px;background:#fff;cursor:pointer}.events-muted{color:rgba(20,36,23,.62);font-size:12.5px;line-height:1.4}.events-topline{display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap}.events-time-block{display:grid;gap:8px;margin-top:10px}.events-time-title{font-weight:900;color:${c.primary};font-size:12px;text-transform:uppercase;letter-spacing:.03em}.events-time-grid{display:grid;grid-template-columns:minmax(160px,1.4fr) 88px 98px 98px;gap:10px}.events-timing-flags{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 14px}.events-map-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.events-map-preview{margin-top:12px;border:1px solid ${c.border};border-radius:16px;overflow:hidden;background:${c.soft};min-height:170px;display:grid;place-items:center}.events-map-preview iframe{width:100%;height:220px;border:0;display:block}.events-map-preview .events-muted{padding:18px;text-align:center}.events-reuse-box{margin-top:12px;padding:12px;border:1px dashed ${c.border};border-radius:14px;background:#fbfdfb}.events-reuse-box[hidden]{display:none!important}.events-featured-check{align-self:end;min-height:42px}.events-list-note{padding:8px 2px}.events-details{margin-top:12px}.events-details summary{cursor:pointer;font-weight:900;color:${c.primary};margin-bottom:10px}.events-rsvp-flags{margin:0 0 14px;display:flex;gap:14px;flex-wrap:wrap}.events-rsvp-row{margin-top:12px}.events-conditional[hidden]{display:none!important}.events-advanced{border-style:dashed}.events-debug{max-width:${c.width};margin:16px auto;padding:14px;border-radius:16px;background:#0f172a;color:#dbeafe;overflow:auto;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace}
       .events-help{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:999px;border:1px solid ${c.border};background:#fff;color:${c.primary};font-size:11px;font-weight:900;cursor:help}.events-fixed-tip{position:fixed;max-width:min(320px,calc(100vw - 28px));padding:10px 12px;border-radius:12px;background:#102a16;color:#fff;font-size:12px;line-height:1.35;font-weight:800;box-shadow:0 12px 30px rgba(0,0,0,.22);z-index:2147483000;pointer-events:none}
       @media(max-width:900px){.events-main{grid-template-columns:1fr;min-height:0}.events-sidebar,.events-editor{max-height:none;overflow:visible}.events-sidebar{border-right:none;border-bottom:1px solid ${c.border}}.events-grid,.events-grid.three{grid-template-columns:1fr}.events-check-grid{grid-template-columns:1fr}.events-time-grid{grid-template-columns:1fr 1fr}.events-sidebar-head{grid-template-columns:1fr}.events-control-panel .events-btn{width:auto}.events-control-actions{justify-content:flex-start}}
       @media(max-width:560px){.events-time-grid{grid-template-columns:1fr}.events-hero{padding:24px 22px}.events-card{padding:14px}.events-editor{padding:14px}.events-btn{width:100%}.events-control-panel .events-btn{width:100%}.events-side-buttons{display:grid}}
@@ -379,7 +393,7 @@
 
   function typeOptions(ev) {
     const current = clean(ev.event_type_key || obj(ev.event_type_json).type_key);
-    return `<option value="">Select saved type or enter custom below</option>` + state.eventTypes.map(t => `<option value="${attr(t.type_key)}" ${clean(t.type_key) === current ? "selected" : ""}>${esc(t.label)}</option>`).join("");
+    return `<option value="">Select event type...</option>` + state.eventTypes.map(t => `<option value="${attr(t.type_key)}" ${clean(t.type_key) === current ? "selected" : ""}>${esc(t.label)}</option>`).join("");
   }
 
   function locationOptions(ev) {
@@ -419,6 +433,10 @@
       if (typeFilter && type !== typeFilter) return false;
       if (dateFilter !== "all" && eventDateClass(ev) !== dateFilter) return false;
       return true;
+    }).sort((a, b) => {
+      const ad = a.starts_at ? new Date(a.starts_at).getTime() : Number.MAX_SAFE_INTEGER;
+      const bd = b.starts_at ? new Date(b.starts_at).getTime() : Number.MAX_SAFE_INTEGER;
+      return (Number.isFinite(ad) ? ad : Number.MAX_SAFE_INTEGER) - (Number.isFinite(bd) ? bd : Number.MAX_SAFE_INTEGER);
     });
   }
 
@@ -436,7 +454,10 @@
     if (!state.events.length) return `<div class="events-empty">No events yet. Create the first event.</div>`;
     const events = filteredEvents();
     if (!events.length) return `<div class="events-empty">No events match these filters.</div>`;
-    return events.map(ev => {
+    const limit = 100;
+    const shown = events.slice(0, limit);
+    const note = events.length > limit ? `<div class="events-muted events-list-note">Showing first ${limit} of ${events.length} matching events. Use search or filters to narrow the list.</div>` : "";
+    return note + shown.map(ev => {
       const accent = clean(ev.event_accent_color || (obj(ev.event_type_json).accent_color)) || styleConfig().primary;
       const status = eventStatus(ev);
       return `<button type="button" class="event-record ${clean(ev.event_id) === clean(state.selectedId) && !state.creating ? "selected" : ""} ${status === "archived" ? "archived" : ""}" style="--event-accent:${attr(accent)}" data-event-id="${attr(ev.event_id)}"><b>${esc(ev.title || "Untitled event")}</b><span>${esc(readableDate(ev.starts_at))}</span><small>${esc(ev.event_type_label || ev.category || "General")} • ${esc(status)}</small></button>`;
@@ -482,31 +503,29 @@
       return `<details class="events-card events-accordion ${attr(section.extra || "")}" data-section-key="${attr(section.key)}" data-section-index="${attr(index)}" ${open ? "open" : ""}><summary class="events-accordion-summary"><span class="events-accordion-title"><span>${esc(section.title)}</span><span class="events-section-badge ${attr(status.kind)}" data-section-badge="${attr(section.key)}">${esc(status.label)}</span></span><span class="events-accordion-cue">▾</span></summary><div class="events-accordion-body">${section.body}${nav}</div></details>`;
     };
 
-    const detailsBody = `<div class="events-grid"><label class="events-field">Title<input class="events-input" id="event-title" value="${attr(ev.title || "")}" placeholder="Event title"></label><label class="events-field"><span class="events-label-line">Event key ${help("Auto-generated identifier used internally and in URLs. Users should not edit this directly.")}</span><input class="events-input" id="event-key" value="${attr(keyPreview)}" placeholder="Generated automatically from title and date" readonly></label><label class="events-field"><span class="events-label-line">Event visibility ${help("Who can see the event listing at all.")}</span><select class="events-select" id="event-visibility"><option value="public">Public</option><option value="logged_in">Logged-in users</option><option value="member">Members/users</option><option value="admin">Admins/board only</option></select></label></div>`;
+    const basicsBody = `<div class="events-grid"><label class="events-field"><span class="events-label-line">Event type ${help("The reusable category/template, such as Board Meeting, BBQ, Fly-in, or Safety Seminar. It can carry defaults like color and image.")}</span><select class="events-select" id="event-type-key">${typeOptions(ev)}</select></label><label class="events-field">Event title<input class="events-input" id="event-title" value="${attr(ev.title || "")}" placeholder="Name of this specific event"></label><label class="events-field"><span class="events-label-line">Event visibility ${help("Who can see the event listing at all.")}</span><select class="events-select" id="event-visibility"><option value="public">Public</option><option value="logged_in">Logged-in users</option><option value="member">Members/users</option><option value="admin">Admins/board only</option></select></label><label class="events-field"><span class="events-label-line">Event key ${help("Auto-generated identifier used internally and in URLs. Users should not edit this directly.")}</span><input class="events-input" id="event-key" value="${attr(keyPreview)}" placeholder="Generated automatically from title and date" readonly></label></div><div class="events-muted" style="margin-top:10px">Event type is the reusable category. Event title is the name of this particular event. If the title is blank, selecting a type will suggest a title.</div><div class="events-grid" style="margin-top:12px"><label class="events-field">Event type name<input class="events-input" id="event-type-label" value="${attr(ev.event_type_label || ev.category || typeJson.label || "")}" placeholder="Reusable type name"></label><label class="events-field">Accent color<div class="events-color-row"><input class="events-input" id="event-accent" value="${attr(accent)}"><input class="events-color-picker" id="event-color-picker" type="color" value="${attr(accent)}" title="Choose accent color"></div></label><label class="events-field">Image URL<input class="events-input" id="event-image" value="${attr(ev.event_image_url || ev.image_url || typeJson.image_url || "")}" placeholder="Image URL for now; upload support later"></label><label class="events-inline-check events-featured-check"><input type="checkbox" id="event-featured" ${ev.featured ? "checked" : ""}> Featured ${help("Marks this event for possible homepage or featured-event displays later. It does not change calendar sort order.")}</label></div><div class="events-reuse-box" id="event-type-reuse-box"><label class="events-inline-check"><input type="checkbox" id="event-save-type"> <span id="event-type-reuse-label"></span></label><div class="events-muted" id="event-type-reuse-help"></div></div>`;
 
     const timingBody = `<div class="events-timing-flags"><label class="events-inline-check"><input type="checkbox" id="event-all-day" ${ev.all_day_event ? "checked" : ""}> All-day event ${help("For events without a specific start time. Time selectors are disabled when this is checked.")}</label><label class="events-inline-check"><input type="checkbox" id="event-no-end" ${noEnd ? "checked" : ""}> No end time ${help("Use when the event has a start time but no listed ending time. End controls are disabled when this is checked.")}</label></div>${dateTimeControls("event-start", "Starts", ev.starts_at, {})}${dateTimeControls("event-end", "Ends", ev.ends_at, { optional: true })}<label class="events-field" style="margin-top:12px">Timezone<input class="events-input" id="event-timezone" value="${attr(ev.timezone || "America/New_York")}"></label>`;
 
-    const typeBody = `<div class="events-grid"><label class="events-field">Saved type<select class="events-select" id="event-type-key">${typeOptions(ev)}</select></label><label class="events-field">Type label<input class="events-input" id="event-type-label" value="${attr(ev.event_type_label || ev.category || typeJson.label || "")}"></label><label class="events-field">Accent color<div class="events-color-row"><input class="events-input" id="event-accent" value="${attr(accent)}"><input class="events-color-picker" id="event-color-picker" type="color" value="${attr(accent)}" title="Choose accent color"></div></label><label class="events-field">Image URL<input class="events-input" id="event-image" value="${attr(ev.event_image_url || ev.image_url || typeJson.image_url || "")}" placeholder="Image URL for now; upload support later"></label></div><label class="events-inline-check"><input type="checkbox" id="event-save-type"> Also save these type settings as reusable</label><div class="events-muted">Checked: Save Changes will update the selected saved type, or create a new reusable type if Custom is selected. Duplicate names are blocked. Event-type color is used as a subtle accent. Drag-and-drop image upload will be a later storage pass.</div>`;
-
-    const locationBody = `<div class="events-grid"><label class="events-field">Saved location<select class="events-select" id="event-location-key">${locationOptions(ev)}</select></label><label class="events-field">Location name<input class="events-input" id="event-location-name" value="${attr(ev.location_name || locJson.location_name || locJson.label || "")}"></label></div><label class="events-field">Written address<input class="events-input" id="event-address" value="${attr(ev.location_address || locJson.location_address || "")}" placeholder="Always enter a written address when there is a physical location"></label><div class="events-map-actions"><button type="button" class="events-btn" id="event-preview-map">Preview map from address</button></div><div class="events-map-preview" id="event-map-preview"></div><details class="events-details"><summary>Advanced map options</summary><div class="events-grid"><label class="events-field">Map search text / query<input class="events-input" id="event-map-query" value="${attr(ev.map_query || locJson.map_query || ev.location_address || "")}" placeholder="Usually the written address"></label><label class="events-field">Map embed URL optional<input class="events-input" id="event-map-embed" value="${attr(ev.map_embed_url || locJson.map_embed_url || "")}"></label></div><div class="events-muted">Use these only if the automatic map preview does not find the right place.</div></details><label class="events-inline-check" style="margin-top:10px"><input type="checkbox" id="event-save-location"> Also save these location settings as reusable</label><div class="events-muted">Checked: Save Changes will update the selected saved location, or create a new reusable location if Custom is selected. Duplicate names are blocked. Selecting a saved location refreshes these fields from that saved record.</div>`;
+    const locationBody = `<div class="events-grid"><label class="events-field">Saved location<select class="events-select" id="event-location-key">${locationOptions(ev)}</select></label><label class="events-field">Location name<input class="events-input" id="event-location-name" value="${attr(ev.location_name || locJson.location_name || locJson.label || "")}"></label></div><label class="events-field">Written address<input class="events-input" id="event-address" value="${attr(ev.location_address || locJson.location_address || "")}" placeholder="Always enter a written address when there is a physical location"></label><div class="events-map-actions"><button type="button" class="events-btn" id="event-preview-map">Preview map from address</button></div><div class="events-map-preview" id="event-map-preview"></div><details class="events-details"><summary>Advanced map options</summary><div class="events-grid"><label class="events-field">Map search text / query<input class="events-input" id="event-map-query" value="${attr(ev.map_query || locJson.map_query || ev.location_address || "")}" placeholder="Usually the written address"></label><label class="events-field">Map embed URL optional<input class="events-input" id="event-map-embed" value="${attr(ev.map_embed_url || locJson.map_embed_url || "")}"></label></div><div class="events-muted">Use these only if the automatic map preview does not find the right place.</div></details><div class="events-reuse-box" id="event-location-reuse-box"><label class="events-inline-check"><input type="checkbox" id="event-save-location"> <span id="event-location-reuse-label"></span></label><div class="events-muted" id="event-location-reuse-help"></div></div>`;
 
     const contentBody = `<label class="events-field">Short summary<textarea class="events-textarea" id="event-summary">${esc(ev.summary || "")}</textarea></label><label class="events-field">Full description / notes<textarea class="events-textarea" id="event-description">${esc(ev.description || "")}</textarea></label>`;
 
-    const rsvpBody = `<div class="events-rsvp-flags"><label class="events-inline-check"><input type="checkbox" id="event-rsvp-enabled" ${ev.rsvp_enabled ? "checked" : ""}> RSVP enabled</label><label class="events-inline-check"><input type="checkbox" id="event-allow-guests" ${ev.allow_guests !== false ? "checked" : ""}> Allow guests</label><label class="events-inline-check"><input type="checkbox" id="event-show-attendees" ${showRsvpList ? "checked" : ""}> Show RSVP list to logged-in users ${help("Organizers/admins can always see RSVP details. When checked, logged-in users may see the attendee list. When unchecked, only admins/organizers see it.")}</label><label class="events-inline-check"><input type="checkbox" id="event-featured" ${ev.featured ? "checked" : ""}> Featured</label></div><div class="events-grid three"><label class="events-field">Capacity<input class="events-input" id="event-capacity" type="number" min="0" value="${attr(ev.capacity ?? "")}"></label><label class="events-field"><span class="events-label-line">Capacity behavior ${help("What happens if the event reaches capacity.")}</span><select class="events-select" id="event-capacity-behavior"><option value="waitlist">Waitlist when full</option><option value="block">Block when full</option></select></label><label class="events-field">Max guests per RSVP<input class="events-input" id="event-max-guests" type="number" min="0" value="${attr(ev.max_guests_per_rsvp ?? 0)}"></label></div><div class="events-rsvp-row"><label class="events-inline-check" style="min-height:42px"><input type="checkbox" id="event-no-rsvp-close" ${ev.rsvp_deadline_at ? "" : "checked"}> No RSVP close date ${help("Leave checked when RSVPs do not have a separate cutoff date. Uncheck to set a close date and time.")}</label></div><div class="events-rsvp-row">${dateTimeControls("event-deadline", "RSVP close", ev.rsvp_deadline_at, { optional: true })}</div><div class="events-rsvp-row"><label class="events-field"><span class="events-label-line">RSVP audience ${help("Who is allowed to submit an RSVP.")}</span><select class="events-select" id="event-rsvp-audience"><option value="public">Public</option><option value="logged_in">Logged-in users</option><option value="member">Members/users</option><option value="selected_classes">Selected classes</option><option value="selected_roles">Selected roles</option><option value="admin">Admins/board only</option></select></label></div><div class="events-grid" style="margin-top:12px"><div class="events-conditional events-class-filter" ${rsvpAudience === "selected_classes" ? "" : "hidden"}><b>Eligible membership classes</b><div class="events-check-grid">${checkboxList("class-key", state.membershipClasses, classKey, row => row.label || row.class_label || row.class_key, classKeys)}</div></div><div class="events-conditional events-role-filter" ${rsvpAudience === "selected_roles" ? "" : "hidden"}><b>Eligible roles</b><div class="events-check-grid">${checkboxList("role-key", state.roles, roleKey, row => row.label || row.role_label || row.role_key, roleKeys)}</div></div></div>`;
+    const rsvpBody = `<div class="events-rsvp-flags"><label class="events-inline-check"><input type="checkbox" id="event-rsvp-enabled" ${ev.rsvp_enabled ? "checked" : ""}> RSVP enabled</label><label class="events-inline-check"><input type="checkbox" id="event-allow-guests" ${ev.allow_guests !== false ? "checked" : ""}> Allow guests</label><label class="events-inline-check"><input type="checkbox" id="event-show-attendees" ${showRsvpList ? "checked" : ""}> Show RSVP list to logged-in users ${help("Organizers/admins can always see RSVP details. When checked, logged-in users may see the attendee list. When unchecked, only admins/organizers see it.")}</label></div><div class="events-grid three"><label class="events-field">Capacity<input class="events-input" id="event-capacity" type="number" min="0" value="${attr(ev.capacity ?? "")}"></label><label class="events-field"><span class="events-label-line">Capacity behavior ${help("What happens if the event reaches capacity.")}</span><select class="events-select" id="event-capacity-behavior"><option value="waitlist">Waitlist when full</option><option value="block">Block when full</option></select></label><label class="events-field">Max guests per RSVP<input class="events-input" id="event-max-guests" type="number" min="0" value="${attr(ev.max_guests_per_rsvp ?? 0)}"></label></div><div class="events-rsvp-row"><label class="events-inline-check" style="min-height:42px"><input type="checkbox" id="event-no-rsvp-close" ${ev.rsvp_deadline_at ? "" : "checked"}> No RSVP close date ${help("Leave checked when RSVPs do not have a separate cutoff date. Uncheck to set a close date and time.")}</label></div><div class="events-rsvp-row">${dateTimeControls("event-deadline", "RSVP close", ev.rsvp_deadline_at, { optional: true })}</div><div class="events-rsvp-row"><label class="events-field"><span class="events-label-line">RSVP audience ${help("Who is allowed to submit an RSVP.")}</span><select class="events-select" id="event-rsvp-audience"><option value="public">Public</option><option value="logged_in">Logged-in users</option><option value="member">Members/users</option><option value="selected_classes">Selected classes</option><option value="selected_roles">Selected roles</option><option value="admin">Admins/board only</option></select></label></div><div class="events-grid" style="margin-top:12px"><div class="events-conditional events-class-filter" ${rsvpAudience === "selected_classes" ? "" : "hidden"}><b>Eligible membership classes</b><div class="events-check-grid">${checkboxList("class-key", state.membershipClasses, classKey, row => row.label || row.class_label || row.class_key, classKeys)}</div></div><div class="events-conditional events-role-filter" ${rsvpAudience === "selected_roles" ? "" : "hidden"}><b>Eligible roles</b><div class="events-check-grid">${checkboxList("role-key", state.roles, roleKey, row => row.label || row.role_label || row.role_key, roleKeys)}</div></div></div>`;
 
-    const advancedBody = `<div class="events-grid"><label class="events-field"><span class="events-label-line">Sort order ${help("Optional ordering number for future list ordering. Lower numbers can appear first when used.")}</span><input class="events-input" id="event-sort" type="number" value="${attr(ev.sort_order ?? 100)}"></label></div>`;
+    const advancedBody = `<div class="events-muted"><b>Advanced system fields are handled automatically.</b> Events normally sort by date. Featured can be used later for homepage or special callouts, but it does not change calendar sort order.</div>`;
     const checklistBody = `<div class="events-muted"><b>Checklist / bring-items is intentionally hidden in this pass.</b> Existing checklist records are preserved when saving. Full checklist claiming belongs in a later package.</div>`;
 
     const sectionDefs = [
-      { key: "details", title: "Event details", body: detailsBody, required: true },
+      { key: "basics", title: "Event basics", body: basicsBody, required: true },
       { key: "timing", title: "Timing", body: timingBody, required: true },
-      { key: "type", title: "Event type", body: typeBody, required: true },
       { key: "location", title: "Location", body: locationBody, required: true },
       { key: "content", title: "Content", body: contentBody, required: false },
       { key: "rsvp", title: "RSVP rules", body: rsvpBody, required: false },
       { key: "advanced", title: "Advanced", body: advancedBody, required: false, extra: "events-advanced" },
       { key: "checklist", title: "Future checklist / bring-items", body: checklistBody, required: false },
     ];
+
     return sectionDefs.map((section, index) => accordion(section, index, sectionDefs.length)).join("");
   }
 
@@ -516,26 +535,24 @@
   }
 
   function sectionStatusForEvent(key, ev) {
-    const required = new Set(["details", "timing", "type", "location"]);
+    const required = new Set(["basics", "timing", "location"]);
     if (!required.has(key)) return { label: "Optional", kind: "optional" };
     let complete = false;
-    if (key === "details") complete = !!(clean(ev.title) && clean(ev.visibility_audience || ev.visibility || "public"));
+    if (key === "basics") complete = !!(clean(ev.title) && clean(ev.visibility_audience || ev.visibility || "public") && (clean(ev.event_type_key) || clean(ev.event_type_label) || clean(ev.category)));
     if (key === "timing") complete = !!clean(ev.starts_at);
-    if (key === "type") complete = !!(clean(ev.event_type_key) || clean(ev.event_type_label) || clean(ev.category));
     if (key === "location") complete = !!(clean(ev.location_key) || clean(ev.location_name) || clean(ev.location_address) || clean(ev.location_label));
     return complete ? { label: "Complete", kind: "complete" } : { label: "Missing", kind: "missing" };
   }
 
   function liveSectionStatus(key) {
-    if (key === "details") return (val("event-title") && val("event-visibility")) ? { label: "Complete", kind: "complete" } : { label: "Missing", kind: "missing" };
+    if (key === "basics") return (val("event-title") && val("event-visibility") && (val("event-type-key") || val("event-type-label"))) ? { label: "Complete", kind: "complete" } : { label: "Missing", kind: "missing" };
     if (key === "timing") return val("event-start-date") ? { label: "Complete", kind: "complete" } : { label: "Missing", kind: "missing" };
-    if (key === "type") return (val("event-type-key") || val("event-type-label")) ? { label: "Complete", kind: "complete" } : { label: "Missing", kind: "missing" };
     if (key === "location") return (val("event-location-key") || val("event-location-name") || val("event-address")) ? { label: "Complete", kind: "complete" } : { label: "Missing", kind: "missing" };
     return { label: "Optional", kind: "optional" };
   }
 
   function updateSectionBadges() {
-    ["details", "timing", "type", "location", "content", "rsvp", "advanced", "checklist"].forEach(key => {
+    ["basics", "timing", "location", "content", "rsvp", "advanced", "checklist"].forEach(key => {
       const badge = document.querySelector(`[data-section-badge="${key}"]`);
       if (!badge) return;
       const status = liveSectionStatus(key);
@@ -554,11 +571,11 @@
 
   function sectionForValidationMessage(message) {
     const text = clean(message).toLowerCase();
-    if (text.includes("title")) return "details";
+    if (text.includes("title")) return "basics";
     if (text.includes("start date") || text.includes("end date") || text.includes("time")) return "timing";
-    if (text.includes("event type") || text.includes("reusable event type")) return "type";
+    if (text.includes("event type") || text.includes("reusable event type")) return "basics";
     if (text.includes("location")) return "location";
-    return "details";
+    return "basics";
   }
 
   function bind() {
@@ -569,6 +586,7 @@
     document.getElementById("event-archive")?.addEventListener("click", toggleArchive);
     document.getElementById("event-type-key")?.addEventListener("change", applyType);
     document.getElementById("event-location-key")?.addEventListener("change", applyLocation);
+    updateReuseControls();
     document.getElementById("event-use-address-map")?.addEventListener("click", useAddressAsMapQuery);
     document.getElementById("event-preview-map")?.addEventListener("click", () => { syncMapQueryFromAddress(true); updateMapPreview(true); setDirty(true); });
     document.getElementById("event-publish-now")?.addEventListener("click", () => { const st = document.getElementById("event-status"); if (st) st.value = "published"; state.draftNotice = false; setDirty(true); saveEvent(""); });
@@ -689,8 +707,8 @@
   function bindEditorDirty() {
     document.querySelectorAll(".events-editor input,.events-editor select,.events-editor textarea,.events-control-panel .events-control-input").forEach(el => {
       if (el.classList.contains("events-filter")) return;
-      el.addEventListener("input", () => { state.draftNotice = false; updateEventKeyPreview(); captureFormDraft(); updateSectionBadges(); setDirty(true); });
-      el.addEventListener("change", () => { state.draftNotice = false; updateEventKeyPreview(); captureFormDraft(); updateSectionBadges(); setDirty(true); });
+      el.addEventListener("input", () => { state.draftNotice = false; updateEventKeyPreview(); captureFormDraft(); updateSectionBadges(); updateReuseControls(); setDirty(true); });
+      el.addEventListener("change", () => { state.draftNotice = false; updateEventKeyPreview(); captureFormDraft(); updateSectionBadges(); updateReuseControls(); setDirty(true); });
     });
   }
 
@@ -808,12 +826,16 @@
     if (!type) return;
     const set = (id, value, force) => { const el = document.getElementById(id); if (el && (force || !el.value)) el.value = value || ""; };
     set("event-type-label", type.label, true);
+    const title = document.getElementById("event-title");
+    if (title && !clean(title.value)) title.value = typeDisplayName(type);
     set("event-accent", type.accent_color, true);
     set("event-image", type.image_url, false);
     const picker = document.getElementById("event-color-picker"); if (picker && /^#[0-9a-f]{6}$/i.test(type.accent_color || "")) picker.value = type.accent_color;
     const vis = document.getElementById("event-visibility"); if (vis && type.default_visibility) vis.value = type.default_visibility;
     const aud = document.getElementById("event-rsvp-audience"); if (aud && type.default_rsvp_audience) aud.value = type.default_rsvp_audience;
     updateSectionBadges();
+    updateEventKeyPreview();
+    updateReuseControls();
     setDirty(true);
   }
 
@@ -827,7 +849,83 @@
     set("event-map-embed", loc.map_embed_url, true);
     updateMapPreview(true);
     updateSectionBadges();
+    updateReuseControls();
     setDirty(true);
+  }
+
+  function updateReuseControls() {
+    const typeBox = document.getElementById("event-type-reuse-box");
+    const typeCheck = document.getElementById("event-save-type");
+    const typeLabel = document.getElementById("event-type-reuse-label");
+    const typeHelp = document.getElementById("event-type-reuse-help");
+    const type = selectedType();
+    const typeName = clean(val("event-type-label"));
+    if (typeBox && typeCheck && typeLabel && typeHelp) {
+      let mode = "";
+      let label = "";
+      let helpText = "";
+      if (!typeName) {
+        mode = "";
+      } else if (type) {
+        const nameChanged = !sameText(typeName, typeDisplayName(type));
+        const changed = typeChangedFromSaved(type);
+        if (nameChanged) {
+          mode = "new";
+          label = "Save as new reusable event type";
+          helpText = "The type name changed, so this will be treated as a new reusable type instead of overwriting the selected one.";
+        } else if (changed) {
+          mode = "update";
+          label = "Update saved event type";
+          helpText = "Updates the selected reusable type color/image defaults for future events that use it.";
+        }
+      } else {
+        mode = "new";
+        label = "Save this as a reusable event type";
+        helpText = "Creates a reusable type so future events can select it from the dropdown.";
+      }
+      typeBox.dataset.mode = mode;
+      typeLabel.textContent = label;
+      typeHelp.textContent = helpText;
+      typeBox.hidden = !mode;
+      if (!mode) typeCheck.checked = false;
+    }
+
+    const locBox = document.getElementById("event-location-reuse-box");
+    const locCheck = document.getElementById("event-save-location");
+    const locLabel = document.getElementById("event-location-reuse-label");
+    const locHelp = document.getElementById("event-location-reuse-help");
+    const loc = selectedLocation();
+    const locName = clean(val("event-location-name"));
+    const locAddress = clean(val("event-address"));
+    if (locBox && locCheck && locLabel && locHelp) {
+      let mode = "";
+      let label = "";
+      let helpText = "";
+      if (!locName && !locAddress) {
+        mode = "";
+      } else if (loc) {
+        const nameChanged = locName && !sameText(locName, locationDisplayName(loc));
+        const changed = locationChangedFromSaved(loc);
+        if (nameChanged) {
+          mode = "new";
+          label = "Save as new reusable location";
+          helpText = "The location name changed, so this will be saved as a new reusable location instead of overwriting the selected one.";
+        } else if (changed) {
+          mode = "update";
+          label = "Update saved location";
+          helpText = "Updates the selected reusable location address/map details for future events that use it.";
+        }
+      } else {
+        mode = "new";
+        label = "Save this as a reusable location";
+        helpText = "Creates a reusable location so future events can select it from the dropdown.";
+      }
+      locBox.dataset.mode = mode;
+      locLabel.textContent = label;
+      locHelp.textContent = helpText;
+      locBox.hidden = !mode;
+      if (!mode) locCheck.checked = false;
+    }
   }
 
   function selectedNeedsPayload() {
@@ -861,6 +959,12 @@
     const loc = selectedLocation();
     const allDay = checked("event-all-day");
     const noEnd = checked("event-no-end");
+    const typeMode = reuseMode("type");
+    const locationMode = reuseMode("location");
+    const typeLabelValue = val("event-type-label") || (type && type.label) || "";
+    const locationNameValue = val("event-location-name") || (loc && loc.location_name) || "";
+    const typeKeyValue = checked("event-save-type") && typeMode === "new" ? keyify(typeLabelValue) : (val("event-type-key") || keyify(typeLabelValue));
+    const locationKeyValue = checked("event-save-location") && locationMode === "new" ? keyify(locationNameValue || val("event-address")) : (val("event-location-key") || keyify(locationNameValue || val("event-address")));
     const payload = {
       organization_id: state.orgId,
       event_id: state.creating ? null : (state.selectedId || null),
@@ -873,15 +977,15 @@
       timezone: val("event-timezone") || "America/New_York",
       all_day_event: allDay,
       no_end_time: noEnd,
-      event_type_key: val("event-type-key") || keyify(val("event-type-label")),
-      event_type_label: val("event-type-label") || (type && type.label) || "",
-      category: val("event-type-label") || (type && type.label) || "",
+      event_type_key: typeKeyValue,
+      event_type_label: typeLabelValue,
+      category: typeLabelValue,
       event_accent_color: val("event-accent") || (type && type.accent_color) || "",
       event_image_url: val("event-image") || (type && type.image_url) || "",
       save_event_type: checked("event-save-type"),
-      location_key: val("event-location-key") || keyify(val("event-location-name") || val("event-address")),
-      location_label: val("event-location-name") || (loc && loc.label) || "",
-      location_name: val("event-location-name") || (loc && loc.location_name) || "",
+      location_key: locationKeyValue,
+      location_label: locationNameValue || (loc && loc.label) || "",
+      location_name: locationNameValue,
       location_address: val("event-address") || (loc && loc.location_address) || "",
       map_query: val("event-map-query") || val("event-address") || "",
       map_embed_url: val("event-map-embed"),
@@ -901,7 +1005,7 @@
       allowed_membership_class_keys: val("event-rsvp-audience") === "selected_classes" ? checkedValues("class-key") : [],
       allowed_role_keys: val("event-rsvp-audience") === "selected_roles" ? checkedValues("role-key") : [],
       featured: checked("event-featured"),
-      sort_order: Number(val("event-sort") || 100),
+      sort_order: Number((selectedEvent() && selectedEvent().sort_order) || 100),
       event_needed_items: selectedNeedsPayload(),
     };
     captureFormDraft(payload);
@@ -944,14 +1048,14 @@
     if (!clean(payload.event_type_key) && !clean(payload.event_type_label)) return "Event type is required.";
     if (!clean(payload.location_key) && !clean(payload.location_name) && !clean(payload.location_address)) return "Location is required.";
     if (checked("event-save-type")) {
-      const selectedKey = val("event-type-key");
+      const selectedKey = reuseMode("type") === "new" ? "" : val("event-type-key");
       const label = val("event-type-label");
       if (!label) return "Reusable event type name is required.";
       const duplicate = state.eventTypes.find(t => clean(t.type_key) !== selectedKey && (sameText(t.label || t.type_label || t.type_key, label) || sameKey(t.type_key, label)));
       if (duplicate) return `A reusable event type named "${label}" already exists. Select it from Saved type to update it, or use a different name.`;
     }
     if (checked("event-save-location")) {
-      const selectedKey = val("event-location-key");
+      const selectedKey = reuseMode("location") === "new" ? "" : val("event-location-key");
       const label = val("event-location-name") || val("event-address");
       if (!label) return "Reusable location name or address is required.";
       const duplicate = state.locations.find(l => clean(l.location_key) !== selectedKey && (sameText(l.label || l.location_name || l.location_key, label) || sameText(l.location_name, label) || sameKey(l.location_key, label)));

@@ -1,7 +1,7 @@
 // index.ts
 // Deploy target: Supabase Edge Function named core-access-action
 // JWT verification: ON
-// Internal Version: 2026-06-10-100-A
+// Internal Version: 2026-06-10-101-A
 // Purpose: secured user/organization-admin access foundation for SyncEtc. Separates lifecycle status, membership class, onboarding/application stage, roles, permissions, and future RSVP audience rules.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
@@ -11,7 +11,7 @@ type JsonRecord = Record<string, unknown>;
 type SupabaseClientAny = any;
 declare const Deno: { env: { get: (key: string) => string | undefined } };
 
-const VERSION = "2026-06-10-100-A";
+const VERSION = "2026-06-10-101-A";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -3249,16 +3249,33 @@ const APPLICANT_STATUS_ALIASES: Record<string, string> = {
   interview_orientation: "invited_to_interview",
   board_review: "invited_to_interview",
   accepted: "onboarding",
-  converted_to_member: "added_as_member",
+  converted_to_member: "archived",
+  added_as_member: "archived",
   declined: "archived",
 };
-const APPLICANT_STATUS_KEYS = new Set(["new", "waitlist", "invited_to_interview", "onboarding", "ready_for_final_review", "added_as_member", "archived"]);
+const APPLICANT_STATUS_KEYS = new Set(["new", "waitlist", "invited_to_interview", "onboarding", "ready_for_final_review", "archived"]);
+const APPLICANT_OPEN_STATUS_KEYS = new Set(["new", "waitlist", "invited_to_interview", "onboarding", "ready_for_final_review"]);
+const APPLICANT_ARCHIVE_REASONS: Record<string,string> = {
+  added_as_member: "Added as Member",
+  applicant_withdrew: "Applicant Withdrew",
+  club_declined: "Club Declined",
+  duplicate_application: "Duplicate Application",
+  no_response: "No Response",
+  other: "Other",
+};
 
 function normalizeApplicantStatus(value: unknown, fallback = "new"): string {
   const raw = normalizeKey(value || fallback).replace(/-/g, "_");
   const mapped = APPLICANT_STATUS_ALIASES[raw] || raw;
   const fb = APPLICANT_STATUS_ALIASES[normalizeKey(fallback).replace(/-/g, "_")] || fallback;
   return APPLICANT_STATUS_KEYS.has(mapped) ? mapped : (APPLICANT_STATUS_KEYS.has(fb) ? fb : "new");
+}
+
+function fmtMaybeDateForSearch(value: unknown): string {
+  if (!value) return "";
+  const d = new Date(String(value));
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.toLocaleDateString()} ${d.toISOString().slice(0,10)}`;
 }
 
 function applicantStatusLabel(status: unknown): string {
@@ -3269,7 +3286,6 @@ function applicantStatusLabel(status: unknown): string {
     invited_to_interview: "Invited to Interview",
     onboarding: "Onboarding",
     ready_for_final_review: "Ready for Final Review",
-    added_as_member: "Added as Member",
     archived: "Archived",
   };
   return labels[s] || s;
@@ -3310,6 +3326,10 @@ function safeApplicant(row: JsonRecord): JsonRecord {
     last_reply_by_email: row.last_reply_by_email || null,
     submitted_at: row.submitted_at || row.created_at || null,
     archived_at: row.archived_at || null,
+    archive_reason_key: clean(row.archive_reason_key || row.archive_reason),
+    archive_reason_label: clean(row.archive_reason_label || APPLICANT_ARCHIVE_REASONS[clean(row.archive_reason_key || row.archive_reason)] || row.archive_reason),
+    archive_reason_note: clean(row.archive_reason_note),
+    archived_by_email: clean(row.archived_by_email),
     created_at: row.created_at || null,
     waitlist_order: row.waitlist_order || null,
     invited_at: row.invited_at || null,
@@ -3455,20 +3475,50 @@ async function listApplicantEvents(serviceClient: SupabaseClientAny, application
 }
 
 async function listApplicantApplications(serviceClient: SupabaseClientAny, organizationId: string, body: JsonRecord = {}): Promise<JsonRecord> {
-  const statusFilter = normalizeApplicantStatus(body.status_filter || body.filter || "new", "new");
-  const rawFilter = normalizeKey(body.status_filter || body.filter || "new").replace(/-/g, "_");
-  const includeArchived = optionalBoolean(body, "include_archived", false);
+  const rawFilter = normalizeKey(body.status_filter || body.filter || "open").replace(/-/g, "_");
+  const filter = rawFilter || "open";
   const search = clean(body.search).toLowerCase();
-  const limit = Math.min(Math.max(Number(body.limit || 250), 1), 500);
-  let query = serviceClient.from("core_applications").select("*").eq("organization_id", organizationId).order("submitted_at", { ascending: false }).limit(limit);
-  if (rawFilter && rawFilter !== "all") query = query.eq("applicant_status", statusFilter);
-  if (!includeArchived) query = query.is("archived_at", null);
-  const { data, error } = await query;
+  const limit = Math.min(Math.max(Number(body.limit || 500), 1), 500);
+  const { data, error } = await serviceClient
+    .from("core_applications")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .order("submitted_at", { ascending: false })
+    .limit(limit);
   if (error) throw error;
+
   let apps = (data || []).map(safeApplicant);
-  if (search) apps = apps.filter((app) => [app.display_name, app.email, app.phone, app.status_label, app.internal_notes, jsonObject(app.aviation_json).pilot_certificate_number, jsonObject(app.interest_json).why_join].map((v) => clean(v).toLowerCase()).join(" ").includes(search));
+
+  apps = apps.filter((app: JsonRecord) => {
+    const archived = Boolean(app.archived_at || normalizeApplicantStatus(app.status, "new") === "archived");
+    const status = normalizeApplicantStatus(app.status || app.applicant_status || app.stage_key, "new");
+    if (filter === "all") return true;
+    if (filter === "archived") return archived;
+    if (filter === "open") return !archived && APPLICANT_OPEN_STATUS_KEYS.has(status);
+    return !archived && status === filter;
+  });
+
+  if (search) {
+    apps = apps.filter((app) => [
+      app.display_name,
+      app.email,
+      app.phone,
+      app.status_label,
+      app.status,
+      app.stage_key,
+      app.applicant_status,
+      app.archive_reason_key,
+      app.archive_reason_label,
+      fmtMaybeDateForSearch(app.submitted_at),
+      fmtMaybeDateForSearch(app.updated_at),
+      jsonObject(app.aviation_json).pilot_certificate_number,
+      jsonObject(app.interest_json).why_join,
+    ].map((v) => clean(v).toLowerCase()).join(" ").includes(search));
+  }
+
   const ids = apps.map((app) => clean(app.application_id)).filter(Boolean);
   const [tasksMap, eventsMap, uploadsMap, timelineMap] = await Promise.all([listApplicantTasks(serviceClient, ids), listApplicantEvents(serviceClient, ids), listApplicantUploadsMap0098(serviceClient, ids), listApplicantTimelineNotes0099(serviceClient, organizationId, ids)]);
+
   apps = apps.map((app) => {
     const currentStage = normalizeApplicantStatus(app.stage_key || app.applicant_status || app.status, "new");
     const tasksAll = enrichApplicantTasksWithUploads0098(tasksMap.get(clean(app.application_id)) || [], uploadsMap);
@@ -3503,13 +3553,34 @@ async function updateApplicantApplication(serviceClient: SupabaseClientAny, orga
   const applicationId = requireString(body, "application_id");
   const before = await getApplicantApplication(serviceClient, organizationId, applicationId);
   const payload: JsonRecord = { updated_at: new Date().toISOString(), last_activity_at: new Date().toISOString() };
+  let statusChangedToArchived = false;
+  let restoredFromArchived = false;
   if (Object.prototype.hasOwnProperty.call(body, "applicant_status") || Object.prototype.hasOwnProperty.call(body, "status")) {
     const status = normalizeApplicantStatus(body.applicant_status || body.status, clean(before.status));
     payload.applicant_status = status;
     payload.status = status;
     payload.stage_key = status;
-    if (status === "archived") payload.archived_at = new Date().toISOString();
-    if (status !== "archived") payload.archived_at = null;
+    if (status === "archived") {
+      const reasonKey = normalizeKey(body.archive_reason_key || body.archive_reason || "").replace(/-/g, "_");
+      if (!reasonKey || !APPLICANT_ARCHIVE_REASONS[reasonKey]) throw new Error("Archive reason is required.");
+      const reasonNote = clean(body.archive_reason_note || body.note);
+      if (reasonKey === "other" && !reasonNote) throw new Error("Archive note is required when archive reason is Other.");
+      payload.archived_at = new Date().toISOString();
+      payload.archive_reason_key = reasonKey;
+      payload.archive_reason_label = APPLICANT_ARCHIVE_REASONS[reasonKey];
+      payload.archive_reason_note = reasonNote || null;
+      payload.archive_reason = reasonKey;
+      payload.archived_by_email = actorEmail || null;
+      statusChangedToArchived = true;
+    } else {
+      if (before.archived_at || clean(before.status) === "archived") restoredFromArchived = true;
+      payload.archived_at = null;
+      payload.archive_reason_key = null;
+      payload.archive_reason_label = null;
+      payload.archive_reason_note = null;
+      payload.archive_reason = null;
+      payload.archived_by_email = null;
+    }
   }
   if (Object.prototype.hasOwnProperty.call(body, "internal_notes")) payload.internal_notes = clean(body.internal_notes);
   if (Object.prototype.hasOwnProperty.call(body, "first_name")) payload.first_name = clean(body.first_name);
@@ -3521,7 +3592,14 @@ async function updateApplicantApplication(serviceClient: SupabaseClientAny, orga
   if (!Object.keys(payload).some((k) => !["updated_at","last_activity_at"].includes(k))) throw new Error("No applicant update fields were provided.");
   const { data, error } = await serviceClient.from("core_applications").update(payload).eq("organization_id", organizationId).eq("application_id", applicationId).select("*").single();
   if (error) throw error;
-  await writeApplicantEvent(serviceClient, "application_updated", applicationId, organizationId, actorEmail, clean(body.note), before, safeApplicant(data), { changed_fields: Object.keys(payload) });
+  const after = safeApplicant(data);
+  if (statusChangedToArchived) {
+    await writeApplicantEvent(serviceClient, "applicant_archived", applicationId, organizationId, actorEmail, clean(body.archive_reason_note || body.note), before, after, { archive_reason_key: payload.archive_reason_key, archive_reason_label: payload.archive_reason_label });
+  } else if (restoredFromArchived) {
+    await writeApplicantEvent(serviceClient, "applicant_restored", applicationId, organizationId, actorEmail, clean(body.note), before, after, { previous_archive_reason_key: before.archive_reason_key || before.archive_reason || null, previous_archive_reason_label: before.archive_reason_label || null });
+  } else {
+    await writeApplicantEvent(serviceClient, "application_updated", applicationId, organizationId, actorEmail, clean(body.note), before, after, { changed_fields: Object.keys(payload) });
+  }
   return await getApplicantApplication(serviceClient, organizationId, applicationId);
 }
 
@@ -4709,13 +4787,13 @@ function applicantPortalAllowed0098(settings: JsonRecord, app: JsonRecord): bool
   if (mode === "none") return false;
   if (mode === "after_submitted") return true;
   if (mode === "manual") return Boolean(app.portal_access_granted || app.portal_access_granted_at || app.applicant_user_id);
-  if (mode === "info_requested") return Boolean(app.portal_access_granted) || ["waitlist", "invited_to_interview", "onboarding", "ready_for_final_review", "added_as_member"].includes(status);
-  return Boolean(app.portal_access_granted) || ["onboarding", "ready_for_final_review", "added_as_member"].includes(status);
+  if (mode === "info_requested") return Boolean(app.portal_access_granted) || ["waitlist", "invited_to_interview", "onboarding", "ready_for_final_review"].includes(status);
+  return Boolean(app.portal_access_granted) || ["onboarding", "ready_for_final_review"].includes(status);
 }
 
 function applicantCanUpdate0098(settings: JsonRecord, app: JsonRecord): boolean {
   const status = normalizeApplicantStatus(app.applicant_status || app.status, "new");
-  return settings.allow_applicant_updates !== false && applicantPortalAllowed0098(settings, app) && !["archived", "added_as_member"].includes(status);
+  return settings.allow_applicant_updates !== false && applicantPortalAllowed0098(settings, app) && status !== "archived";
 }
 
 async function listApplicantUploadsMap0098(serviceClient: SupabaseClientAny, applicationIds: string[]): Promise<Map<string, JsonRecord[]>> {
@@ -4858,7 +4936,7 @@ async function applicantUploadTaskFile0098(serviceClient: SupabaseClientAny, act
   const path = `organizations/${clean(found.app.organization_id)}/applicants/${applicationId}/tasks/${clean(task.task_key || taskId)}/${Date.now()}-${normalizeKey(fileName) || "upload"}.${ext}`;
   const { error: uploadError } = await serviceClient.storage.from(bucket).upload(path, bytes, { contentType: mime, upsert: false });
   if (uploadError) throw uploadError;
-  const { data: upload, error } = await serviceClient.from("core_applicant_task_uploads").insert({ application_id: applicationId, organization_id: clean(found.app.organization_id), applicant_task_id: taskId, applicant_user_id: authUserId || null, task_key: clean(task.task_key), storage_bucket: bucket, storage_path: path, original_file_name: fileName, mime_type: mime, file_size_bytes: bytes.length, upload_status: "submitted", visibility: "private", applicant_note: clean(body.applicant_note), uploaded_by_email: actorEmail, metadata_json: { version: "2026-06-10-098-B", source: "applicant_portal" } }).select("*").single();
+  const { data: upload, error } = await serviceClient.from("core_applicant_task_uploads").insert({ application_id: applicationId, organization_id: clean(found.app.organization_id), applicant_task_id: taskId, applicant_user_id: authUserId || null, task_key: clean(task.task_key), storage_bucket: bucket, storage_path: path, original_file_name: fileName, mime_type: mime, file_size_bytes: bytes.length, upload_status: "submitted", visibility: "private", applicant_note: clean(body.applicant_note), uploaded_by_email: actorEmail, metadata_json: { version: "2026-06-10-101-A", source: "applicant_portal" } }).select("*").single();
   if (error) throw error;
   await serviceClient.from("core_applicant_tasks").update({ status: "in_progress", upload_status: "submitted", review_status: "submitted", updated_at: new Date().toISOString() }).eq("applicant_task_id", taskId);
   await serviceClient.from("core_applications").update({ ready_for_final_review: false, updated_at: new Date().toISOString() }).eq("application_id", applicationId);

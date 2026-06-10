@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-events-current.js
-// Internal Version: 2026-06-09-094-E
-// Purpose: Customer-admin Events Manager cleanup: compact draft reminder, event-list-only scrolling, saved-location dirty detection, no-end default restoration, and inline timing validation. Uses portal shell + core-access-action.
+// Internal Version: 2026-06-09-094-F
+// Purpose: Customer-admin Events Manager cleanup: left-panel save state cleanup, disabled save actions until minimum event fields are complete, and stale draft prompt removal. Uses portal shell + core-access-action.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-09-094-E";
+  const VERSION = "2026-06-09-094-F";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -319,6 +319,51 @@
   }
 
   function selectedEvent() { return state.events.find(ev => clean(ev.event_id) === clean(state.selectedId)) || null; }
+
+  function minimumReadyForEvent(ev) {
+    const e = obj(ev);
+    const hasTitle = !!clean(e.title);
+    const hasStart = !!clean(e.starts_at) || !!clean(e.start_date);
+    const hasType = !!clean(e.event_type_key || e.event_type_label || e.category || obj(e.event_type_json).type_key || obj(e.event_type_json).label);
+    const hasLocation = !!clean(e.location_key || e.location_name || e.location_address || obj(e.location_json).location_key || obj(e.location_json).location_name || obj(e.location_json).location_address);
+    if (!hasTitle || !hasStart || !hasType || !hasLocation) return false;
+    if (e.no_end_time === false && e.ends_at && e.starts_at) {
+      const startMs = new Date(e.starts_at).getTime();
+      const endMs = new Date(e.ends_at).getTime();
+      if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs < startMs) return false;
+      if (!e.all_day_event && Number.isFinite(startMs) && Number.isFinite(endMs) && endMs === startMs) return false;
+    }
+    return true;
+  }
+
+  function saveReadinessMessage() {
+    if (!activeEventForForm()) return "Select or create an event before saving.";
+    if (!val("event-title")) return "Complete Event Basics: event title is required before saving.";
+    if (!val("event-type-key") && !val("event-type-label")) return "Complete Event Basics: event type is required before saving.";
+    if (!val("event-start-date")) return "Complete Timing: start date is required before saving.";
+    if (!checked("event-no-end") && !val("event-end-date")) return "Complete Timing: add an end date or check No end time before saving.";
+    const timingMessage = currentTimingInlineMessage();
+    if (timingMessage) return timingMessage;
+    if (!val("event-location-key") && !val("event-location-name") && !val("event-address")) return "Complete Location: choose a saved location or enter a custom location before saving.";
+    return "";
+  }
+
+  function updateSaveButtons() {
+    const message = saveReadinessMessage();
+    const disabled = !!state.saving || !!message;
+    document.querySelectorAll(".event-save").forEach(btn => {
+      const defaultLabel = btn.dataset.defaultLabel || "Save Changes";
+      btn.textContent = state.saving ? "Saving..." : defaultLabel;
+      btn.disabled = disabled;
+      btn.title = message || "";
+      btn.setAttribute("aria-disabled", disabled ? "true" : "false");
+    });
+    document.querySelectorAll(".events-minimum-note").forEach(el => {
+      el.textContent = message || "Minimum required sections complete.";
+      el.classList.toggle("good", !message);
+    });
+  }
+
   function selectedType() { const key = val("event-type-key"); return state.eventTypes.find(t => clean(t.type_key) === key) || null; }
   function selectedLocation() { const key = val("event-location-key"); return state.locations.find(l => clean(l.location_key) === key) || null; }
   function typeDisplayName(type) { return clean(type && (type.label || type.type_label || type.type_key)); }
@@ -433,10 +478,10 @@
     return `<style>
       .syncetc-events-page{max-width:${c.width};margin:28px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:${c.text}}
       .syncetc-events-page *{box-sizing:border-box}.events-shell{border:1px solid ${c.border};border-radius:26px;background:#fff;box-shadow:${c.shadow};overflow:hidden}.events-hero{padding:28px 32px;background:linear-gradient(135deg,${c.primary},color-mix(in srgb,${c.primary} 70%,#4b9bd4));color:#fff}.events-hero h1{margin:10px 0 0;font-size:clamp(32px,4vw,48px);line-height:1}.events-hero p{margin:10px 0 0;max-width:760px}.events-badge{display:inline-flex;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.16);font-weight:900;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
-      .events-main{display:grid;grid-template-columns:330px minmax(0,1fr);background:linear-gradient(180deg,${c.soft},rgba(255,255,255,.96));min-height:640px}.events-sidebar{padding:16px;border-right:1px solid ${c.border};background:#fff;overflow:visible}.events-editor{padding:18px;overflow:visible;min-width:0}.events-list{display:grid;gap:8px;padding-right:3px;max-height:315px;overflow-y:auto;overscroll-behavior:contain}.events-sidebar-head{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;margin-bottom:12px}.events-side-buttons{display:flex;gap:8px;flex-wrap:wrap}.events-filters{display:grid;gap:8px;margin-bottom:12px;padding:12px;border:1px solid ${c.border};border-radius:18px;background:${c.soft}}
+      .events-main{display:grid;grid-template-columns:330px minmax(0,1fr);background:linear-gradient(180deg,${c.soft},rgba(255,255,255,.96));min-height:640px}.events-sidebar{padding:16px;border-right:1px solid ${c.border};background:#fff;overflow:visible}.events-editor{padding:18px;overflow:visible;min-width:0}.events-list{display:grid;gap:8px;padding-right:3px;max-height:255px;overflow-y:auto;overscroll-behavior:contain}.events-sidebar-head{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;margin-bottom:12px}.events-side-buttons{display:flex;gap:8px;flex-wrap:wrap}.events-filters{display:grid;gap:8px;margin-bottom:12px;padding:12px;border:1px solid ${c.border};border-radius:18px;background:${c.soft}}
       .events-control-panel{display:grid;gap:10px;margin:0 0 12px;padding:14px;border:1px solid ${c.border};border-radius:20px;background:linear-gradient(180deg,#fff,${c.soft})}.events-control-title{display:grid;gap:5px}.events-control-title strong{font-size:17px}.events-control-actions{display:flex;gap:8px;flex-wrap:wrap}.events-control-panel .events-btn{width:100%}.events-control-panel .events-status{justify-content:center}.events-status{display:inline-flex;padding:9px 12px;border-radius:14px;background:${c.soft};font-weight:900}.events-status.good{background:#e7f6e7;color:${c.primary}}.event-status-message.error{color:#991b1b;font-weight:900}.event-status-message.warn{color:#713f12;font-weight:900}.event-status-message.good{color:${c.primary};font-weight:900}.events-draft-notice{padding:10px 12px;border:1px solid #facc15;border-radius:14px;background:#fffbeb;color:#713f12;font-size:12.5px;font-weight:800;line-height:1.35}.events-draft-actions{display:flex;gap:8px;margin-top:9px}.events-draft-actions .events-btn{width:auto;padding:8px 11px;font-size:12px}
       .event-record{display:block;width:100%;text-align:left;border:1px solid ${c.border};border-left:6px solid var(--event-accent,${c.primary});background:#fff;border-radius:16px;padding:12px;cursor:pointer;color:${c.text}}.event-record[hidden]{display:none}.event-record.selected{border-color:${c.primary};border-left-color:var(--event-accent,${c.primary});box-shadow:0 0 0 3px color-mix(in srgb,${c.primary} 13%,transparent)}.event-record.archived{opacity:.55}.event-record b{display:block}.event-record span,.event-record small{display:block;color:rgba(20,36,23,.70);font-size:12px;margin-top:4px}
-      .events-card{background:#fff;border:1px solid ${c.border};border-radius:20px;padding:18px;margin-bottom:16px}.events-card h2,.events-card h3{margin:0 0 12px}.events-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.events-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.events-field{display:grid;gap:5px;font-size:12px;font-weight:900;color:${c.primary}}.events-label-line{display:flex;align-items:center;gap:6px}.events-input,.events-select,.events-textarea{width:100%;border:1px solid ${c.border};border-radius:12px;padding:10px 12px;font:inherit;color:${c.text};background:#fff}.events-input[readonly],.events-input:disabled,.events-select:disabled{background:#f3f7f3;color:rgba(20,36,23,.58);cursor:not-allowed}.events-textarea{min-height:88px;resize:vertical}.events-btn{border:1px solid ${c.border};border-radius:999px;background:#fff;color:${c.primary};padding:10px 14px;font-weight:900;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:7px}.events-btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(0,0,0,.08)}.events-btn.primary{background:${c.primary};color:#fff}.events-btn.danger{background:#fff7ec;color:#9a3412;border-color:#fed7aa}.events-btn:disabled{opacity:.55;cursor:not-allowed}
+      .events-card{background:#fff;border:1px solid ${c.border};border-radius:20px;padding:18px;margin-bottom:16px}.events-card h2,.events-card h3{margin:0 0 12px}.events-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.events-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.events-field{display:grid;gap:5px;font-size:12px;font-weight:900;color:${c.primary}}.events-label-line{display:flex;align-items:center;gap:6px}.events-input,.events-select,.events-textarea{width:100%;border:1px solid ${c.border};border-radius:12px;padding:10px 12px;font:inherit;color:${c.text};background:#fff}.events-input[readonly],.events-input:disabled,.events-select:disabled{background:#f3f7f3;color:rgba(20,36,23,.58);cursor:not-allowed}.events-textarea{min-height:88px;resize:vertical}.events-btn{border:1px solid ${c.border};border-radius:999px;background:#fff;color:${c.primary};padding:10px 14px;font-weight:900;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:7px}.events-btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(0,0,0,.08)}.events-btn.primary{background:${c.primary};color:#fff}.events-btn.danger{background:#fff7ec;color:#9a3412;border-color:#fed7aa}.events-btn:disabled{opacity:.55;cursor:not-allowed}.events-btn:disabled:hover{transform:none;box-shadow:none}.events-minimum-note.good{color:#265c2b;font-weight:900}.events-last-action{background:#fff}
       .events-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 12px}.events-check,.events-inline-check{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:800;color:${c.text}}.events-check input,.events-inline-check input{width:auto}.events-error{padding:12px;border-radius:14px;background:#fee2e2;color:#991b1b;font-weight:900}.events-empty{padding:18px;border:1px dashed ${c.border};border-radius:16px;color:rgba(20,36,23,.65);background:#fff}.events-empty.big{padding:34px;text-align:center}.events-color-row{display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:8px;align-items:end}.events-color-picker{width:44px;height:42px;border:1px solid ${c.border};border-radius:12px;padding:3px;background:#fff;cursor:pointer}.events-muted{color:rgba(20,36,23,.62);font-size:12.5px;line-height:1.4}.events-topline{display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap}.events-time-block{display:grid;gap:8px;margin-top:10px}.events-time-title{display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:900;color:${c.primary};font-size:12px;text-transform:uppercase;letter-spacing:.03em}.events-time-flag{text-transform:none;letter-spacing:0;font-size:13px;color:${c.text}}.events-time-grid{display:grid;grid-template-columns:minmax(160px,1.4fr) 88px 98px 98px;gap:10px}.events-timing-flags{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 14px}.events-map-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.events-map-preview{margin-top:12px;border:1px solid ${c.border};border-radius:16px;overflow:hidden;background:${c.soft};min-height:170px;display:grid;place-items:center}.events-map-preview iframe{width:100%;height:220px;border:0;display:block}.events-map-preview .events-muted{padding:18px;text-align:center}.events-reuse-box{margin-top:12px;padding:12px;border:1px dashed ${c.border};border-radius:14px;background:#fbfdfb}.events-reuse-box[hidden]{display:none!important}.events-featured-check{align-self:end;min-height:42px}.events-image-widget{display:grid;gap:10px}.events-image-drop{display:grid;grid-template-columns:128px minmax(0,1fr);gap:12px;align-items:center;padding:12px;border:1px dashed ${c.border};border-radius:16px;background:#fbfdfb;cursor:pointer}.events-image-drop:hover,.events-image-drop.dragover{border-color:${c.primary};box-shadow:0 0 0 3px color-mix(in srgb,${c.primary} 12%,transparent)}.events-image-preview{width:128px;height:86px;border-radius:12px;background:${c.soft};border:1px solid ${c.border};overflow:hidden;display:grid;place-items:center;contain:paint}.events-image-preview img{width:100%;height:100%;max-width:100%;max-height:100%;object-fit:contain;display:block}.events-image-empty{font-size:12px;font-weight:900;color:rgba(20,36,23,.55);text-align:center;padding:8px}.events-image-drop b{display:block;color:${c.primary};font-size:14px}.events-image-drop span{display:block;font-size:13px;color:${c.text};margin-top:2px}.events-image-drop small{display:block;font-size:12px;color:rgba(20,36,23,.62);margin-top:3px}.events-image-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.events-needed-toolbar{margin-bottom:12px}.events-needed-list{display:grid;gap:10px}.events-needed-row{display:grid;grid-template-columns:minmax(160px,1.2fr) 82px minmax(160px,1fr) auto;gap:8px;align-items:end;padding:10px;border:1px solid ${c.border};border-radius:14px;background:#fbfdfb}.events-needed-row .events-btn{padding:9px 11px}.events-list-note{padding:8px 2px}.events-details{margin-top:12px}.events-details summary{cursor:pointer;font-weight:900;color:${c.primary};margin-bottom:10px}.events-rsvp-flags{margin:0 0 14px;display:flex;gap:14px;flex-wrap:wrap}.events-rsvp-row{margin-top:12px}.events-conditional[hidden]{display:none!important}.events-advanced{border-style:dashed}.events-debug{max-width:${c.width};margin:16px auto;padding:14px;border-radius:16px;background:#0f172a;color:#dbeafe;overflow:auto;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace}
       .events-help{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:999px;border:1px solid ${c.border};background:#fff;color:${c.primary};font-size:11px;font-weight:900;cursor:help}.events-fixed-tip{position:fixed;max-width:min(320px,calc(100vw - 28px));padding:10px 12px;border-radius:12px;background:#102a16;color:#fff;font-size:12px;line-height:1.35;font-weight:800;box-shadow:0 12px 30px rgba(0,0,0,.22);z-index:2147483000;pointer-events:none}
       @media(max-width:900px){.events-main{grid-template-columns:1fr;min-height:0}.events-sidebar,.events-editor{max-height:none;overflow:visible}.events-list{max-height:none;overflow:visible}.events-sidebar{border-right:none;border-bottom:1px solid ${c.border}}.events-grid,.events-grid.three{grid-template-columns:1fr}.events-check-grid{grid-template-columns:1fr}.events-time-grid{grid-template-columns:1fr 1fr}.events-sidebar-head{grid-template-columns:1fr}.events-control-panel .events-btn{width:auto}.events-control-actions{justify-content:flex-start}.events-needed-row{grid-template-columns:1fr}.events-image-drop{grid-template-columns:1fr}.events-image-preview{width:100%;height:160px}}
@@ -522,8 +567,11 @@
 
   function sidebarControlsHtml() {
     const ev = activeEventForForm();
+    if (!ev) {
+      if (!clean(state.status)) return "";
+      return `<div class="events-control-panel events-last-action"><div class="events-control-title"><strong>No event selected</strong><span class="event-status-message events-muted ${attr(state.statusKind || "")}">${esc(state.status || "")}</span></div></div>`;
+    }
     const title = state.creating ? "New event" : ev && ev.event_id ? (ev.title || "Untitled event") : "No event selected";
-    const canSave = !!ev;
     const currentStatus = clean(ev && ev.status) || "draft";
     const archived = !!(ev && (ev.archived_at || ev.status === "archived"));
     const normalizedStatus = archived ? "archived" : (currentStatus === "hidden" ? "draft" : currentStatus);
@@ -532,9 +580,10 @@
       : normalizedStatus === "archived"
         ? "Hidden from active calendar/list views."
         : "Not visible on the public calendar.";
-    const draftNotice = state.draftNotice && normalizedStatus === "draft" ? `<div class="events-draft-notice">Draft saved. This event will not appear on the public calendar until it is published.<div class="events-draft-actions"><button type="button" class="events-btn primary" id="event-publish-now">Publish now</button><button type="button" class="events-btn" id="event-keep-draft">Keep as draft</button></div></div>` : "";
+    const initialDisabled = minimumReadyForEvent(ev) ? "" : "disabled";
+    const disabledTitle = initialDisabled ? ' title="Complete Event Basics, Timing, and Location before saving." aria-disabled="true"' : "";
     const currentStatusBadge = `<div class="events-compact-status ${attr(normalizedStatus || "draft")}"><b>Current status:</b> ${esc(normalizedStatus || "draft")}<br>${esc(statusText)}</div><input type="hidden" id="event-status" value="${attr(normalizedStatus || "draft")}">`;
-    return `<div class="events-control-panel"><div class="events-control-title"><strong>${esc(title)}</strong><span class="events-dirty-flag events-status ${state.dirty ? "" : "good"}">${state.dirty ? "Unsaved changes" : "No unsaved changes"}</span><span class="event-status-message events-muted ${attr(state.statusKind || "")}">${esc(state.status || "")}</span>${currentStatusBadge}</div>${draftNotice}<div class="events-control-actions"><button type="button" class="events-btn event-save" data-save-status="draft" data-default-label="Save as Draft" ${canSave ? "" : "disabled"}>${state.saving ? "Saving..." : "Save as Draft"}</button><button type="button" class="events-btn primary event-save" data-save-status="published" data-default-label="Save & Publish" ${canSave ? "" : "disabled"}>${state.saving ? "Saving..." : "Save & Publish"}</button>${(ev && ev.event_id) ? `<button type="button" class="events-btn danger" id="event-archive">${archived ? "Restore" : "Archive"}</button>` : ""}</div></div>`;
+    return `<div class="events-control-panel"><div class="events-control-title"><strong>${esc(title)}</strong><span class="events-dirty-flag events-status ${state.dirty ? "" : "good"}">${state.dirty ? "Unsaved changes" : "No unsaved changes"}</span><span class="events-minimum-note events-muted ${initialDisabled ? "" : "good"}">${initialDisabled ? "Complete Event Basics, Timing, and Location before saving." : "Minimum required sections complete."}</span><span class="event-status-message events-muted ${attr(state.statusKind || "")}">${esc(state.status || "")}</span>${currentStatusBadge}</div><div class="events-control-actions"><button type="button" class="events-btn event-save" data-save-status="draft" data-default-label="Save as Draft" ${initialDisabled}${disabledTitle}>${state.saving ? "Saving..." : "Save as Draft"}</button><button type="button" class="events-btn primary event-save" data-save-status="published" data-default-label="Save & Publish" ${initialDisabled}${disabledTitle}>${state.saving ? "Saving..." : "Save & Publish"}</button>${(ev && ev.event_id) ? `<button type="button" class="events-btn danger" id="event-archive">${archived ? "Restore" : "Archive"}</button>` : ""}</div></div>`;
   }
 
   function editorEmptyHtml() {
@@ -594,7 +643,8 @@
       { key: "checklist", title: "Checklist / bring-items", body: checklistBody, required: false },
     ];
 
-    const finalActions = `<div class="events-card"><div class="events-final-actions"><span class="events-muted">Final save actions. Drafts remain hidden from the public calendar until published.</span><button type="button" class="events-btn event-save" data-save-status="draft" data-default-label="Save as Draft">Save as Draft</button><button type="button" class="events-btn primary event-save" data-save-status="published" data-default-label="Save & Publish">Save & Publish</button></div></div>`;
+    const finalDisabled = minimumReadyForEvent(ev) ? "" : 'disabled title="Complete Event Basics, Timing, and Location before saving." aria-disabled="true"';
+    const finalActions = `<div class="events-card"><div class="events-final-actions"><span class="events-muted events-minimum-note ${finalDisabled ? "" : "good"}">${finalDisabled ? "Complete Event Basics, Timing, and Location before saving." : "Minimum required sections complete."}</span><button type="button" class="events-btn event-save" data-save-status="draft" data-default-label="Save as Draft" ${finalDisabled}>Save as Draft</button><button type="button" class="events-btn primary event-save" data-save-status="published" data-default-label="Save & Publish" ${finalDisabled}>Save & Publish</button></div></div>`;
     return sectionDefs.map((section, index) => accordion(section, index, sectionDefs.length)).join("") + finalActions;
   }
 
@@ -739,8 +789,6 @@
     updateReuseControls();
     document.getElementById("event-use-address-map")?.addEventListener("click", useAddressAsMapQuery);
     document.getElementById("event-preview-map")?.addEventListener("click", () => { syncMapQueryFromAddress(true); updateMapPreview(true); setDirty(true); });
-    document.getElementById("event-publish-now")?.addEventListener("click", () => { const st = document.getElementById("event-status"); if (st) st.value = "published"; state.draftNotice = false; setDirty(true); saveEvent("published"); });
-    document.getElementById("event-keep-draft")?.addEventListener("click", () => { state.draftNotice = false; captureFormDraft(); renderStatusOnly(); });
 
     guardNativeSubmit();
     bindFilters();
@@ -850,8 +898,8 @@
   function bindEditorDirty() {
     document.querySelectorAll(".events-editor input,.events-editor select,.events-editor textarea,.events-control-panel .events-control-input").forEach(el => {
       if (el.classList.contains("events-filter")) return;
-      el.addEventListener("input", () => { state.draftNotice = false; updateEventKeyPreview(); captureFormDraft(); updateSectionBadges(); updateReuseControls(); setDirty(true); });
-      el.addEventListener("change", () => { state.draftNotice = false; updateEventKeyPreview(); captureFormDraft(); updateSectionBadges(); updateReuseControls(); setDirty(true); });
+      el.addEventListener("input", () => { state.draftNotice = false; updateEventKeyPreview(); captureFormDraft(); updateSectionBadges(); updateReuseControls(); updateSaveButtons(); setDirty(true); });
+      el.addEventListener("change", () => { state.draftNotice = false; updateEventKeyPreview(); captureFormDraft(); updateSectionBadges(); updateReuseControls(); updateSaveButtons(); setDirty(true); });
     });
   }
 
@@ -887,6 +935,7 @@
     const message = currentTimingInlineMessage();
     box.textContent = message;
     box.hidden = !message;
+    updateSaveButtons();
   }
 
   function bindTimingControls() {
@@ -1268,9 +1317,9 @@
       const found = state.events.find(ev => clean(ev.event_id) === clean(payload.event_id)) || state.events.find(ev => clean(ev.event_key) === clean(payload.event_key)) || state.events.find(ev => clean(ev.title) === clean(payload.title));
       if (found) state.selectedId = "";
       state.creating = false;
-      state.status = payload.status === "published" ? "Published and closed." : (payload.status === "draft" ? "Draft saved and closed." : "Saved and closed.");
+      state.status = payload.status === "published" ? "Last event published." : (payload.status === "draft" ? "Last event saved as draft. Select it from the list to edit or publish it." : "Last event saved.");
       state.statusKind = payload.status === "draft" ? "warn" : "good";
-      state.draftNotice = payload.status === "draft";
+      state.draftNotice = false;
       state.saving = false;
       state.formDraft = null;
       state.lastValidationMessage = "";
@@ -1298,7 +1347,7 @@
       state.selectedId = "";
       state.creating = false;
       state.formDraft = null;
-      state.status = archived ? "Restored and closed." : "Archived and closed.";
+      state.status = archived ? "Last event restored." : "Last event archived.";
       state.statusKind = "good";
       state.error = "";
       setDirty(false);
@@ -1337,8 +1386,8 @@
 
   function renderStatusOnly() {
     document.querySelectorAll(".event-status-message").forEach(el => { el.textContent = state.status || ""; });
-    document.querySelectorAll(".event-save").forEach(btn => { btn.textContent = state.saving ? "Saving..." : (btn.dataset.defaultLabel || "Save Changes"); btn.disabled = !!state.saving; });
     document.querySelectorAll(".event-status-message").forEach(el => { el.classList.remove("error", "warn", "good"); if (state.statusKind) el.classList.add(state.statusKind); });
+    updateSaveButtons();
   }
 
   function render() {

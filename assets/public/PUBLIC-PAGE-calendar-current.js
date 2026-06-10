@@ -1,11 +1,11 @@
 // PUBLIC-PAGE-calendar-current.js
-// Internal Version: 2026-06-09-093-E
+// Internal Version: 2026-06-09-096-A
 // Purpose: Calendar / Events renderer with List, Compact, and Month views; connected multi-day month ribbons; public-safe event images/summaries; organization-themed event detail modal.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-09-093-E";
+  const VERSION = "2026-06-09-096-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const PUBLIC_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-public-render`;
@@ -103,9 +103,10 @@
     return logo ? { url: logo, source: "organization" } : { url: "", source: "fallback" };
   }
 
-  function addressText(ev) { return clean(ev.location_address || ev.address || ev.street_address || ev.location_full_address || getJson(ev, "location_json").address || getJson(ev, "location_json").location_address); }
-  function locationName(ev) { return clean(ev.location_name || getJson(ev, "location_json").location_name || getJson(ev, "location_json").name); }
-  function mapQuery(ev) { const address = addressText(ev); const loc = locationName(ev); return clean(ev.map_query || [loc, address].filter(Boolean).join(" ")); }
+  function locationMode(ev) { return clean(ev.location_mode || getJson(ev, "location_json").location_mode || "in_person"); }
+  function addressText(ev) { return locationMode(ev) === "online" ? "" : clean(ev.location_address || ev.address || ev.street_address || ev.location_full_address || getJson(ev, "location_json").address || getJson(ev, "location_json").location_address); }
+  function locationName(ev) { const mode = locationMode(ev); const online = clean(ev.online_platform || getJson(ev, "location_json").online_platform); if (mode === "online") return online ? `Online · ${online}` : "Online event"; if (mode === "hybrid") return clean(ev.location_name || getJson(ev, "location_json").location_name || getJson(ev, "location_json").name || "Hybrid event") + (online ? ` + ${online}` : ""); return clean(ev.location_name || getJson(ev, "location_json").location_name || getJson(ev, "location_json").name); }
+  function mapQuery(ev) { if (locationMode(ev) === "online") return ""; const address = addressText(ev); const loc = locationName(ev); return clean(ev.map_query || [loc, address].filter(Boolean).join(" ")); }
   function mapsEmbedUrl(ev) { const embed = clean(ev.map_embed_url); if (embed) return embed; const q = mapQuery(ev); return q ? `https://www.google.com/maps?q=${encodeURIComponent(q)}&output=embed` : ""; }
   function mapsOpenUrl(ev) { const q = mapQuery(ev); return q ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}` : ""; }
   function eventHref(ev) { return `/event-rsvp?event=${encodeURIComponent(ev.event_id || "")}`; }

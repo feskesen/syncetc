@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-events-current.js
-// Internal Version: 2026-06-09-094-G
-// Purpose: Customer-admin Events Manager cleanup: left-panel save state cleanup, disabled save actions until minimum event fields are complete, and stale draft prompt removal. Uses portal shell + core-access-action.
+// Internal Version: 2026-06-09-096-A
+// Purpose: Customer-admin Events Manager with copy/recurring event builder and online/hybrid location support. Uses portal shell + core-access-action.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-09-094-G";
+  const VERSION = "2026-06-09-096-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -14,6 +14,7 @@
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
   const FALLBACK_COLORS = ["#265c2b", "#1f4f82", "#c81e1e", "#a16207", "#6d28d9", "#0369a1"];
   const MINUTE_VALUES = ["00", "05", "10", "15", "20", "25", "30", "35", "40", "45", "50", "55"];
+  const LOCATION_MODES = ["in_person", "online", "hybrid"];
 
   let supabaseClient = null;
   const state = {
@@ -45,6 +46,10 @@
     formDraft: null,
     lastValidationSnapshot: null,
     lastValidationMessage: "",
+    copyDialogOpen: false,
+    copyMode: "single",
+    copyStatus: "",
+    copyStatusKind: "",
   };
 
   function root() { return document.querySelector(ROOT_SELECTOR); }
@@ -56,6 +61,8 @@
   function attr(value) { return esc(value); }
   function help(text) { return `<span class="events-help" tabindex="0" aria-label="${attr(text)}" title="${attr(text)}" data-tip="${attr(text)}">i</span>`; }
   function keyify(value) { return clean(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, ""); }
+  function locationModeLabel(value) { const mode = clean(value || "in_person"); return mode === "online" ? "Online" : mode === "hybrid" ? "Hybrid" : "In-person"; }
+  function normalizeLocationMode(value) { const mode = clean(value || "in_person"); return LOCATION_MODES.includes(mode) ? mode : "in_person"; }
   function val(id) { const el = document.getElementById(id); return el ? String(el.value || "").trim() : ""; }
   function checked(id) { const el = document.getElementById(id); return !!(el && el.checked); }
   function checkedValues(name) { return Array.from(document.querySelectorAll(`input[name="${name}"]:checked`)).map(el => el.value).filter(Boolean); }
@@ -325,7 +332,8 @@
     const hasTitle = !!clean(e.title);
     const hasStart = !!clean(e.starts_at) || !!clean(e.start_date);
     const hasType = !!clean(e.event_type_key || e.event_type_label || e.category || obj(e.event_type_json).type_key || obj(e.event_type_json).label);
-    const hasLocation = !!clean(e.location_key || e.location_name || e.location_address || obj(e.location_json).location_key || obj(e.location_json).location_name || obj(e.location_json).location_address);
+    const mode = normalizeLocationMode(e.location_mode || obj(e.location_json).location_mode || "in_person");
+    const hasLocation = mode === "online" ? !!clean(e.location_key || e.location_name || e.online_platform || obj(e.location_json).location_key || obj(e.location_json).location_name || obj(e.location_json).online_platform) : !!clean(e.location_key || e.location_name || e.location_address || obj(e.location_json).location_key || obj(e.location_json).location_name || obj(e.location_json).location_address);
     if (!hasTitle || !hasStart || !hasType || !hasLocation) return false;
     if (e.no_end_time === false && e.ends_at && e.starts_at) {
       const startMs = new Date(e.starts_at).getTime();
@@ -344,7 +352,7 @@
     if (!checked("event-no-end") && !val("event-end-date")) return "Complete Timing: add an end date or check No end time before saving.";
     const timingMessage = currentTimingInlineMessage();
     if (timingMessage) return timingMessage;
-    if (!val("event-location-key") && !val("event-location-name") && !val("event-address")) return "Complete Location: choose a saved location or enter a custom location before saving.";
+    if (val("event-location-mode") === "online") { if (!val("event-location-key") && !val("event-location-name") && !val("event-online-platform")) return "Complete Location: choose a saved online location, enter a location name, or enter the online platform."; } else if (!val("event-location-key") && !val("event-location-name") && !val("event-address")) return "Complete Location: choose a saved location or enter a custom location before saving.";
     return "";
   }
 
@@ -384,7 +392,10 @@
     const savedQuery = clean(loc.map_query || loc.location_address || loc.location_name || loc.label || "");
     const queryChanged = clean(val("event-map-query")) !== savedQuery;
     const embedChanged = clean(val("event-map-embed")) !== clean(loc.map_embed_url);
-    return !!(nameChanged || addressChanged || queryChanged || embedChanged);
+    const modeChanged = clean(val("event-location-mode") || "in_person") !== clean(loc.location_mode || "in_person");
+    const platformChanged = clean(val("event-online-platform")) !== clean(loc.online_platform);
+    const urlChanged = clean(val("event-online-url")) !== clean(loc.online_join_url);
+    return !!(nameChanged || addressChanged || queryChanged || embedChanged || modeChanged || platformChanged || urlChanged);
   }
   function reuseMode(kind) {
     const box = document.getElementById(kind === "type" ? "event-type-reuse-box" : "event-location-reuse-box");
@@ -411,6 +422,10 @@
       show_attendee_list: true,
       all_day_event: false,
       no_end_time: true,
+      location_mode: "in_person",
+      online_platform: "",
+      online_join_url: "",
+      online_join_url_visibility: "logged_in",
     };
   }
 
@@ -442,6 +457,10 @@
       location_address: p.location_address ?? (val("event-address") || (loc && loc.location_address) || ""),
       map_query: p.map_query ?? (val("event-map-query") || val("event-address") || ""),
       map_embed_url: p.map_embed_url ?? val("event-map-embed"),
+      location_mode: p.location_mode ?? val("event-location-mode"),
+      online_platform: p.online_platform ?? val("event-online-platform"),
+      online_join_url: p.online_join_url ?? val("event-online-url"),
+      online_join_url_visibility: p.online_join_url_visibility ?? val("event-online-url-visibility"),
       summary: p.summary ?? val("event-summary"),
       description: p.description ?? val("event-description"),
       rsvp_enabled: p.rsvp_enabled ?? checked("event-rsvp-enabled"),
@@ -484,6 +503,7 @@
       .events-card{background:#fff;border:1px solid ${c.border};border-radius:20px;padding:18px;margin-bottom:16px}.events-card h2,.events-card h3{margin:0 0 12px}.events-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.events-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.events-field{display:grid;gap:5px;font-size:12px;font-weight:900;color:${c.primary}}.events-label-line{display:flex;align-items:center;gap:6px}.events-input,.events-select,.events-textarea{width:100%;border:1px solid ${c.border};border-radius:12px;padding:10px 12px;font:inherit;color:${c.text};background:#fff}.events-input[readonly],.events-input:disabled,.events-select:disabled{background:#f3f7f3;color:rgba(20,36,23,.58);cursor:not-allowed}.events-textarea{min-height:88px;resize:vertical}.events-btn{border:1px solid ${c.border};border-radius:999px;background:#fff;color:${c.primary};padding:10px 14px;font-weight:900;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:7px}.events-btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(0,0,0,.08)}.events-btn.primary{background:${c.primary};color:#fff}.events-btn.danger{background:#fff7ec;color:#9a3412;border-color:#fed7aa}.events-btn:disabled{opacity:.55;cursor:not-allowed}.events-btn:disabled:hover{transform:none;box-shadow:none}.events-minimum-note.good{color:#265c2b;font-weight:900}.events-last-action{background:#fff}
       .events-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 12px}.events-check,.events-inline-check{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:800;color:${c.text}}.events-check input,.events-inline-check input{width:auto}.events-error{padding:12px;border-radius:14px;background:#fee2e2;color:#991b1b;font-weight:900}.events-empty{padding:18px;border:1px dashed ${c.border};border-radius:16px;color:rgba(20,36,23,.65);background:#fff}.events-empty.big{padding:34px;text-align:center}.events-color-row{display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:8px;align-items:end}.events-color-picker{width:44px;height:42px;border:1px solid ${c.border};border-radius:12px;padding:3px;background:#fff;cursor:pointer}.events-muted{color:rgba(20,36,23,.62);font-size:12.5px;line-height:1.4}.events-topline{display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap}.events-time-block{display:grid;gap:8px;margin-top:10px}.events-time-title{display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:900;color:${c.primary};font-size:12px;text-transform:uppercase;letter-spacing:.03em}.events-time-flag{text-transform:none;letter-spacing:0;font-size:13px;color:${c.text}}.events-time-grid{display:grid;grid-template-columns:minmax(160px,1.4fr) 88px 98px 98px;gap:10px}.events-timing-flags{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 14px}.events-map-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.events-map-preview{margin-top:12px;border:1px solid ${c.border};border-radius:16px;overflow:hidden;background:${c.soft};min-height:170px;display:grid;place-items:center}.events-map-preview iframe{width:100%;height:220px;border:0;display:block}.events-map-preview .events-muted{padding:18px;text-align:center}.events-reuse-box{margin-top:12px;padding:12px;border:1px dashed ${c.border};border-radius:14px;background:#fbfdfb}.events-reuse-box[hidden]{display:none!important}.events-featured-check{align-self:end;min-height:42px}.events-image-widget{display:grid;gap:10px}.events-image-drop{display:grid;grid-template-columns:128px minmax(0,1fr);gap:12px;align-items:center;padding:12px;border:1px dashed ${c.border};border-radius:16px;background:#fbfdfb;cursor:pointer}.events-image-drop:hover,.events-image-drop.dragover{border-color:${c.primary};box-shadow:0 0 0 3px color-mix(in srgb,${c.primary} 12%,transparent)}.events-image-preview{width:128px;height:86px;border-radius:12px;background:${c.soft};border:1px solid ${c.border};overflow:hidden;display:grid;place-items:center;contain:paint}.events-image-preview img{width:100%;height:100%;max-width:100%;max-height:100%;object-fit:contain;display:block}.events-image-empty{font-size:12px;font-weight:900;color:rgba(20,36,23,.55);text-align:center;padding:8px}.events-image-drop b{display:block;color:${c.primary};font-size:14px}.events-image-drop span{display:block;font-size:13px;color:${c.text};margin-top:2px}.events-image-drop small{display:block;font-size:12px;color:rgba(20,36,23,.62);margin-top:3px}.events-image-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.events-needed-toolbar{margin-bottom:12px}.events-needed-list{display:grid;gap:10px}.events-needed-row{display:grid;grid-template-columns:minmax(160px,1.2fr) 82px minmax(160px,1fr) auto;gap:8px;align-items:end;padding:10px;border:1px solid ${c.border};border-radius:14px;background:#fbfdfb}.events-needed-row .events-btn{padding:9px 11px}.events-list-note{padding:8px 2px}.events-details{margin-top:12px}.events-details summary{cursor:pointer;font-weight:900;color:${c.primary};margin-bottom:10px}.events-rsvp-flags{margin:0 0 14px;display:flex;gap:14px;flex-wrap:wrap}.events-rsvp-row{margin-top:12px}.events-conditional[hidden]{display:none!important}.events-advanced{border-style:dashed}.events-debug{max-width:${c.width};margin:16px auto;padding:14px;border-radius:16px;background:#0f172a;color:#dbeafe;overflow:auto;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace}
       .events-help{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:999px;border:1px solid ${c.border};background:#fff;color:${c.primary};font-size:11px;font-weight:900;cursor:help}.events-fixed-tip{position:fixed;max-width:min(320px,calc(100vw - 28px));padding:10px 12px;border-radius:12px;background:#102a16;color:#fff;font-size:12px;line-height:1.35;font-weight:800;box-shadow:0 12px 30px rgba(0,0,0,.22);z-index:2147483000;pointer-events:none}
+      .events-copy-overlay{position:fixed;inset:0;background:rgba(15,23,42,.56);display:flex;align-items:flex-start;justify-content:center;padding:26px 16px;z-index:2147482500;overflow:auto}.events-copy-modal{width:min(720px,100%);background:#fff;border:1px solid ${c.border};border-radius:24px;box-shadow:0 24px 72px rgba(0,0,0,.28);overflow:hidden}.events-copy-head{padding:18px 22px;background:linear-gradient(135deg,${c.primary},color-mix(in srgb,${c.primary} 58%,#5d99cf));color:#fff;display:flex;justify-content:space-between;gap:14px;align-items:flex-start}.events-copy-head h2{margin:0}.events-copy-close{border:1px solid rgba(255,255,255,.46);background:rgba(255,255,255,.16);color:#fff;border-radius:999px;width:38px;height:38px;font-size:24px;line-height:1;cursor:pointer}.events-copy-body{padding:18px 22px;display:grid;gap:14px}.events-copy-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;padding:14px 22px;background:${c.soft};border-top:1px solid ${c.border}}.events-online-fields,.events-physical-fields{margin-top:12px}.events-online-fields[hidden],.events-physical-fields[hidden]{display:none!important}
       @media(max-width:900px){.events-main{grid-template-columns:1fr;min-height:0}.events-sidebar,.events-editor{max-height:none;overflow:visible}.events-list{max-height:none;overflow:visible}.events-sidebar{border-right:none;border-bottom:1px solid ${c.border}}.events-grid,.events-grid.three{grid-template-columns:1fr}.events-check-grid{grid-template-columns:1fr}.events-time-grid{grid-template-columns:1fr 1fr}.events-sidebar-head{grid-template-columns:1fr}.events-control-panel .events-btn{width:auto}.events-control-actions{justify-content:flex-start}.events-needed-row{grid-template-columns:1fr}.events-image-drop{grid-template-columns:1fr}.events-image-preview{width:100%;height:160px}}
       @media(max-width:560px){.events-time-grid{grid-template-columns:1fr}.events-hero{padding:24px 22px}.events-card{padding:14px}.events-editor{padding:14px}.events-btn{width:100%}.events-control-panel .events-btn{width:100%}.events-side-buttons{display:grid}}
 
@@ -583,7 +603,7 @@
     const initialDisabled = minimumReadyForEvent(ev) ? "" : "disabled";
     const disabledTitle = initialDisabled ? ' title="Complete Event Basics, Timing, and Location before saving." aria-disabled="true"' : "";
     const currentStatusBadge = `<div class="events-compact-status ${attr(normalizedStatus || "draft")}"><b>Current status:</b> ${esc(normalizedStatus || "draft")}<br>${esc(statusText)}</div><input type="hidden" id="event-status" value="${attr(normalizedStatus || "draft")}">`;
-    return `<div class="events-control-panel"><div class="events-control-title"><strong>${esc(title)}</strong><span class="events-dirty-flag events-status ${state.dirty ? "" : "good"}">${state.dirty ? "Unsaved changes" : "No unsaved changes"}</span><span class="events-minimum-note events-muted ${initialDisabled ? "" : "good"}">${initialDisabled ? "Complete Event Basics, Timing, and Location before saving." : "Minimum required sections complete."}</span><span class="event-status-message events-muted ${attr(state.statusKind || "")}">${esc(state.status || "")}</span>${currentStatusBadge}</div><div class="events-control-actions"><button type="button" class="events-btn event-save" data-save-status="draft" data-default-label="Save as Draft" ${initialDisabled}${disabledTitle}>${state.saving ? "Saving..." : "Save as Draft"}</button><button type="button" class="events-btn primary event-save" data-save-status="published" data-default-label="Save & Publish" ${initialDisabled}${disabledTitle}>${state.saving ? "Saving..." : "Save & Publish"}</button>${(ev && ev.event_id) ? `<button type="button" class="events-btn danger" id="event-archive">${archived ? "Restore" : "Archive"}</button>` : ""}</div></div>`;
+    return `<div class="events-control-panel"><div class="events-control-title"><strong>${esc(title)}</strong><span class="events-dirty-flag events-status ${state.dirty ? "" : "good"}">${state.dirty ? "Unsaved changes" : "No unsaved changes"}</span><span class="events-minimum-note events-muted ${initialDisabled ? "" : "good"}">${initialDisabled ? "Complete Event Basics, Timing, and Location before saving." : "Minimum required sections complete."}</span><span class="event-status-message events-muted ${attr(state.statusKind || "")}">${esc(state.status || "")}</span>${currentStatusBadge}</div><div class="events-control-actions"><button type="button" class="events-btn event-save" data-save-status="draft" data-default-label="Save as Draft" ${initialDisabled}${disabledTitle}>${state.saving ? "Saving..." : "Save as Draft"}</button><button type="button" class="events-btn primary event-save" data-save-status="published" data-default-label="Save & Publish" ${initialDisabled}${disabledTitle}>${state.saving ? "Saving..." : "Save & Publish"}</button>${(ev && ev.event_id) ? `<button type="button" class="events-btn" id="event-copy-repeat">Copy / Repeat</button><button type="button" class="events-btn danger" id="event-archive">${archived ? "Restore" : "Archive"}</button>` : ""}</div></div>`;
   }
 
   function editorEmptyHtml() {
@@ -624,7 +644,8 @@
 
     const timingBody = `${dateTimeControls("event-start", "Starts", ev.starts_at, { flagHtml: `<label class="events-inline-check"><input type="checkbox" id="event-all-day" ${ev.all_day_event ? "checked" : ""}> All-day event ${help("For events without a specific start time. Time selectors are disabled when this is checked.")}</label>` })}${dateTimeControls("event-end", "Ends", ev.ends_at, { optional: true, flagHtml: `<label class="events-inline-check"><input type="checkbox" id="event-no-end" ${noEnd ? "checked" : ""}> No end time ${help("Use when the event has a start time but no listed ending time. End controls are disabled when this is checked.")}</label>` })}<div class="events-time-inline-error" id="event-time-inline-error" hidden></div><label class="events-field" style="margin-top:12px">Timezone<input class="events-input" id="event-timezone" value="${attr(ev.timezone || "America/New_York")}"></label>`;
 
-    const locationBody = `<div class="events-grid"><label class="events-field">Saved location<select class="events-select" id="event-location-key">${locationOptions(ev)}</select></label><label class="events-field">Location name<input class="events-input" id="event-location-name" value="${attr(ev.location_name || locJson.location_name || locJson.label || "")}"></label></div><label class="events-field">Written address<input class="events-input" id="event-address" value="${attr(ev.location_address || locJson.location_address || "")}" placeholder="Always enter a written address when there is a physical location"></label><div class="events-map-actions"><button type="button" class="events-btn" id="event-preview-map">Preview map from address</button></div><div class="events-map-preview" id="event-map-preview"></div><details class="events-details"><summary>Advanced map options</summary><div class="events-grid"><label class="events-field">Map search text / query<input class="events-input" id="event-map-query" value="${attr(ev.map_query || locJson.map_query || ev.location_address || "")}" placeholder="Usually the written address"></label><label class="events-field">Map embed URL optional<input class="events-input" id="event-map-embed" value="${attr(ev.map_embed_url || locJson.map_embed_url || "")}"></label></div><div class="events-muted">Use these only if the automatic map preview does not find the right place.</div></details><div class="events-reuse-box" id="event-location-reuse-box"><label class="events-inline-check"><input type="checkbox" id="event-save-location"> <span id="event-location-reuse-label"></span></label><div class="events-muted" id="event-location-reuse-help"></div></div>`;
+    const locationMode = normalizeLocationMode(ev.location_mode || locJson.location_mode || "in_person");
+    const locationBody = `<div class="events-grid"><label class="events-field">Saved location<select class="events-select" id="event-location-key">${locationOptions(ev)}</select></label><label class="events-field">Location type<select class="events-select" id="event-location-mode"><option value="in_person" ${locationMode === "in_person" ? "selected" : ""}>In-person</option><option value="online" ${locationMode === "online" ? "selected" : ""}>Online</option><option value="hybrid" ${locationMode === "hybrid" ? "selected" : ""}>Hybrid</option></select></label><label class="events-field">Location name<input class="events-input" id="event-location-name" value="${attr(ev.location_name || locJson.location_name || locJson.label || "")}" placeholder="Clubhouse, Zoom, Somerset Airport..."></label></div><div class="events-online-fields" ${locationMode === "in_person" ? "hidden" : ""}><div class="events-grid"><label class="events-field">Online platform<input class="events-input" id="event-online-platform" value="${attr(ev.online_platform || locJson.online_platform || "")}" placeholder="Zoom, Teams, Google Meet"></label><label class="events-field">Private join URL<input class="events-input" id="event-online-url" value="${attr(ev.online_join_url || locJson.online_join_url || "")}" placeholder="Paste meeting link. Not shown publicly."></label><label class="events-field">Join-link visibility<select class="events-select" id="event-online-url-visibility"><option value="logged_in" ${(ev.online_join_url_visibility || locJson.online_join_url_visibility || "logged_in") === "logged_in" ? "selected" : ""}>Logged-in users</option><option value="rsvp_yes" ${(ev.online_join_url_visibility || locJson.online_join_url_visibility) === "rsvp_yes" ? "selected" : ""}>After RSVP Yes/Waitlist</option><option value="admin" ${(ev.online_join_url_visibility || locJson.online_join_url_visibility) === "admin" ? "selected" : ""}>Admins only</option></select></label></div><div class="events-muted">Private join URLs are saved for this event but are not exposed on the public calendar listing.</div></div><div class="events-physical-fields" ${locationMode === "online" ? "hidden" : ""}><label class="events-field">Written address<input class="events-input" id="event-address" value="${attr(ev.location_address || locJson.location_address || "")}" placeholder="Always enter a written address when there is a physical location"></label><div class="events-map-actions"><button type="button" class="events-btn" id="event-preview-map">Preview map from address</button></div><div class="events-map-preview" id="event-map-preview"></div><details class="events-details"><summary>Advanced map options</summary><div class="events-grid"><label class="events-field">Map search text / query<input class="events-input" id="event-map-query" value="${attr(ev.map_query || locJson.map_query || ev.location_address || "")}" placeholder="Usually the written address"></label><label class="events-field">Map embed URL optional<input class="events-input" id="event-map-embed" value="${attr(ev.map_embed_url || locJson.map_embed_url || "")}"></label></div><div class="events-muted">Use these only if the automatic map preview does not find the right place.</div></details></div><div class="events-reuse-box" id="event-location-reuse-box"><label class="events-inline-check"><input type="checkbox" id="event-save-location"> <span id="event-location-reuse-label"></span></label><div class="events-muted" id="event-location-reuse-help"></div></div>`;
 
     const contentBody = `<label class="events-field">Short summary<textarea class="events-textarea" id="event-summary" placeholder="Example: Fall wash and wax for the club fleet.">${esc(ev.summary || "")}</textarea><span class="events-muted">Short text for calendar cards or quick previews.</span></label><label class="events-field">Full description<textarea class="events-textarea" id="event-description" placeholder="Example: Come join us for our fall wash and wax. Help keep the fleet looking sharp and ready for the season.">${esc(ev.description || "")}</textarea><span class="events-muted">Longer event details for the event page or RSVP view.</span></label>`;
 
@@ -659,14 +680,14 @@
     let complete = false;
     if (key === "basics") complete = !!(clean(ev.title) && clean(ev.visibility_audience || ev.visibility || "public") && (clean(ev.event_type_key) || clean(ev.event_type_label) || clean(ev.category)));
     if (key === "timing") complete = !!clean(ev.starts_at);
-    if (key === "location") complete = !!(clean(ev.location_key) || clean(ev.location_name) || clean(ev.location_address) || clean(ev.location_label));
+    if (key === "location") { const mode = normalizeLocationMode(ev.location_mode || obj(ev.location_json).location_mode || "in_person"); complete = mode === "online" ? !!(clean(ev.location_key) || clean(ev.location_name) || clean(ev.online_platform) || clean(obj(ev.location_json).online_platform)) : !!(clean(ev.location_key) || clean(ev.location_name) || clean(ev.location_address) || clean(ev.location_label)); }
     return complete ? { label: "Complete", kind: "complete" } : { label: "Missing", kind: "missing" };
   }
 
   function liveSectionStatus(key) {
     if (key === "basics") return (val("event-title") && val("event-visibility") && (val("event-type-key") || val("event-type-label"))) ? { label: "Complete", kind: "complete" } : { label: "Missing", kind: "missing" };
     if (key === "timing") return val("event-start-date") ? { label: "Complete", kind: "complete" } : { label: "Missing", kind: "missing" };
-    if (key === "location") return (val("event-location-key") || val("event-location-name") || val("event-address")) ? { label: "Complete", kind: "complete" } : { label: "Missing", kind: "missing" };
+    if (key === "location") { const mode = val("event-location-mode") || "in_person"; const ok = mode === "online" ? (val("event-location-key") || val("event-location-name") || val("event-online-platform")) : (val("event-location-key") || val("event-location-name") || val("event-address")); return ok ? { label: "Complete", kind: "complete" } : { label: "Missing", kind: "missing" }; }
     return { label: "Optional", kind: "optional" };
   }
 
@@ -784,6 +805,7 @@
     document.querySelectorAll(".event-new").forEach(button => button.addEventListener("click", newEvent));
     document.querySelectorAll(".event-save").forEach(button => button.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); captureFormDraft(); saveEvent(button.dataset.saveStatus || ""); }));
     document.getElementById("event-archive")?.addEventListener("click", toggleArchive);
+    document.getElementById("event-copy-repeat")?.addEventListener("click", openCopyRepeat);
     document.getElementById("event-type-key")?.addEventListener("change", applyType);
     document.getElementById("event-location-key")?.addEventListener("change", applyLocation);
     updateReuseControls();
@@ -796,12 +818,14 @@
     bindColorPicker();
     bindTimingControls();
     bindMapControls();
+    bindLocationModeControls();
     bindTooltipControls();
     bindRsvpConditional();
     bindRsvpDeadlineControls();
     bindImageUploads();
     bindNeededItems();
     bindAccordionNavigation();
+    bindCopyRepeat();
     updateSectionBadges();
     bindDraftReminderControls();
     bindEditorDirty();
@@ -876,6 +900,8 @@
       "event-visibility": ev.visibility_audience || ev.visibility || "public",
       "event-rsvp-audience": ev.rsvp_audience || "public",
       "event-capacity-behavior": ev.rsvp_capacity_behavior || (ev.waitlist_enabled === false ? "block" : "waitlist"),
+      "event-location-mode": normalizeLocationMode(ev.location_mode || obj(ev.location_json).location_mode || "in_person"),
+      "event-online-url-visibility": ev.online_join_url_visibility || obj(ev.location_json).online_join_url_visibility || "logged_in",
     };
     Object.entries(defaults).forEach(([id, value]) => { const el = document.getElementById(id); if (el) el.value = value; });
   }
@@ -961,6 +987,21 @@
   function bindMapControls() {
     ["event-address", "event-map-query", "event-map-embed", "event-location-name"].forEach(id => document.getElementById(id)?.addEventListener("input", () => updateMapPreview(false)));
     updateMapPreview(false);
+  }
+
+  function syncLocationModeFields() {
+    const mode = val("event-location-mode") || "in_person";
+    document.querySelectorAll(".events-online-fields").forEach(el => { el.hidden = mode === "in_person"; });
+    document.querySelectorAll(".events-physical-fields").forEach(el => { el.hidden = mode === "online"; });
+    updateSectionBadges();
+    updateReuseControls();
+    updateSaveButtons();
+  }
+
+  function bindLocationModeControls() {
+    const mode = document.getElementById("event-location-mode");
+    mode?.addEventListener("change", () => { syncLocationModeFields(); setDirty(true); });
+    syncLocationModeFields();
   }
 
   function syncMapQueryFromAddress(force) {
@@ -1068,9 +1109,14 @@
     if (!loc) return;
     const set = (id, value, force) => { const el = document.getElementById(id); if (el && (force || !el.value)) el.value = value || ""; };
     set("event-location-name", loc.location_name || loc.label, true);
+    set("event-location-mode", normalizeLocationMode(loc.location_mode || "in_person"), true);
     set("event-address", loc.location_address, true);
     set("event-map-query", loc.map_query || loc.location_address || loc.label, true);
     set("event-map-embed", loc.map_embed_url, true);
+    set("event-online-platform", loc.online_platform || "", true);
+    set("event-online-url", loc.online_join_url || "", true);
+    set("event-online-url-visibility", loc.online_join_url_visibility || "logged_in", true);
+    syncLocationModeFields();
     updateMapPreview(true);
     updateSectionBadges();
     updateReuseControls();
@@ -1119,13 +1165,13 @@
     const locLabel = document.getElementById("event-location-reuse-label");
     const locHelp = document.getElementById("event-location-reuse-help");
     const loc = selectedLocation();
-    const locName = clean(val("event-location-name"));
+    const locName = clean(val("event-location-name") || (val("event-location-mode") === "online" ? val("event-online-platform") : ""));
     const locAddress = clean(val("event-address"));
     if (locBox && locCheck && locLabel && locHelp) {
       let mode = "";
       let label = "";
       let helpText = "";
-      if (!locName && !locAddress) {
+      if (!locName && !locAddress && !clean(val("event-online-platform"))) {
         mode = "";
       } else if (loc) {
         const nameChanged = locName && !sameText(locName, locationDisplayName(loc));
@@ -1208,6 +1254,11 @@
       location_address: val("event-address") || (loc && loc.location_address) || "",
       map_query: val("event-map-query") || val("event-address") || "",
       map_embed_url: val("event-map-embed"),
+      location_mode: val("event-location-mode") || "in_person",
+      online_platform: val("event-online-platform"),
+      online_join_url: val("event-online-url"),
+      online_join_url_visibility: val("event-online-url-visibility") || "logged_in",
+      location_json: { location_mode: val("event-location-mode") || "in_person", online_platform: val("event-online-platform"), online_join_url: val("event-online-url"), online_join_url_visibility: val("event-online-url-visibility") || "logged_in", public_location_label: val("event-location-name") || (val("event-location-mode") === "online" ? "Online event" : "") },
       save_location: checked("event-save-location"),
       summary: val("event-summary"),
       description: val("event-description"),
@@ -1271,7 +1322,7 @@
       if (!payload.all_day_event && Number.isFinite(startMs) && Number.isFinite(endMs) && endMs === startMs) return "End time must be after the start time, or check No end time.";
     }
     if (!clean(payload.event_type_key) && !clean(payload.event_type_label)) return "Event type is required.";
-    if (!clean(payload.location_key) && !clean(payload.location_name) && !clean(payload.location_address)) return "Location is required.";
+    if (payload.location_mode === "online") { if (!clean(payload.location_key) && !clean(payload.location_name) && !clean(payload.online_platform)) return "Online location or platform is required."; } else if (!clean(payload.location_key) && !clean(payload.location_name) && !clean(payload.location_address)) return "Location is required.";
     if (checked("event-save-type")) {
       const selectedKey = reuseMode("type") === "new" ? "" : val("event-type-key");
       const label = val("event-type-label");
@@ -1336,7 +1387,180 @@
     }
   }
 
-  async function toggleArchive() {
+  
+  function copyRepeatModalHtml() {
+    if (!state.copyDialogOpen) return "";
+    const ev = selectedEvent();
+    if (!ev) return "";
+    const start = new Date(ev.starts_at || Date.now());
+    const date = `${start.getFullYear()}-${pad2(start.getMonth() + 1)}-${pad2(start.getDate())}`;
+    return `<div class="events-copy-overlay" id="events-copy-overlay"><div class="events-copy-modal" role="dialog" aria-modal="true"><div class="events-copy-head"><div><h2>Copy / Repeat Event</h2><div>${esc(ev.title || "Untitled event")}</div></div><button type="button" class="events-copy-close" id="events-copy-close" aria-label="Close">×</button></div><div class="events-copy-body"><label class="events-field">Copy mode<select class="events-select" id="event-copy-mode"><option value="single">Copy once</option><option value="monthly_day">Repeat monthly on the same day of month</option><option value="monthly_weekday">Repeat monthly on the same weekday pattern</option></select></label><div class="events-grid"><label class="events-field">First copy date<input class="events-input" type="date" id="event-copy-start-date" value="${attr(date)}"></label><label class="events-field">End date for repeats<input class="events-input" type="date" id="event-copy-end-date" value=""></label><label class="events-field">Max occurrences<input class="events-input" type="number" min="1" max="36" id="event-copy-count" value="6"></label></div><div class="events-muted">Copies keep event type, image, location, RSVP rules, and checklist items. New copies are saved as Draft so you can review them before publishing.</div><div class="events-muted" id="event-copy-preview"></div></div><div class="events-copy-actions"><button type="button" class="events-btn" id="events-copy-cancel">Cancel</button><button type="button" class="events-btn primary" id="events-copy-create">Create copies</button></div></div></div>`;
+  }
+
+  function openCopyRepeat() {
+    if (state.dirty && !confirm("You have unsaved event changes. Save or discard them before copying?")) return;
+    state.copyDialogOpen = true;
+    state.copyMode = "single";
+    state.copyStatus = "";
+    render();
+  }
+
+  function closeCopyRepeat() {
+    state.copyDialogOpen = false;
+    state.copyStatus = "";
+    render();
+  }
+
+  function addMonthsClamped(date, months) {
+    const d = new Date(date.getTime());
+    const day = d.getDate();
+    d.setDate(1);
+    d.setMonth(d.getMonth() + months);
+    const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    d.setDate(Math.min(day, last));
+    return d;
+  }
+
+  function weekdayOrdinalInMonth(date) {
+    return Math.floor((date.getDate() - 1) / 7) + 1;
+  }
+
+  function nthWeekdayOfMonth(year, month, weekday, ordinal) {
+    const first = new Date(year, month, 1);
+    const offset = (weekday - first.getDay() + 7) % 7;
+    const day = 1 + offset + (ordinal - 1) * 7;
+    const last = new Date(year, month + 1, 0).getDate();
+    return new Date(year, month, Math.min(day, last));
+  }
+
+  function sameTimeOnDate(sourceIso, targetDate, allDay) {
+    const source = new Date(sourceIso || Date.now());
+    const out = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), allDay ? 0 : source.getHours(), allDay ? 0 : source.getMinutes(), 0);
+    return out.toISOString();
+  }
+
+  function generateCopyDates(source) {
+    const mode = val("event-copy-mode") || "single";
+    const firstRaw = val("event-copy-start-date");
+    if (!firstRaw) throw new Error("Choose the first copy date.");
+    const first = new Date(`${firstRaw}T00:00:00`);
+    const count = Math.max(1, Math.min(36, Number(val("event-copy-count") || 1)));
+    const endRaw = val("event-copy-end-date");
+    const end = endRaw ? new Date(`${endRaw}T23:59:59`) : null;
+    if (mode === "single") return [first];
+    const out = [];
+    const sourceDate = new Date(source.starts_at || Date.now());
+    const weekday = sourceDate.getDay();
+    const ordinal = weekdayOrdinalInMonth(sourceDate);
+    for (let i = 0; i < count; i += 1) {
+      const candidate = mode === "monthly_weekday"
+        ? nthWeekdayOfMonth(first.getFullYear(), first.getMonth() + i, weekday, ordinal)
+        : addMonthsClamped(first, i);
+      if (end && candidate.getTime() > end.getTime()) break;
+      out.push(candidate);
+    }
+    return out;
+  }
+
+  function copyPayloadFromEvent(source, targetDate) {
+    const allDay = source.all_day_event === true;
+    const startsAt = sameTimeOnDate(source.starts_at, targetDate, allDay);
+    let endsAt = null;
+    if (source.ends_at && source.no_end_time !== true) {
+      const duration = new Date(source.ends_at).getTime() - new Date(source.starts_at).getTime();
+      endsAt = new Date(new Date(startsAt).getTime() + Math.max(0, duration)).toISOString();
+    }
+    return {
+      organization_id: state.orgId,
+      event_id: null,
+      title: source.title || "Copied event",
+      event_key: keyify(`${source.title || "event"}-${String(startsAt).slice(0,10)}`),
+      status: "draft",
+      visibility_audience: source.visibility_audience || source.visibility || "public",
+      starts_at: startsAt,
+      ends_at: endsAt,
+      timezone: source.timezone || "America/New_York",
+      all_day_event: allDay,
+      no_end_time: source.no_end_time === true || !endsAt,
+      event_type_key: source.event_type_key || "",
+      event_type_label: source.event_type_label || source.category || "",
+      category: source.event_type_label || source.category || "",
+      event_accent_color: source.event_accent_color || "",
+      event_image_url: source.event_image_url || source.image_url || "",
+      event_image_path: source.event_image_path || "",
+      save_event_type: false,
+      location_key: source.location_key || "",
+      location_label: source.location_name || source.location_label || "",
+      location_name: source.location_name || "",
+      location_address: source.location_address || "",
+      map_query: source.map_query || source.location_address || "",
+      map_embed_url: source.map_embed_url || "",
+      location_mode: source.location_mode || obj(source.location_json).location_mode || "in_person",
+      online_platform: source.online_platform || obj(source.location_json).online_platform || "",
+      online_join_url: source.online_join_url || "",
+      online_join_url_visibility: source.online_join_url_visibility || "logged_in",
+      location_json: { ...obj(source.location_json), location_mode: source.location_mode || obj(source.location_json).location_mode || "in_person", online_platform: source.online_platform || obj(source.location_json).online_platform || "", online_join_url: source.online_join_url || obj(source.location_json).online_join_url || "", online_join_url_visibility: source.online_join_url_visibility || obj(source.location_json).online_join_url_visibility || "logged_in" },
+      save_location: false,
+      summary: source.summary || "",
+      description: source.description || "",
+      rsvp_enabled: source.rsvp_enabled === true,
+      rsvp_audience: source.rsvp_audience || "public",
+      rsvp_deadline_at: null,
+      capacity: source.capacity ?? null,
+      allow_guests: source.allow_guests !== false,
+      max_guests_per_rsvp: Number(source.max_guests_per_rsvp || 0),
+      rsvp_capacity_behavior: source.rsvp_capacity_behavior || "waitlist",
+      waitlist_enabled: source.waitlist_enabled !== false,
+      attendee_list_visibility: source.attendee_list_visibility || "members",
+      show_attendee_list: source.show_attendee_list !== false,
+      allowed_membership_class_keys: source.allowed_membership_class_keys || [],
+      allowed_role_keys: source.allowed_role_keys || [],
+      featured: false,
+      sort_order: Number(source.sort_order || 100),
+      event_needed_items: Array.isArray(source.needed_items) ? source.needed_items : [],
+    };
+  }
+
+  async function createEventCopies() {
+    const source = selectedEvent();
+    if (!source) return;
+    try {
+      const dates = generateCopyDates(source);
+      if (!dates.length) throw new Error("No copy dates were generated.");
+      if (!confirm(`Create ${dates.length} draft event copy${dates.length === 1 ? "" : "ies"}?`)) return;
+      const button = document.getElementById("events-copy-create");
+      if (button) { button.disabled = true; button.textContent = "Creating..."; }
+      let result = null;
+      for (const date of dates) result = await call("organization_save_event", copyPayloadFromEvent(source, date));
+      if (result) {
+        state.events = arr(result.events);
+        state.eventTypes = arr(result.event_types);
+        state.locations = arr(result.locations);
+      }
+      state.selectedId = "";
+      state.creating = false;
+      state.copyDialogOpen = false;
+      state.status = `${dates.length} draft event cop${dates.length === 1 ? "y" : "ies"} created.`;
+      state.statusKind = "good";
+      setDirty(false);
+      render();
+    } catch (error) {
+      alert(error.message || String(error));
+      const button = document.getElementById("events-copy-create");
+      if (button) { button.disabled = false; button.textContent = "Create copies"; }
+    }
+  }
+
+  function bindCopyRepeat() {
+    if (!state.copyDialogOpen) return;
+    document.getElementById("events-copy-close")?.addEventListener("click", closeCopyRepeat);
+    document.getElementById("events-copy-cancel")?.addEventListener("click", closeCopyRepeat);
+    document.getElementById("event-copy-mode")?.addEventListener("change", () => { state.copyMode = val("event-copy-mode") || "single"; });
+    document.getElementById("events-copy-create")?.addEventListener("click", createEventCopies);
+    document.getElementById("events-copy-overlay")?.addEventListener("click", event => { if (event.target && event.target.id === "events-copy-overlay") closeCopyRepeat(); });
+  }
+
+async function toggleArchive() {
     const ev = selectedEvent();
     if (!ev || !ev.event_id) return;
     const archived = ev.archived_at || ev.status === "archived";
@@ -1398,7 +1622,7 @@
       return;
     }
     const visibleCount = filteredEvents().length;
-    r.innerHTML = `${css()}<div class="syncetc-events-page"><div class="events-shell"><div class="events-hero"><span class="events-badge">Organization Admin</span><h1>Events Manager</h1><p>Create events, reuse event types and locations, configure RSVP rules, and prepare later checklist support.</p></div>${state.error ? `<div class="events-editor" style="max-height:none"><div class="events-error">${esc(state.error)}</div></div>` : ""}<div class="events-main"><aside class="events-sidebar"><div class="events-sidebar-head"><div><b><span id="events-visible-count">${visibleCount}</span> / ${state.events.length} events</b></div><div class="events-side-buttons"><button type="button" class="events-btn primary event-new">New Event</button><button type="button" class="events-btn" id="events-refresh">Refresh</button></div></div>${sidebarControlsHtml()}${filterOptions()}<div class="events-list">${eventListHtml()}</div></aside><main class="events-editor">${formHtml()}</main></div></div>${state.debug ? `<pre class="events-debug">SyncEtc Events Manager Diagnostics ${VERSION}\nOrg: ${esc(state.accessRow && state.accessRow.organization_key || "")}\nEvents: ${state.events.length}\nTypes: ${state.eventTypes.length}\nLocations: ${state.locations.length}\nSelected: ${esc(state.selectedId || (state.creating ? "new" : "none"))}\nDirty: ${state.dirty ? "yes" : "no"}\nForm draft: ${state.formDraft ? "yes" : "no"}\nLast validation: ${esc(state.lastValidationMessage || "")}\nValidation snapshot: ${esc(JSON.stringify(state.lastValidationSnapshot || {}, null, 2))}\n\n${esc(JSON.stringify(state.last, null, 2)).slice(0, 12000)}</pre>` : ""}</div>`;
+    r.innerHTML = `${css()}<div class="syncetc-events-page"><div class="events-shell"><div class="events-hero"><span class="events-badge">Organization Admin</span><h1>Events Manager</h1><p>Create events, reuse event types and locations, configure RSVP rules, and prepare later checklist support.</p></div>${state.error ? `<div class="events-editor" style="max-height:none"><div class="events-error">${esc(state.error)}</div></div>` : ""}<div class="events-main"><aside class="events-sidebar"><div class="events-sidebar-head"><div><b><span id="events-visible-count">${visibleCount}</span> / ${state.events.length} events</b></div><div class="events-side-buttons"><button type="button" class="events-btn primary event-new">New Event</button><button type="button" class="events-btn" id="events-refresh">Refresh</button></div></div>${sidebarControlsHtml()}${filterOptions()}<div class="events-list">${eventListHtml()}</div></aside><main class="events-editor">${formHtml()}</main></div></div>${copyRepeatModalHtml()}${state.debug ? `<pre class="events-debug">SyncEtc Events Manager Diagnostics ${VERSION}\nOrg: ${esc(state.accessRow && state.accessRow.organization_key || "")}\nEvents: ${state.events.length}\nTypes: ${state.eventTypes.length}\nLocations: ${state.locations.length}\nSelected: ${esc(state.selectedId || (state.creating ? "new" : "none"))}\nDirty: ${state.dirty ? "yes" : "no"}\nForm draft: ${state.formDraft ? "yes" : "no"}\nLast validation: ${esc(state.lastValidationMessage || "")}\nValidation snapshot: ${esc(JSON.stringify(state.lastValidationSnapshot || {}, null, 2))}\n\n${esc(JSON.stringify(state.last, null, 2)).slice(0, 12000)}</pre>` : ""}</div>`;
     bind();
   }
 

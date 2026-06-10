@@ -1,11 +1,11 @@
 // PUBLIC-PAGE-event-rsvp-current.js
-// Internal Version: 2026-06-09-095-D
+// Internal Version: 2026-06-09-096-A
 // Purpose: Event RSVP renderer with People-linked RSVP, public fallback, checklist/bring-items claiming, and organization-themed RSVP styling.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-09-095-D";
+  const VERSION = "2026-06-09-096-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const PUBLIC_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-public-render`;
@@ -91,7 +91,13 @@
   function day(v) { if (!v) return ""; try { return new Date(v).getDate(); } catch { return ""; } }
   function eventImageHtml(ev) { const url = clean(ev.event_image_url || ev.image_url || ""); return url ? `<img src="${e(url)}" alt="">` : "▣"; }
   function eventHeader(ev) {
-    return `<section class="rsvp-card rsvp-event"><div class="rsvp-date"><div>${e(month(ev.starts_at))}</div><strong>${e(day(ev.starts_at))}</strong><div>${new Date(ev.starts_at || Date.now()).getFullYear()}</div></div><div><div class="rsvp-pill">${e(ev.event_type_label || ev.category || "General")}</div><h2 style="margin:8px 0 4px">${e(ev.title || "Event")}</h2><div class="rsvp-meta">${e(ev.starts_at ? new Date(ev.starts_at).toLocaleString() : "")} ${ev.location_name ? " • " + e(ev.location_name) : ""}</div>${ev.location_address ? `<div class="rsvp-meta">${e(ev.location_address)}</div>` : ""}</div><div class="rsvp-event-image">${eventImageHtml(ev)}</div></section>`;
+    const mode = String(ev.location_mode || (ev.location_json && ev.location_json.location_mode) || "in_person");
+    const onlinePlatform = e(ev.online_platform || (ev.location_json && ev.location_json.online_platform) || "");
+    const onlineUrl = String(ev.online_join_url || "").trim();
+    const onlineLine = mode === "online" || mode === "hybrid"
+      ? `<div class="rsvp-meta">${mode === "hybrid" ? "Hybrid event" : "Online event"}${onlinePlatform ? " · " + onlinePlatform : ""}${onlineUrl ? ` · <a href="${e(onlineUrl)}" target="_blank" rel="noopener">Join link</a>` : ""}</div>`
+      : "";
+    return `<section class="rsvp-card rsvp-event"><div class="rsvp-date"><div>${e(month(ev.starts_at))}</div><strong>${e(day(ev.starts_at))}</strong><div>${new Date(ev.starts_at || Date.now()).getFullYear()}</div></div><div><div class="rsvp-pill">${e(ev.event_type_label || ev.category || "General")}</div><h2 style="margin:8px 0 4px">${e(ev.title || "Event")}</h2><div class="rsvp-meta">${e(ev.starts_at ? new Date(ev.starts_at).toLocaleString() : "")} ${ev.location_name ? " • " + e(ev.location_name) : ""}</div>${onlineLine}${ev.location_address ? `<div class="rsvp-meta">${e(ev.location_address)}</div>` : ""}</div><div class="rsvp-event-image">${eventImageHtml(ev)}</div></section>`;
   }
 
   function statusChoiceHtml(current) {

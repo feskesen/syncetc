@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-08-023-B
-// Purpose: Organization Admin People & Access page. Customer-facing people search, roster, and editor.
+// Internal Version: 2026-06-10-102-A
+// Purpose: Organization Admin People & Access page with person lifecycle notes continuity from applicant conversion.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-10-099-A";
+  const VERSION = "2026-06-10-102-A";
   const ROOT_ID = "syncetc-organization-people-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";

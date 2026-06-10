@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-events-current.js
-// Internal Version: 2026-06-09-096-A
+// Internal Version: 2026-06-09-096-B
 // Purpose: Customer-admin Events Manager with copy/recurring event builder and online/hybrid location support. Uses portal shell + core-access-action.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-09-096-A";
+  const VERSION = "2026-06-09-096-B";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -47,7 +47,7 @@
     lastValidationSnapshot: null,
     lastValidationMessage: "",
     copyDialogOpen: false,
-    copyMode: "single",
+    copyMode: "",
     copyStatus: "",
     copyStatusKind: "",
   };
@@ -1394,13 +1394,24 @@
     if (!ev) return "";
     const start = new Date(ev.starts_at || Date.now());
     const date = `${start.getFullYear()}-${pad2(start.getMonth() + 1)}-${pad2(start.getDate())}`;
-    return `<div class="events-copy-overlay" id="events-copy-overlay"><div class="events-copy-modal" role="dialog" aria-modal="true"><div class="events-copy-head"><div><h2>Copy / Repeat Event</h2><div>${esc(ev.title || "Untitled event")}</div></div><button type="button" class="events-copy-close" id="events-copy-close" aria-label="Close">×</button></div><div class="events-copy-body"><label class="events-field">Copy mode<select class="events-select" id="event-copy-mode"><option value="single">Copy once</option><option value="monthly_day">Repeat monthly on the same day of month</option><option value="monthly_weekday">Repeat monthly on the same weekday pattern</option></select></label><div class="events-grid"><label class="events-field">First copy date<input class="events-input" type="date" id="event-copy-start-date" value="${attr(date)}"></label><label class="events-field">End date for repeats<input class="events-input" type="date" id="event-copy-end-date" value=""></label><label class="events-field">Max occurrences<input class="events-input" type="number" min="1" max="36" id="event-copy-count" value="6"></label></div><div class="events-muted">Copies keep event type, image, location, RSVP rules, and checklist items. New copies are saved as Draft so you can review them before publishing.</div><div class="events-muted" id="event-copy-preview"></div></div><div class="events-copy-actions"><button type="button" class="events-btn" id="events-copy-cancel">Cancel</button><button type="button" class="events-btn primary" id="events-copy-create">Create copies</button></div></div></div>`;
+    const mode = state.copyMode || "";
+    const modeOptions = `<option value="">Choose copy mode...</option><option value="single"${mode === "single" ? " selected" : ""}>Copy once</option><option value="monthly_day"${mode === "monthly_day" ? " selected" : ""}>Repeat monthly on the same day of month</option><option value="monthly_weekday"${mode === "monthly_weekday" ? " selected" : ""}>Repeat monthly on the same weekday pattern</option>`;
+    let modeFields = `<div class="events-muted">Choose whether to make one draft copy or generate several monthly draft copies.</div>`;
+    if (mode === "single") {
+      modeFields = `<label class="events-field">Copy to date<input class="events-input" type="date" id="event-copy-single-date" value="${attr(date)}"></label><div class="events-muted">This creates one new draft event on the selected date. It keeps the original event type, image, location, RSVP rules, and checklist items.</div>`;
+    } else if (mode === "monthly_day" || mode === "monthly_weekday") {
+      const helper = mode === "monthly_weekday"
+        ? "Example: if the original event is the third Thursday of the month, each copy will also be placed on the third Thursday of later months."
+        : "Example: if the first copy date is the 13th, later copies will be placed on the 13th of later months when possible.";
+      modeFields = `<div class="events-muted">${esc(helper)}</div><div class="events-grid"><label class="events-field">First copy date<input class="events-input" type="date" id="event-copy-start-date" value="${attr(date)}"></label><label class="events-field">End date<input class="events-input" type="date" id="event-copy-end-date" value=""></label><label class="events-field">Maximum copies<input class="events-input" type="number" min="1" max="36" id="event-copy-count" value="6"></label></div><div class="events-muted">Copies stop when either the end date is reached or the maximum number of copies is reached, whichever comes first. New copies are saved as Draft so you can review them before publishing.</div>`;
+    }
+    return `<div class="events-copy-overlay" id="events-copy-overlay"><div class="events-copy-modal" role="dialog" aria-modal="true"><div class="events-copy-head"><div><h2>Copy / Repeat Event</h2><div>${esc(ev.title || "Untitled event")}</div></div><button type="button" class="events-copy-close" id="events-copy-close" aria-label="Close">×</button></div><div class="events-copy-body"><label class="events-field">Copy mode<select class="events-select" id="event-copy-mode">${modeOptions}</select></label>${modeFields}</div><div class="events-copy-actions"><button type="button" class="events-btn" id="events-copy-cancel">Cancel</button><button type="button" class="events-btn primary" id="events-copy-create">Create copies</button></div></div></div>`;
   }
 
   function openCopyRepeat() {
     if (state.dirty && !confirm("You have unsaved event changes. Save or discard them before copying?")) return;
     state.copyDialogOpen = true;
-    state.copyMode = "single";
+    state.copyMode = "";
     state.copyStatus = "";
     render();
   }
@@ -1440,14 +1451,19 @@
   }
 
   function generateCopyDates(source) {
-    const mode = val("event-copy-mode") || "single";
+    const mode = val("event-copy-mode");
+    if (!mode) throw new Error("Choose a copy mode.");
+    if (mode === "single") {
+      const singleRaw = val("event-copy-single-date");
+      if (!singleRaw) throw new Error("Choose the date for the copy.");
+      return [new Date(`${singleRaw}T00:00:00`)];
+    }
     const firstRaw = val("event-copy-start-date");
     if (!firstRaw) throw new Error("Choose the first copy date.");
     const first = new Date(`${firstRaw}T00:00:00`);
     const count = Math.max(1, Math.min(36, Number(val("event-copy-count") || 1)));
     const endRaw = val("event-copy-end-date");
     const end = endRaw ? new Date(`${endRaw}T23:59:59`) : null;
-    if (mode === "single") return [first];
     const out = [];
     const sourceDate = new Date(source.starts_at || Date.now());
     const weekday = sourceDate.getDay();
@@ -1527,7 +1543,7 @@
     try {
       const dates = generateCopyDates(source);
       if (!dates.length) throw new Error("No copy dates were generated.");
-      if (!confirm(`Create ${dates.length} draft event copy${dates.length === 1 ? "" : "ies"}?`)) return;
+      if (!confirm(`Create ${dates.length} draft event ${dates.length === 1 ? "copy" : "copies"}?`)) return;
       const button = document.getElementById("events-copy-create");
       if (button) { button.disabled = true; button.textContent = "Creating..."; }
       let result = null;
@@ -1555,7 +1571,7 @@
     if (!state.copyDialogOpen) return;
     document.getElementById("events-copy-close")?.addEventListener("click", closeCopyRepeat);
     document.getElementById("events-copy-cancel")?.addEventListener("click", closeCopyRepeat);
-    document.getElementById("event-copy-mode")?.addEventListener("change", () => { state.copyMode = val("event-copy-mode") || "single"; });
+    document.getElementById("event-copy-mode")?.addEventListener("change", () => { state.copyMode = val("event-copy-mode"); render(); });
     document.getElementById("events-copy-create")?.addEventListener("click", createEventCopies);
     document.getElementById("events-copy-overlay")?.addEventListener("click", event => { if (event.target && event.target.id === "events-copy-overlay") closeCopyRepeat(); });
   }

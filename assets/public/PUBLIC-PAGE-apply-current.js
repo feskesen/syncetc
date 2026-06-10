@@ -1,11 +1,11 @@
 // PUBLIC-PAGE-apply-current.js
-// Internal Version: 2026-06-10-097-E
+// Internal Version: 2026-06-10-098-A
 // Purpose: Public Apply Now / applicant intake page for SyncEtc aviation-club default workflow.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-10-097-E";
+  const VERSION = "2026-06-10-098-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const PUBLIC_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-public-render`;
   const ROOT_SELECTOR = "#syncetc-apply-page-root, [data-syncetc-page='apply-now']";
@@ -110,7 +110,14 @@
   }
 
   function alert(msg, type="error") { const el = document.getElementById("syncetc-apply-alert"); if (el) el.innerHTML = msg ? `<div class="syncetc-alert ${type}">${esc(msg)}</div>` : ""; }
-  function bind() { const form = document.getElementById("syncetc-apply-form"); if (!form) return; form.addEventListener("input", (event) => { if (!state.submitted) state.dirty = true; const name = event.target?.name; if (["email","phone","home_phone","zip"].includes(name)) validateField(name); }); form.addEventListener("change", (event) => { if (!state.submitted) state.dirty = true; const name = event.target?.name; if (["email","phone","home_phone","zip"].includes(name)) validateField(name); }); ["email","phone","home_phone","zip"].forEach((name) => { const el = document.getElementById(`app-${name}`); if (el) el.addEventListener("blur", () => validateField(name)); }); form.addEventListener("submit", async (event) => { event.preventDefault(); if (state.submitting) return; alert(""); if (!form.reportValidity()) return; if (!validateStructuredFields()) { alert("Please fix the highlighted field before submitting."); return; } state.submitting = true; const btn = document.getElementById("syncetc-apply-submit"); if (btn) { btn.disabled = true; btn.textContent = "Submitting..."; } try { const ds = rootData(); const result = await callPublic("submit_applicant_application", { organization_key: ds.organizationKey || ds.customerKey || "test-customer-1", site_key: ds.siteKey || "primary", page_key: ds.pageKey || "apply-now", ...collect() }); state.submitted = true; state.dirty = false; mountBody(successHtml(result), state.payload); } catch (error) { alert(error instanceof Error ? error.message : String(error)); } finally { state.submitting = false; if (btn && !state.submitted) { btn.disabled = false; btn.textContent = "Submit Application"; } } }); }
+  function bind() { const form = document.getElementById("syncetc-apply-form"); if (!form) return; form.addEventListener("input", (event) => { if (!state.submitted) state.dirty = true; const name = event.target?.name; if (["email","phone","home_phone","zip"].includes(name)) validateField(name); }); form.addEventListener("change", (event) => { if (!state.submitted) state.dirty = true; const name = event.target?.name; if (["email","phone","home_phone","zip"].includes(name)) validateField(name); }); ["email","phone","home_phone","zip"].forEach((name) => { const el = document.getElementById(`app-${name}`); if (el) el.addEventListener("blur", () => validateField(name)); }); form.addEventListener("submit", async (event) => { event.preventDefault(); if (state.submitting) return; alert(""); if (!form.reportValidity()) return; if (!validateStructuredFields()) { alert("Please fix the highlighted field before submitting."); return; } state.submitting = true; const btn = document.getElementById("syncetc-apply-submit"); if (btn) { btn.disabled = true; btn.textContent = "Submitting..."; } try { const ds = rootData(); const result = await callPublic("submit_applicant_application", { organization_key: ds.organizationKey || ds.customerKey || "test-customer-1", site_key: ds.siteKey || "primary", page_key: ds.pageKey || "apply-now", ...collect() }); state.submitted = true; state.dirty = false; mountBody(successHtml(result), state.payload); } catch (error) {
+        const backend = state.backend || {};
+        if (backend.possible_duplicate) {
+          alert(clean(backend.message || "This may match an existing application. Use applicant login or password reset rather than submitting a duplicate."), "error");
+        } else {
+          alert(error instanceof Error ? error.message : String(error));
+        }
+      } finally { state.submitting = false; if (btn && !state.submitted) { btn.disabled = false; btn.textContent = "Submit Application"; } } }); }
   function bindNavAwayProtection() { window.addEventListener("beforeunload", (event) => { if (!state.dirty || state.submitted) return; event.preventDefault(); event.returnValue = ""; }); document.addEventListener("click", (event) => { if (!state.dirty || state.submitted) return; const link = event.target && event.target.closest ? event.target.closest("a[href]") : null; if (!link) return; const href = link.getAttribute("href") || ""; if (!href || href.startsWith("#") || href.startsWith("javascript:")) return; if (!window.confirm("You have unsaved application information. Leave this page?")) { event.preventDefault(); event.stopPropagation(); } }, true); }
 
   async function init() { const r = root(); if (!r) return; mark("boot:start", location.pathname); r.innerHTML = `<div style="padding:20px">Loading application…</div>`; markRootReadyFallback(r); try { const ds = rootData(); const payload = await callPublic("get_apply_page", { organization_key: ds.organizationKey || ds.customerKey || "test-customer-1", site_key: ds.siteKey || "primary", page_key: ds.pageKey || "apply-now", render_mode: DEBUG ? "debug" : "public" }); state.payload = payload; mountBody(formHtml(), payload); bind(); bindNavAwayProtection(); } catch (error) { if (window.SyncEtcPublicShell && typeof window.SyncEtcPublicShell.renderError === "function" && state.payload) {

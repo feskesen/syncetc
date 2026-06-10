@@ -1,11 +1,11 @@
 // PUBLIC-PAGE-apply-current.js
-// Internal Version: 2026-06-10-098-A
+// Internal Version: 2026-06-10-098-B
 // Purpose: Public Apply Now / applicant intake page for SyncEtc aviation-club default workflow.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-10-098-A";
+  const VERSION = "2026-06-10-098-B";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const PUBLIC_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-public-render`;
   const ROOT_SELECTOR = "#syncetc-apply-page-root, [data-syncetc-page='apply-now']";

@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-events-current.js
-// Internal Version: 2026-06-09-092-I
-// Purpose: Customer-admin Events Manager Event Basics merge, smarter reusable type/location prompts, date-sorted manageable event list, hidden sort-order UI, and retain 0092-F/G/H validation/state preservation behavior. Uses portal shell + core-access-action.
+// Internal Version: 2026-06-09-094-A
+// Purpose: Customer-admin Events Manager Pro extensions: drag-and-drop event/type images, bring-items checklist editor, no empty Advanced section, preserving 092-I behavior. Uses portal shell + core-access-action.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-09-092-I";
+  const VERSION = "2026-06-09-094-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -205,6 +205,53 @@
     return json;
   }
 
+  function fileToDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("Could not read selected image."));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function imagePreviewHtml(url) {
+    const cleanUrl = clean(url);
+    if (!cleanUrl) return `<div class="events-image-empty">No image selected</div>`;
+    return `<img src="${attr(cleanUrl)}" alt="Event image preview" loading="lazy">`;
+  }
+
+  function imageDropHtml(prefix, label, url, path, helpText) {
+    return `<div class="events-image-widget" data-image-prefix="${attr(prefix)}"><div class="events-topline"><label class="events-field" style="margin:0"><span>${esc(label)}</span><input class="events-input events-image-url" id="${attr(prefix)}-url" value="${attr(url || "")}" placeholder="Image URL or upload below"></label></div><input type="hidden" id="${attr(prefix)}-path" value="${attr(path || "")}"><div class="events-image-drop" data-image-prefix="${attr(prefix)}" tabindex="0"><div class="events-image-preview" id="${attr(prefix)}-preview">${imagePreviewHtml(url)}</div><div><b>Drop image here</b><span>or click to choose JPG, PNG, or WebP.</span><small>${esc(helpText || "")}</small></div><input class="events-image-file" id="${attr(prefix)}-file" type="file" accept="image/jpeg,image/png,image/webp" hidden></div><div class="events-image-actions"><button type="button" class="events-btn events-image-choose" data-image-prefix="${attr(prefix)}">Choose image</button><button type="button" class="events-btn events-image-clear" data-image-prefix="${attr(prefix)}">Clear image</button><span class="events-muted events-image-status" id="${attr(prefix)}-status"></span></div></div>`;
+  }
+
+  async function uploadImageFile(file, kind, prefix) {
+    if (!file) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) throw new Error("Use a JPG, PNG, or WebP image.");
+    if (file.size > 8 * 1024 * 1024) throw new Error("Image must be under 8 MB.");
+    const status = document.getElementById(`${prefix}-status`);
+    if (status) status.textContent = "Uploading...";
+    const dataUrl = await fileToDataUrl(file);
+    const result = await call("organization_upload_event_image", {
+      organization_id: state.orgId,
+      image_kind: kind,
+      file_name: file.name,
+      content_type: file.type,
+      data_url: dataUrl,
+      event_id: state.creating ? "" : state.selectedId,
+      event_type_key: val("event-type-key") || keyify(val("event-type-label")),
+    });
+    const uploaded = obj(result.uploaded);
+    const urlEl = document.getElementById(`${prefix}-url`);
+    const pathEl = document.getElementById(`${prefix}-path`);
+    const preview = document.getElementById(`${prefix}-preview`);
+    if (urlEl) urlEl.value = clean(uploaded.public_url || uploaded.url);
+    if (pathEl) pathEl.value = clean(uploaded.storage_path || uploaded.path);
+    if (preview) preview.innerHTML = imagePreviewHtml(clean(uploaded.public_url || uploaded.url));
+    if (status) status.textContent = "Uploaded.";
+    setDirty(true);
+    updateReuseControls();
+  }
+
   function setShellState() {
     if (!state.accessRow || !window.SyncEtcPortalShell || !window.SyncEtcPortalShell.setState) return;
     window.SyncEtcPortalShell.setState({
@@ -277,7 +324,7 @@
   function locationDisplayName(loc) { return clean(loc && (loc.label || loc.location_name || loc.location_key)); }
   function typeChangedFromSaved(type) {
     if (!type) return false;
-    return !sameText(val("event-type-label"), typeDisplayName(type)) || clean(val("event-accent")) !== clean(type.accent_color) || clean(val("event-image")) !== clean(type.image_url);
+    return !sameText(val("event-type-label"), typeDisplayName(type)) || clean(val("event-accent")) !== clean(type.accent_color) || clean(val("event-type-image-url") || val("event-image-url")) !== clean(type.image_url);
   }
   function locationChangedFromSaved(loc) {
     if (!loc) return false;
@@ -331,7 +378,8 @@
       event_type_label: p.event_type_label ?? (val("event-type-label") || (type && type.label) || ""),
       category: p.category ?? (val("event-type-label") || (type && type.label) || ""),
       event_accent_color: p.event_accent_color ?? (val("event-accent") || (type && type.accent_color) || ""),
-      event_image_url: p.event_image_url ?? (val("event-image") || (type && type.image_url) || ""),
+      event_image_url: p.event_image_url ?? (val("event-image-url") || (type && type.image_url) || ""),
+      event_image_path: p.event_image_path ?? val("event-image-path"),
       location_key: p.location_key ?? (val("event-location-key") || keyify(val("event-location-name") || val("event-address"))),
       location_label: p.location_label ?? (val("event-location-name") || (loc && loc.label) || ""),
       location_name: p.location_name ?? (val("event-location-name") || (loc && loc.location_name) || ""),
@@ -378,9 +426,9 @@
       .events-control-panel{display:grid;gap:10px;margin:0 0 12px;padding:14px;border:1px solid ${c.border};border-radius:20px;background:linear-gradient(180deg,#fff,${c.soft})}.events-control-title{display:grid;gap:5px}.events-control-title strong{font-size:17px}.events-control-actions{display:flex;gap:8px;flex-wrap:wrap}.events-control-panel .events-btn{width:100%}.events-control-panel .events-status{justify-content:center}.events-status{display:inline-flex;padding:9px 12px;border-radius:14px;background:${c.soft};font-weight:900}.events-status.good{background:#e7f6e7;color:${c.primary}}.event-status-message.error{color:#991b1b;font-weight:900}.event-status-message.warn{color:#713f12;font-weight:900}.event-status-message.good{color:${c.primary};font-weight:900}.events-draft-notice{padding:10px 12px;border:1px solid #facc15;border-radius:14px;background:#fffbeb;color:#713f12;font-size:12.5px;font-weight:800;line-height:1.35}.events-draft-actions{display:flex;gap:8px;margin-top:9px}.events-draft-actions .events-btn{width:auto;padding:8px 11px;font-size:12px}
       .event-record{display:block;width:100%;text-align:left;border:1px solid ${c.border};border-left:6px solid var(--event-accent,${c.primary});background:#fff;border-radius:16px;padding:12px;cursor:pointer;color:${c.text}}.event-record[hidden]{display:none}.event-record.selected{border-color:${c.primary};border-left-color:var(--event-accent,${c.primary});box-shadow:0 0 0 3px color-mix(in srgb,${c.primary} 13%,transparent)}.event-record.archived{opacity:.55}.event-record b{display:block}.event-record span,.event-record small{display:block;color:rgba(20,36,23,.70);font-size:12px;margin-top:4px}
       .events-card{background:#fff;border:1px solid ${c.border};border-radius:20px;padding:18px;margin-bottom:16px}.events-card h2,.events-card h3{margin:0 0 12px}.events-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.events-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.events-field{display:grid;gap:5px;font-size:12px;font-weight:900;color:${c.primary}}.events-label-line{display:flex;align-items:center;gap:6px}.events-input,.events-select,.events-textarea{width:100%;border:1px solid ${c.border};border-radius:12px;padding:10px 12px;font:inherit;color:${c.text};background:#fff}.events-input[readonly],.events-input:disabled,.events-select:disabled{background:#f3f7f3;color:rgba(20,36,23,.58);cursor:not-allowed}.events-textarea{min-height:88px;resize:vertical}.events-btn{border:1px solid ${c.border};border-radius:999px;background:#fff;color:${c.primary};padding:10px 14px;font-weight:900;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:7px}.events-btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(0,0,0,.08)}.events-btn.primary{background:${c.primary};color:#fff}.events-btn.danger{background:#fff7ec;color:#9a3412;border-color:#fed7aa}.events-btn:disabled{opacity:.55;cursor:not-allowed}
-      .events-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 12px}.events-check,.events-inline-check{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:800;color:${c.text}}.events-check input,.events-inline-check input{width:auto}.events-error{padding:12px;border-radius:14px;background:#fee2e2;color:#991b1b;font-weight:900}.events-empty{padding:18px;border:1px dashed ${c.border};border-radius:16px;color:rgba(20,36,23,.65);background:#fff}.events-empty.big{padding:34px;text-align:center}.events-color-row{display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:8px;align-items:end}.events-color-picker{width:44px;height:42px;border:1px solid ${c.border};border-radius:12px;padding:3px;background:#fff;cursor:pointer}.events-muted{color:rgba(20,36,23,.62);font-size:12.5px;line-height:1.4}.events-topline{display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap}.events-time-block{display:grid;gap:8px;margin-top:10px}.events-time-title{font-weight:900;color:${c.primary};font-size:12px;text-transform:uppercase;letter-spacing:.03em}.events-time-grid{display:grid;grid-template-columns:minmax(160px,1.4fr) 88px 98px 98px;gap:10px}.events-timing-flags{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 14px}.events-map-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.events-map-preview{margin-top:12px;border:1px solid ${c.border};border-radius:16px;overflow:hidden;background:${c.soft};min-height:170px;display:grid;place-items:center}.events-map-preview iframe{width:100%;height:220px;border:0;display:block}.events-map-preview .events-muted{padding:18px;text-align:center}.events-reuse-box{margin-top:12px;padding:12px;border:1px dashed ${c.border};border-radius:14px;background:#fbfdfb}.events-reuse-box[hidden]{display:none!important}.events-featured-check{align-self:end;min-height:42px}.events-list-note{padding:8px 2px}.events-details{margin-top:12px}.events-details summary{cursor:pointer;font-weight:900;color:${c.primary};margin-bottom:10px}.events-rsvp-flags{margin:0 0 14px;display:flex;gap:14px;flex-wrap:wrap}.events-rsvp-row{margin-top:12px}.events-conditional[hidden]{display:none!important}.events-advanced{border-style:dashed}.events-debug{max-width:${c.width};margin:16px auto;padding:14px;border-radius:16px;background:#0f172a;color:#dbeafe;overflow:auto;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace}
+      .events-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 12px}.events-check,.events-inline-check{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:800;color:${c.text}}.events-check input,.events-inline-check input{width:auto}.events-error{padding:12px;border-radius:14px;background:#fee2e2;color:#991b1b;font-weight:900}.events-empty{padding:18px;border:1px dashed ${c.border};border-radius:16px;color:rgba(20,36,23,.65);background:#fff}.events-empty.big{padding:34px;text-align:center}.events-color-row{display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:8px;align-items:end}.events-color-picker{width:44px;height:42px;border:1px solid ${c.border};border-radius:12px;padding:3px;background:#fff;cursor:pointer}.events-muted{color:rgba(20,36,23,.62);font-size:12.5px;line-height:1.4}.events-topline{display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap}.events-time-block{display:grid;gap:8px;margin-top:10px}.events-time-title{font-weight:900;color:${c.primary};font-size:12px;text-transform:uppercase;letter-spacing:.03em}.events-time-grid{display:grid;grid-template-columns:minmax(160px,1.4fr) 88px 98px 98px;gap:10px}.events-timing-flags{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 14px}.events-map-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.events-map-preview{margin-top:12px;border:1px solid ${c.border};border-radius:16px;overflow:hidden;background:${c.soft};min-height:170px;display:grid;place-items:center}.events-map-preview iframe{width:100%;height:220px;border:0;display:block}.events-map-preview .events-muted{padding:18px;text-align:center}.events-reuse-box{margin-top:12px;padding:12px;border:1px dashed ${c.border};border-radius:14px;background:#fbfdfb}.events-reuse-box[hidden]{display:none!important}.events-featured-check{align-self:end;min-height:42px}.events-image-widget{display:grid;gap:10px}.events-image-drop{display:grid;grid-template-columns:128px minmax(0,1fr);gap:12px;align-items:center;padding:12px;border:1px dashed ${c.border};border-radius:16px;background:#fbfdfb;cursor:pointer}.events-image-drop:hover,.events-image-drop.dragover{border-color:${c.primary};box-shadow:0 0 0 3px color-mix(in srgb,${c.primary} 12%,transparent)}.events-image-preview{width:128px;height:86px;border-radius:12px;background:${c.soft};border:1px solid ${c.border};overflow:hidden;display:grid;place-items:center}.events-image-preview img{width:100%;height:100%;object-fit:cover;display:block}.events-image-empty{font-size:12px;font-weight:900;color:rgba(20,36,23,.55);text-align:center;padding:8px}.events-image-drop b{display:block;color:${c.primary};font-size:14px}.events-image-drop span{display:block;font-size:13px;color:${c.text};margin-top:2px}.events-image-drop small{display:block;font-size:12px;color:rgba(20,36,23,.62);margin-top:3px}.events-image-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.events-needed-toolbar{margin-bottom:12px}.events-needed-list{display:grid;gap:10px}.events-needed-row{display:grid;grid-template-columns:minmax(160px,1.2fr) 82px minmax(160px,1fr) auto;gap:8px;align-items:end;padding:10px;border:1px solid ${c.border};border-radius:14px;background:#fbfdfb}.events-needed-row .events-btn{padding:9px 11px}.events-list-note{padding:8px 2px}.events-details{margin-top:12px}.events-details summary{cursor:pointer;font-weight:900;color:${c.primary};margin-bottom:10px}.events-rsvp-flags{margin:0 0 14px;display:flex;gap:14px;flex-wrap:wrap}.events-rsvp-row{margin-top:12px}.events-conditional[hidden]{display:none!important}.events-advanced{border-style:dashed}.events-debug{max-width:${c.width};margin:16px auto;padding:14px;border-radius:16px;background:#0f172a;color:#dbeafe;overflow:auto;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace}
       .events-help{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:999px;border:1px solid ${c.border};background:#fff;color:${c.primary};font-size:11px;font-weight:900;cursor:help}.events-fixed-tip{position:fixed;max-width:min(320px,calc(100vw - 28px));padding:10px 12px;border-radius:12px;background:#102a16;color:#fff;font-size:12px;line-height:1.35;font-weight:800;box-shadow:0 12px 30px rgba(0,0,0,.22);z-index:2147483000;pointer-events:none}
-      @media(max-width:900px){.events-main{grid-template-columns:1fr;min-height:0}.events-sidebar,.events-editor{max-height:none;overflow:visible}.events-sidebar{border-right:none;border-bottom:1px solid ${c.border}}.events-grid,.events-grid.three{grid-template-columns:1fr}.events-check-grid{grid-template-columns:1fr}.events-time-grid{grid-template-columns:1fr 1fr}.events-sidebar-head{grid-template-columns:1fr}.events-control-panel .events-btn{width:auto}.events-control-actions{justify-content:flex-start}}
+      @media(max-width:900px){.events-main{grid-template-columns:1fr;min-height:0}.events-sidebar,.events-editor{max-height:none;overflow:visible}.events-sidebar{border-right:none;border-bottom:1px solid ${c.border}}.events-grid,.events-grid.three{grid-template-columns:1fr}.events-check-grid{grid-template-columns:1fr}.events-time-grid{grid-template-columns:1fr 1fr}.events-sidebar-head{grid-template-columns:1fr}.events-control-panel .events-btn{width:auto}.events-control-actions{justify-content:flex-start}.events-needed-row{grid-template-columns:1fr}.events-image-drop{grid-template-columns:1fr}.events-image-preview{width:100%;height:160px}}
       @media(max-width:560px){.events-time-grid{grid-template-columns:1fr}.events-hero{padding:24px 22px}.events-card{padding:14px}.events-editor{padding:14px}.events-btn{width:100%}.events-control-panel .events-btn{width:100%}.events-side-buttons{display:grid}}
 
       .events-control-panel.draft-alert{border-color:#f59e0b;background:linear-gradient(180deg,#fff7ed,#fffbeb)}
@@ -481,6 +529,12 @@
     return `<div class="events-empty big"><h2>Select an event or create a new one</h2><p>Use the left panel to find an existing event, or start a new draft.</p><button type="button" class="events-btn primary event-new">New Event</button></div>`;
   }
 
+  function neededRowHtml(item, index) {
+    const row = obj(item);
+    const id = clean(row.event_need_id);
+    return `<div class="events-needed-row" data-need-id="${attr(id)}"><label class="events-field">Item needed<input class="events-input need-label" value="${attr(row.label || "")}" placeholder="Example: Ladder, cooler, dessert"></label><label class="events-field">Qty<input class="events-input need-qty" type="number" min="1" value="${attr(row.quantity_needed || 1)}"></label><label class="events-field">Optional note<input class="events-input need-notes" value="${attr(row.notes || "")}" placeholder="Size, details, or preference"></label><button type="button" class="events-btn danger events-needed-remove">Remove</button></div>`;
+  }
+
   function formHtml() {
     const ev = activeEventForForm();
     if (!ev) return editorEmptyHtml();
@@ -503,7 +557,11 @@
       return `<details class="events-card events-accordion ${attr(section.extra || "")}" data-section-key="${attr(section.key)}" data-section-index="${attr(index)}" ${open ? "open" : ""}><summary class="events-accordion-summary"><span class="events-accordion-title"><span>${esc(section.title)}</span><span class="events-section-badge ${attr(status.kind)}" data-section-badge="${attr(section.key)}">${esc(status.label)}</span></span><span class="events-accordion-cue">▾</span></summary><div class="events-accordion-body">${section.body}${nav}</div></details>`;
     };
 
-    const basicsBody = `<div class="events-grid"><label class="events-field"><span class="events-label-line">Event type ${help("The reusable category/template, such as Board Meeting, BBQ, Fly-in, or Safety Seminar. It can carry defaults like color and image.")}</span><select class="events-select" id="event-type-key">${typeOptions(ev)}</select></label><label class="events-field">Event title<input class="events-input" id="event-title" value="${attr(ev.title || "")}" placeholder="Name of this specific event"></label><label class="events-field"><span class="events-label-line">Event visibility ${help("Who can see the event listing at all.")}</span><select class="events-select" id="event-visibility"><option value="public">Public</option><option value="logged_in">Logged-in users</option><option value="member">Members/users</option><option value="admin">Admins/board only</option></select></label><label class="events-field"><span class="events-label-line">Event key ${help("Auto-generated identifier used internally and in URLs. Users should not edit this directly.")}</span><input class="events-input" id="event-key" value="${attr(keyPreview)}" placeholder="Generated automatically from title and date" readonly></label></div><div class="events-muted" style="margin-top:10px">Event type is the reusable category. Event title is the name of this particular event. If the title is blank, selecting a type will suggest a title.</div><div class="events-grid" style="margin-top:12px"><label class="events-field">Event type name<input class="events-input" id="event-type-label" value="${attr(ev.event_type_label || ev.category || typeJson.label || "")}" placeholder="Reusable type name"></label><label class="events-field">Accent color<div class="events-color-row"><input class="events-input" id="event-accent" value="${attr(accent)}"><input class="events-color-picker" id="event-color-picker" type="color" value="${attr(accent)}" title="Choose accent color"></div></label><label class="events-field">Image URL<input class="events-input" id="event-image" value="${attr(ev.event_image_url || ev.image_url || typeJson.image_url || "")}" placeholder="Image URL for now; upload support later"></label><label class="events-inline-check events-featured-check"><input type="checkbox" id="event-featured" ${ev.featured ? "checked" : ""}> Featured ${help("Marks this event for possible homepage or featured-event displays later. It does not change calendar sort order.")}</label></div><div class="events-reuse-box" id="event-type-reuse-box"><label class="events-inline-check"><input type="checkbox" id="event-save-type"> <span id="event-type-reuse-label"></span></label><div class="events-muted" id="event-type-reuse-help"></div></div>`;
+    const eventImageUrl = ev.event_image_url || ev.image_url || "";
+    const eventImagePath = ev.event_image_path || obj(ev.event_image_asset_json).storage_path || "";
+    const typeImageUrl = typeJson.image_url || ev.event_type_image_url || "";
+    const typeImagePath = typeJson.image_storage_path || obj(typeJson.image_asset_json).storage_path || "";
+    const basicsBody = `<div class="events-grid"><label class="events-field"><span class="events-label-line">Event type ${help("The reusable category/template, such as Board Meeting, BBQ, Fly-in, or Safety Seminar. It can carry defaults like color and image.")}</span><select class="events-select" id="event-type-key">${typeOptions(ev)}</select></label><label class="events-field">Event title<input class="events-input" id="event-title" value="${attr(ev.title || "")}" placeholder="Name of this specific event"></label><label class="events-field"><span class="events-label-line">Event visibility ${help("Who can see the event listing at all.")}</span><select class="events-select" id="event-visibility"><option value="public">Public</option><option value="logged_in">Logged-in users</option><option value="member">Members/users</option><option value="admin">Admins/board only</option></select></label><label class="events-field"><span class="events-label-line">Event key ${help("Auto-generated identifier used internally and in URLs. Users should not edit this directly.")}</span><input class="events-input" id="event-key" value="${attr(keyPreview)}" placeholder="Generated automatically from title and date" readonly></label></div><div class="events-muted" style="margin-top:10px">Event type is the reusable category. Event title is the name of this particular event. If the title is blank, selecting a type will suggest a title.</div><div class="events-grid" style="margin-top:12px"><label class="events-field">Event type name<input class="events-input" id="event-type-label" value="${attr(ev.event_type_label || ev.category || typeJson.label || "")}" placeholder="Reusable type name"></label><label class="events-field">Accent color<div class="events-color-row"><input class="events-input" id="event-accent" value="${attr(accent)}"><input class="events-color-picker" id="event-color-picker" type="color" value="${attr(accent)}" title="Choose accent color"></div></label><label class="events-inline-check events-featured-check"><input type="checkbox" id="event-featured" ${ev.featured ? "checked" : ""}> Featured ${help("Marks this event for possible homepage or featured-event displays later. It does not change calendar sort order.")}</label></div><div class="events-grid" style="margin-top:12px">${imageDropHtml("event-image", "Event image", eventImageUrl, eventImagePath, "This event-specific image overrides the event type default.")}${imageDropHtml("event-type-image", "Event type default image", typeImageUrl, typeImagePath, "Use when saving/updating the reusable event type.")}</div><div class="events-reuse-box" id="event-type-reuse-box"><label class="events-inline-check"><input type="checkbox" id="event-save-type"> <span id="event-type-reuse-label"></span></label><div class="events-muted" id="event-type-reuse-help"></div></div>`;
 
     const timingBody = `<div class="events-timing-flags"><label class="events-inline-check"><input type="checkbox" id="event-all-day" ${ev.all_day_event ? "checked" : ""}> All-day event ${help("For events without a specific start time. Time selectors are disabled when this is checked.")}</label><label class="events-inline-check"><input type="checkbox" id="event-no-end" ${noEnd ? "checked" : ""}> No end time ${help("Use when the event has a start time but no listed ending time. End controls are disabled when this is checked.")}</label></div>${dateTimeControls("event-start", "Starts", ev.starts_at, {})}${dateTimeControls("event-end", "Ends", ev.ends_at, { optional: true })}<label class="events-field" style="margin-top:12px">Timezone<input class="events-input" id="event-timezone" value="${attr(ev.timezone || "America/New_York")}"></label>`;
 
@@ -513,8 +571,9 @@
 
     const rsvpBody = `<div class="events-rsvp-flags"><label class="events-inline-check"><input type="checkbox" id="event-rsvp-enabled" ${ev.rsvp_enabled ? "checked" : ""}> RSVP enabled</label><label class="events-inline-check"><input type="checkbox" id="event-allow-guests" ${ev.allow_guests !== false ? "checked" : ""}> Allow guests</label><label class="events-inline-check"><input type="checkbox" id="event-show-attendees" ${showRsvpList ? "checked" : ""}> Show RSVP list to logged-in users ${help("Organizers/admins can always see RSVP details. When checked, logged-in users may see the attendee list. When unchecked, only admins/organizers see it.")}</label></div><div class="events-grid three"><label class="events-field">Capacity<input class="events-input" id="event-capacity" type="number" min="0" value="${attr(ev.capacity ?? "")}"></label><label class="events-field"><span class="events-label-line">Capacity behavior ${help("What happens if the event reaches capacity.")}</span><select class="events-select" id="event-capacity-behavior"><option value="waitlist">Waitlist when full</option><option value="block">Block when full</option></select></label><label class="events-field">Max guests per RSVP<input class="events-input" id="event-max-guests" type="number" min="0" value="${attr(ev.max_guests_per_rsvp ?? 0)}"></label></div><div class="events-rsvp-row"><label class="events-inline-check" style="min-height:42px"><input type="checkbox" id="event-no-rsvp-close" ${ev.rsvp_deadline_at ? "" : "checked"}> No RSVP close date ${help("Leave checked when RSVPs do not have a separate cutoff date. Uncheck to set a close date and time.")}</label></div><div class="events-rsvp-row">${dateTimeControls("event-deadline", "RSVP close", ev.rsvp_deadline_at, { optional: true })}</div><div class="events-rsvp-row"><label class="events-field"><span class="events-label-line">RSVP audience ${help("Who is allowed to submit an RSVP.")}</span><select class="events-select" id="event-rsvp-audience"><option value="public">Public</option><option value="logged_in">Logged-in users</option><option value="member">Members/users</option><option value="selected_classes">Selected classes</option><option value="selected_roles">Selected roles</option><option value="admin">Admins/board only</option></select></label></div><div class="events-grid" style="margin-top:12px"><div class="events-conditional events-class-filter" ${rsvpAudience === "selected_classes" ? "" : "hidden"}><b>Eligible membership classes</b><div class="events-check-grid">${checkboxList("class-key", state.membershipClasses, classKey, row => row.label || row.class_label || row.class_key, classKeys)}</div></div><div class="events-conditional events-role-filter" ${rsvpAudience === "selected_roles" ? "" : "hidden"}><b>Eligible roles</b><div class="events-check-grid">${checkboxList("role-key", state.roles, roleKey, row => row.label || row.role_label || row.role_key, roleKeys)}</div></div></div>`;
 
-    const advancedBody = `<div class="events-muted"><b>Advanced system fields are handled automatically.</b> Events normally sort by date. Featured can be used later for homepage or special callouts, but it does not change calendar sort order.</div>`;
-    const checklistBody = `<div class="events-muted"><b>Checklist / bring-items is intentionally hidden in this pass.</b> Existing checklist records are preserved when saving. Full checklist claiming belongs in a later package.</div>`;
+    const needRows = arr(ev.needed_items || ev.event_needed_items).filter(item => !item.archived_at && clean(item.status || "active") !== "archived");
+    const needRowsHtml = needRows.length ? needRows.map((item, index) => neededRowHtml(item, index)).join("") : neededRowHtml({}, 0);
+    const checklistBody = `<div class="events-muted" style="margin-bottom:12px">Define items needed for this event. RSVP claiming will use these in a later RSVP-page pass.</div><div class="events-needed-toolbar"><button type="button" class="events-btn" id="event-add-needed-item">Add needed item</button></div><div class="events-needed-list" id="events-needed-list">${needRowsHtml}</div>`;
 
     const sectionDefs = [
       { key: "basics", title: "Event basics", body: basicsBody, required: true },
@@ -522,8 +581,7 @@
       { key: "location", title: "Location", body: locationBody, required: true },
       { key: "content", title: "Content", body: contentBody, required: false },
       { key: "rsvp", title: "RSVP rules", body: rsvpBody, required: false },
-      { key: "advanced", title: "Advanced", body: advancedBody, required: false, extra: "events-advanced" },
-      { key: "checklist", title: "Future checklist / bring-items", body: checklistBody, required: false },
+      { key: "checklist", title: "Checklist / bring-items", body: checklistBody, required: false },
     ];
 
     return sectionDefs.map((section, index) => accordion(section, index, sectionDefs.length)).join("");
@@ -552,7 +610,7 @@
   }
 
   function updateSectionBadges() {
-    ["basics", "timing", "location", "content", "rsvp", "advanced", "checklist"].forEach(key => {
+    ["basics", "timing", "location", "content", "rsvp", "checklist"].forEach(key => {
       const badge = document.querySelector(`[data-section-badge="${key}"]`);
       if (!badge) return;
       const status = liveSectionStatus(key);
@@ -578,6 +636,80 @@
     return "basics";
   }
 
+  function updateImagePreview(prefix) {
+    const preview = document.getElementById(`${prefix}-preview`);
+    const url = val(`${prefix}-url`);
+    if (preview) preview.innerHTML = imagePreviewHtml(url);
+  }
+
+  function bindImageUploads() {
+    document.querySelectorAll(".events-image-drop").forEach(zone => {
+      const prefix = zone.dataset.imagePrefix || "";
+      const file = document.getElementById(`${prefix}-file`);
+      zone.addEventListener("click", () => file && file.click());
+      zone.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); file && file.click(); } });
+      zone.addEventListener("dragover", event => { event.preventDefault(); zone.classList.add("dragover"); });
+      zone.addEventListener("dragleave", () => zone.classList.remove("dragover"));
+      zone.addEventListener("drop", event => {
+        event.preventDefault(); zone.classList.remove("dragover");
+        const dropped = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+        if (!dropped) return;
+        uploadImageFile(dropped, prefix === "event-type-image" ? "event_type" : "event", prefix).catch(error => {
+          const status = document.getElementById(`${prefix}-status`);
+          if (status) status.textContent = error.message || String(error);
+        });
+      });
+      if (file) file.addEventListener("change", () => {
+        const chosen = file.files && file.files[0];
+        if (!chosen) return;
+        uploadImageFile(chosen, prefix === "event-type-image" ? "event_type" : "event", prefix).catch(error => {
+          const status = document.getElementById(`${prefix}-status`);
+          if (status) status.textContent = error.message || String(error);
+        });
+      });
+    });
+    document.querySelectorAll(".events-image-choose").forEach(btn => btn.addEventListener("click", () => {
+      const file = document.getElementById(`${btn.dataset.imagePrefix}-file`);
+      if (file) file.click();
+    }));
+    document.querySelectorAll(".events-image-clear").forEach(btn => btn.addEventListener("click", () => {
+      const prefix = btn.dataset.imagePrefix || "";
+      const url = document.getElementById(`${prefix}-url`);
+      const path = document.getElementById(`${prefix}-path`);
+      const status = document.getElementById(`${prefix}-status`);
+      if (url) url.value = "";
+      if (path) path.value = "";
+      if (status) status.textContent = "Cleared.";
+      updateImagePreview(prefix);
+      setDirty(true);
+      updateReuseControls();
+    }));
+    document.querySelectorAll(".events-image-url").forEach(input => input.addEventListener("input", () => {
+      const prefix = input.id.replace(/-url$/, "");
+      updateImagePreview(prefix);
+      setDirty(true);
+      updateReuseControls();
+    }));
+  }
+
+  function bindNeededItems() {
+    document.getElementById("event-add-needed-item")?.addEventListener("click", () => {
+      const list = document.getElementById("events-needed-list");
+      if (!list) return;
+      const wrap = document.createElement("div");
+      wrap.innerHTML = neededRowHtml({}, list.querySelectorAll(".events-needed-row").length).trim();
+      const row = wrap.firstElementChild;
+      if (row) list.appendChild(row);
+      setDirty(true);
+    });
+    document.querySelectorAll(".events-needed-remove").forEach(btn => btn.addEventListener("click", () => {
+      const row = btn.closest(".events-needed-row");
+      if (row) row.remove();
+      setDirty(true);
+    }));
+    document.querySelectorAll(".events-needed-row input").forEach(input => input.addEventListener("input", () => setDirty(true)));
+  }
+
   function bind() {
     document.querySelectorAll(".event-record").forEach(button => button.addEventListener("click", () => selectEvent(button.dataset.eventId || "")));
     document.getElementById("events-refresh")?.addEventListener("click", refresh);
@@ -601,6 +733,8 @@
     bindTooltipControls();
     bindRsvpConditional();
     bindRsvpDeadlineControls();
+    bindImageUploads();
+    bindNeededItems();
     bindAccordionNavigation();
     updateSectionBadges();
     bindDraftReminderControls();
@@ -829,7 +963,11 @@
     const title = document.getElementById("event-title");
     if (title && !clean(title.value)) title.value = typeDisplayName(type);
     set("event-accent", type.accent_color, true);
-    set("event-image", type.image_url, false);
+    set("event-image-url", type.image_url, false);
+    set("event-type-image-url", type.image_url, true);
+    set("event-type-image-path", type.image_storage_path || (obj(type.image_asset_json).storage_path), true);
+    updateImagePreview("event-image");
+    updateImagePreview("event-type-image");
     const picker = document.getElementById("event-color-picker"); if (picker && /^#[0-9a-f]{6}$/i.test(type.accent_color || "")) picker.value = type.accent_color;
     const vis = document.getElementById("event-visibility"); if (vis && type.default_visibility) vis.value = type.default_visibility;
     const aud = document.getElementById("event-rsvp-audience"); if (aud && type.default_rsvp_audience) aud.value = type.default_rsvp_audience;
@@ -981,7 +1119,10 @@
       event_type_label: typeLabelValue,
       category: typeLabelValue,
       event_accent_color: val("event-accent") || (type && type.accent_color) || "",
-      event_image_url: val("event-image") || (type && type.image_url) || "",
+      event_image_url: val("event-image-url") || (type && type.image_url) || "",
+      event_image_path: val("event-image-path"),
+      event_type_image_url: val("event-type-image-url") || val("event-image-url") || (type && type.image_url) || "",
+      event_type_image_path: val("event-type-image-path"),
       save_event_type: checked("event-save-type"),
       location_key: locationKeyValue,
       location_label: locationNameValue || (loc && loc.label) || "",

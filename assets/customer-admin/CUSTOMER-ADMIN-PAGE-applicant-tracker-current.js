@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-applicant-tracker-current.js
-// Internal Version: 2026-06-10-101-B
-// Purpose: Organization admin Applicant Tracker with archive reason workflow, settings modal, notes/activity timeline, and lifecycle-ready tracker UX.
+// Internal Version: 2026-06-10-101-C
+// Purpose: Organization admin Applicant Tracker with archive reason workflow, settings modal, notes/activity timeline, local filters, and lifecycle-ready tracker UX.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-10-101-B";
+  const VERSION = "2026-06-10-101-C";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -16,7 +16,6 @@
   const steps = [];
 
   const STATUS = [
-    ["open", "Open"],
     ["new", "New"],
     ["waitlist", "Waitlist"],
     ["invited_to_interview", "Invited to Interview"],
@@ -54,7 +53,7 @@
   const state = {
     token: "", email: "", accessRow: null, person: null, orgId: "", platformAdmin: false,
     applicants: [], selectedId: "", selected: null, settings: {}, templates: [], workflowStages: [], taskDefinitions: [], summary: {},
-    filter: "open", sort: "newest", search: "",
+    filter: "new", sort: "newest", search: "",
     loading: true, saving: false, dirty: false, settingsDirty: false, message: "", messageKind: "", error: "", noteSearch: "", noteFilter: "all", unsavedNote: "", noteSaving: false, allApplicants: [], settingsOpen: false, archiveModalOpen:false, archiveReasonKey:"", archiveReasonNote:"", openMajor: { application_details:true, checklist:false, notes:false, applicant_emails:false }
   };
 
@@ -97,13 +96,12 @@
   function setShell(){ if(!window.SyncEtcPortalShell?.setState || !state.accessRow) return; const row=state.accessRow; window.SyncEtcPortalShell.setState({authenticated:true,email:state.email,mode:'organization-admin',organizationName:row.organization_name,organizationKey:row.organization_key,organizationId:row.organization_id,selectedOrganizationId:row.organization_id,styleProfile:row.style_profile,accessRow:row,platformAdmin:state.platformAdmin,activePageKey:'applicant-tracker'}); }
   function rootData(){ const r=root(); return { organizationKey: r?.dataset.organizationKey || r?.dataset.customerKey || "test-customer-1" }; }
 
-  async function refresh(keepSelected=true){ mark('refresh:start'); state.loading=true; state.error=''; render(); try { if(!state.orgId){ const dash=await accessCall({ action:'get_user_dashboard', organization_key:rootData().organizationKey }); state.accessRow=arr(dash.access)[0]||dash.access||state.accessRow; state.person=dash.person||state.person; state.orgId=clean(state.accessRow?.organization_id||dash.organization_id); } const data=await accessCall({ action:'organization_list_applicants', organization_id:state.orgId, status_filter:state.filter, search:state.search, limit:350 }); state.accessRow=data.access||state.accessRow; state.person=data.person||state.person; state.orgId=clean(data.access?.organization_id||state.orgId); state.settings=obj(data.settings); state.templates=arr(data.reply_templates); state.workflowStages=arr(data.workflow_stages); state.taskDefinitions=arr(data.task_definitions); state.allApplicants=arr(data.applicants); state.applicants=visibleApplicants(); state.summary=obj(data.summary); if(keepSelected && state.selectedId){ state.selected=state.applicants.find(a=>a.application_id===state.selectedId)||state.allApplicants.find(a=>a.application_id===state.selectedId)||null; } else if(!keepSelected){ state.selected=null; state.selectedId=''; } state.loading=false; setShell(); mark('refresh:done', `${state.applicants.length} applicants`); render(); } catch(error){ state.loading=false; state.error=error.message||String(error); render(); } }
+  async function refresh(keepSelected=true){ mark('refresh:start'); state.loading=true; state.error=''; render(); try { if(!state.orgId){ const dash=await accessCall({ action:'get_user_dashboard', organization_key:rootData().organizationKey }); state.accessRow=arr(dash.access)[0]||dash.access||state.accessRow; state.person=dash.person||state.person; state.orgId=clean(state.accessRow?.organization_id||dash.organization_id); } const data=await accessCall({ action:'organization_list_applicants', organization_id:state.orgId, status_filter:state.filter, search:state.search, limit:350 }); state.accessRow=data.access||state.accessRow; state.person=data.person||state.person; state.orgId=clean(data.access?.organization_id||state.orgId); state.settings=obj(data.settings); state.templates=arr(data.reply_templates); state.workflowStages=arr(data.workflow_stages); state.taskDefinitions=arr(data.task_definitions); state.allApplicants=arr(data.applicants); state.applicants=visibleApplicants(); state.summary=obj(data.summary); if(keepSelected && state.selectedId){ state.selected=state.applicants.find(a=>a.application_id===state.selectedId)||state.allApplicants.find(a=>a.application_id===state.selectedId)||null; } else if(!keepSelected){ state.selected=null; state.selectedId=''; } state.loading=false; setShell(); updateApplicantHeaderBadgeLocally(); mark('refresh:done', `${state.applicants.length} applicants`); render(); } catch(error){ state.loading=false; state.error=error.message||String(error); render(); } }
   function visibleApplicants(){
     const q=clean(state.search).toLowerCase();
     let rows=arr(state.allApplicants);
-    const f=clean(state.filter||"open");
-    if(f==="open") rows=rows.filter(a=>!isArchivedApplicant(a) && OPEN_STATUS_KEYS.has(clean(a.status||a.applicant_status||a.stage_key||"new")));
-    else if(f==="archived") rows=rows.filter(isArchivedApplicant);
+    const f=clean(state.filter||"new");
+    if(f==="archived") rows=rows.filter(isArchivedApplicant);
     else if(f!=="all") rows=rows.filter(a=>!isArchivedApplicant(a) && clean(a.status||a.applicant_status||a.stage_key)===f);
     if(q){ rows=rows.filter(a=>[a.display_name,a.email,a.phone,a.status_label,a.status,a.stage_key,a.applicant_status,a.archive_reason_label,a.archive_reason_key,fmtDate(a.submitted_at),fmtDate(a.updated_at),JSON.stringify(a.aviation_json||{}),JSON.stringify(a.interest_json||{}),JSON.stringify(a.safety_json||{})].map(x=>clean(x).toLowerCase()).join(' ').includes(q)); }
     return sortApplicants(rows);
@@ -266,11 +264,35 @@ ${esc(JSON.stringify(app,null,2))}</pre>`:''}</main>`;
     }
     refreshApplicantListDom();
   }
+  function newApplicantBadgeCount(){
+    return arr(state.allApplicants).filter(a=>!isArchivedApplicant(a) && clean(a.status||a.applicant_status||a.stage_key||"new")==="new").length;
+  }
+  function updateApplicantHeaderBadgeLocally(){
+    const count=newApplicantBadgeCount();
+    try{
+      document.documentElement.style.setProperty('--syncetc-applicant-tracker-local-count', JSON.stringify(String(count)));
+      const candidates=Array.from(document.querySelectorAll('a,button,[role="link"],[data-page-key],[data-page],[href]')).filter(el=>{
+        if(el.closest && el.closest('.at-wrap')) return false;
+        return /Applicant\s+Tracker/i.test(el.textContent||'');
+      });
+      candidates.forEach(el=>{
+        el.querySelectorAll('.syncetc-local-applicant-badge').forEach(n=>n.remove());
+        if(count>0){
+          const badge=document.createElement('span');
+          badge.className='syncetc-local-applicant-badge';
+          badge.textContent=String(count);
+          badge.setAttribute('aria-label', `${count} new applicant${count===1?'':'s'}`);
+          badge.style.cssText='display:inline-flex;align-items:center;justify-content:center;min-width:1.4em;height:1.4em;margin-left:.35em;padding:0 .35em;border-radius:999px;background:#f59e0b;color:#111827;font-size:.78em;font-weight:950;line-height:1;vertical-align:middle;';
+          el.appendChild(badge);
+        }
+      });
+    }catch(_){ /* best-effort only; never hard refresh just for a badge */ }
+  }
 
   function bind(){ byId('at-search')?.addEventListener('input', e=>{ state.search=e.target.value||''; applyLocalApplicantFilter({clearSelectionIfHidden:false}); }); byId('at-filter')?.addEventListener('change', e=>{ if(!confirmDiscard()){e.target.value=state.filter; return;} state.filter=e.target.value; setDirty(false); applyLocalApplicantFilter({clearSelectionIfHidden:true}); }); byId('at-sort')?.addEventListener('change', e=>{ state.sort=e.target.value; applyLocalApplicantFilter({clearSelectionIfHidden:false}); }); byId('at-refresh')?.addEventListener('click',()=>refresh(true)); bindApplicantRows(); byId('at-open-settings')?.addEventListener('click',()=>{ state.settingsOpen=true; render(); }); byId('at-close-settings')?.addEventListener('click',()=>{ if(!confirmDiscard()) return; state.settingsOpen=false; state.settingsDirty=false; render(); }); byId('at-cancel-settings')?.addEventListener('click',()=>{ if(!confirmDiscard()) return; state.settingsOpen=false; state.settingsDirty=false; render(); }); byId('at-settings-modal-backdrop')?.addEventListener('click',(e)=>{ if(e.target?.id==='at-settings-modal-backdrop'){ if(!confirmDiscard()) return; state.settingsOpen=false; state.settingsDirty=false; render(); } }); document.addEventListener('keydown',(e)=>{ if(e.key==='Escape' && state.settingsOpen){ if(!confirmDiscard()) return; state.settingsOpen=false; state.settingsDirty=false; render(); } if(e.key==='Escape' && state.archiveModalOpen){ if(!confirmDiscard()) return; state.archiveModalOpen=false; state.archiveReasonKey=''; state.archiveReasonNote=''; render(); }}); byId('at-save-settings')?.addEventListener('click',saveSettings); byId('at-save-app')?.addEventListener('click',saveApplicant); byId('at-add-note')?.addEventListener('click',addNote); byId('at-send-prefab')?.addEventListener('click',sendPrefab); byId('at-archive-app')?.addEventListener('click',archiveApplicant); byId('at-restore-app')?.addEventListener('click',restoreApplicant); byId('at-close-archive')?.addEventListener('click',()=>{ if(!confirmDiscard()) return; state.archiveModalOpen=false; state.archiveReasonKey=''; state.archiveReasonNote=''; render();}); byId('at-cancel-archive')?.addEventListener('click',()=>{ if(!confirmDiscard()) return; state.archiveModalOpen=false; state.archiveReasonKey=''; state.archiveReasonNote=''; render();}); byId('at-archive-modal-backdrop')?.addEventListener('click',(e)=>{ if(e.target?.id==='at-archive-modal-backdrop'){ if(!confirmDiscard()) return; state.archiveModalOpen=false; state.archiveReasonKey=''; state.archiveReasonNote=''; render();}}); byId('at-archive-reason')?.addEventListener('change',(e)=>{state.archiveReasonKey=e.target.value; setDirty(!!clean(state.archiveReasonKey)||!!clean(state.archiveReasonNote)); render();}); byId('at-archive-note')?.addEventListener('input',(e)=>{state.archiveReasonNote=e.target.value||''; setDirty(!!clean(state.archiveReasonKey)||!!clean(state.archiveReasonNote));}); byId('at-confirm-archive')?.addEventListener('click',confirmArchiveApplicant); byId('at-note-search')?.addEventListener('input',e=>{ const pos=e.target.selectionStart||0; state.noteSearch=e.target.value||''; render(); const n=byId('at-note-search'); if(n){ n.focus(); try{ n.setSelectionRange(pos,pos); }catch(_){} } }); byId('at-note-filter')?.addEventListener('change',e=>{state.noteFilter=e.target.value||'all'; render();}); byId('at-app-status')?.addEventListener('change',()=>setDirty(true)); byId('at-waitlist')?.addEventListener('input',()=>setDirty(true)); ['at-settings-portal','at-settings-updates','at-settings-waitlist'].forEach(id=>{ const el=byId(id); if(el) el.addEventListener('change',()=>{ state.settingsDirty=true; setDirty(true); }); }); byId('at-new-note')?.addEventListener('input', e=>{ state.unsavedNote=e.target.value||''; setDirty(!!clean(state.unsavedNote)); }); document.querySelectorAll('[data-major]').forEach(el=>el.addEventListener('toggle',()=>{ state.openMajor[el.dataset.major]=el.open; })); document.querySelectorAll('.at-task-status,.at-task-note').forEach(el=>el.addEventListener('change',updateTaskFromElement)); document.querySelectorAll('.at-review-upload').forEach(btn=>btn.addEventListener('click',()=>reviewUpload(btn.dataset.uploadId, btn.dataset.status))); }
   async function runButton(id,label,fn){ const btn=byId(id); const old=btn?.textContent||''; try{ state.saving=true; if(btn){btn.disabled=true;btn.textContent=label||'Saving…';} await fn(); }catch(e){ state.message=e.message||String(e); state.messageKind='bad'; render(); }finally{ state.saving=false; if(btn){btn.disabled=false;btn.textContent=old;} } }
   async function saveSettings(){ if(!canEditApplicantSettings()){ state.message='Applicant settings are read-only for your role.'; state.messageKind='info'; render(); return; } await runButton('at-save-settings','Saving…', async()=>{ const res=await accessCall({action:'organization_update_applicant_settings', organization_id:state.orgId, portal_access_mode:val('at-settings-portal'), allow_applicant_updates:checked('at-settings-updates'), show_waitlist_position:checked('at-settings-waitlist')}); state.settings=res.settings||state.settings; state.settingsDirty=false; setDirty(false); state.message='Applicant settings saved.'; state.messageKind='ok'; render(); }); }
-  async function saveApplicant(){ if(!state.selected) return; await runButton('at-save-app','Saving…', async()=>{ const status=val('at-app-status'); const res=await accessCall({action:'organization_update_applicant', organization_id:state.orgId, application_id:state.selected.application_id, applicant_status:status, status, waitlist_order:val('at-waitlist')}); const updated=res.applicant||state.selected; state.selected=updated; state.selectedId=updated.application_id; state.message='Applicant saved.'; state.messageKind='ok'; setDirty(false); const ix=state.allApplicants.findIndex(a=>a.application_id===updated.application_id); if(ix>=0) state.allApplicants[ix]=updated; const ix2=state.applicants.findIndex(a=>a.application_id===updated.application_id); if(ix2>=0) state.applicants[ix2]=updated; state.applicants=visibleApplicants(); render(); }); }
+  async function saveApplicant(){ if(!state.selected) return; await runButton('at-save-app','Saving…', async()=>{ const status=val('at-app-status'); const res=await accessCall({action:'organization_update_applicant', organization_id:state.orgId, application_id:state.selected.application_id, applicant_status:status, status, waitlist_order:val('at-waitlist')}); const updated=res.applicant||state.selected; state.selected=updated; state.selectedId=updated.application_id; state.message='Applicant saved.'; state.messageKind='ok'; setDirty(false); const ix=state.allApplicants.findIndex(a=>a.application_id===updated.application_id); if(ix>=0) state.allApplicants[ix]=updated; const ix2=state.applicants.findIndex(a=>a.application_id===updated.application_id); if(ix2>=0) state.applicants[ix2]=updated; state.applicants=visibleApplicants(); updateApplicantHeaderBadgeLocally(); render(); }); }
   async function updateTaskFromElement(e){ const id=e.target.dataset.taskId; if(!id) return; const status=document.querySelector(`.at-task-status[data-task-id="${CSS.escape(id)}"]`)?.value||'pending'; const note=document.querySelector(`.at-task-note[data-task-id="${CSS.escape(id)}"]`)?.value||''; try{ const res=await accessCall({action:'organization_update_applicant_task', organization_id:state.orgId, applicant_task_id:id, status, note}); state.message='Task updated.'; state.messageKind='ok'; if(state.selectedId) await refresh(true); }catch(error){ state.message=error.message||String(error); state.messageKind='bad'; render(); } }
   async function reviewUpload(uploadId,status){ const note=prompt(status==='accepted'?'Optional review note':'Enter review note / requested change')||''; try{ const res=await accessCall({action:'organization_review_applicant_upload', organization_id:state.orgId, applicant_task_upload_id:uploadId, review_status:status, note}); state.selected=res.applicant||state.selected; state.message='Upload review saved.'; state.messageKind='ok'; await refresh(true); }catch(e){ state.message=e.message||String(e); state.messageKind='bad'; render(); } }
   async function addNote(){
@@ -329,10 +351,11 @@ ${esc(JSON.stringify(app,null,2))}</pre>`:''}</main>`;
       const ix=state.allApplicants.findIndex(a=>a.application_id===archived.application_id); if(ix>=0) state.allApplicants[ix]=archived;
       state.selected=null; state.selectedId='';
       state.applicants=visibleApplicants();
+      updateApplicantHeaderBadgeLocally();
       render();
     });
   }
-  async function restoreApplicant(){ if(!state.selected) return; await runButton('at-restore-app','Restoring…', async()=>{ const res=await accessCall({action:'organization_update_applicant', organization_id:state.orgId, application_id:state.selected.application_id, applicant_status:'waitlist', status:'waitlist', note:'Applicant restored'}); state.selected=res.applicant||state.selected; state.selectedId=state.selected.application_id; state.message='Applicant restored to Waitlist.'; state.messageKind='ok'; setDirty(false); const ix=state.allApplicants.findIndex(a=>a.application_id===state.selectedId); if(ix>=0) state.allApplicants[ix]=state.selected; state.applicants=visibleApplicants(); render(); }); }
+  async function restoreApplicant(){ if(!state.selected) return; await runButton('at-restore-app','Restoring…', async()=>{ const res=await accessCall({action:'organization_update_applicant', organization_id:state.orgId, application_id:state.selected.application_id, applicant_status:'waitlist', status:'waitlist', note:'Applicant restored'}); state.selected=res.applicant||state.selected; state.selectedId=state.selected.application_id; state.message='Applicant restored to Waitlist.'; state.messageKind='ok'; setDirty(false); const ix=state.allApplicants.findIndex(a=>a.application_id===state.selectedId); if(ix>=0) state.allApplicants[ix]=state.selected; state.applicants=visibleApplicants(); updateApplicantHeaderBadgeLocally(); render(); }); }
   async function sendPrefab(){ if(!state.selected) return; const templateKey=val('at-email-template'); await runButton('at-send-prefab','Sending…', async()=>{ const res=await accessCall({action:'organization_send_applicant_reply', organization_id:state.orgId, application_id:state.selected.application_id, reply_kind:'prefab', template_key:templateKey, to:val('at-email-to'), note:val('at-email-note')}); state.message=`Email sent to ${res.to}.`; state.messageKind='ok'; await refresh(true); }); }
   function bindNavAway(){ window.addEventListener('beforeunload',(event)=>{ if(!hasUnsaved()) return; event.preventDefault(); event.returnValue=''; }); }
   async function init(){ const r=root(); if(!r) return; r.innerHTML='Loading applicant tracker…'; bindNavAway(); await refresh(true); }

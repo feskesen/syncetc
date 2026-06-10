@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-events-current.js
-// Internal Version: 2026-06-09-094-B
-// Purpose: Customer-admin Events Manager cleanup: single event image, content examples, timing layout cleanup, bottom save actions, checklist remove fix, preserving 094-A backend behavior. Uses portal shell + core-access-action.
+// Internal Version: 2026-06-09-094-C
+// Purpose: Customer-admin Events Manager cleanup: explicit draft/publish actions, close editor after actions, repaired reusable type/location prompts, and section navigation polish. Uses portal shell + core-access-action.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-09-094-B";
+  const VERSION = "2026-06-09-094-C";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -325,7 +325,8 @@
   function locationDisplayName(loc) { return clean(loc && (loc.label || loc.location_name || loc.location_key)); }
   function typeChangedFromSaved(type) {
     if (!type) return false;
-    return !sameText(val("event-type-label"), typeDisplayName(type)) || clean(val("event-accent")) !== clean(type.accent_color);
+    const labelValue = val("event-type-label") || val("event-title");
+    return !sameText(labelValue, typeDisplayName(type)) || clean(val("event-accent")) !== clean(type.accent_color);
   }
   function locationChangedFromSaved(loc) {
     if (!loc) return false;
@@ -523,7 +524,8 @@
     const draftVisible = canSave && normalizedStatus === "draft";
     const draftCallout = `<div class="events-draft-callout" id="events-draft-callout" ${draftVisible ? "" : "hidden"}><b>Draft mode</b>This event will not appear on the public calendar until status is changed to Published and saved.</div>`;
     const draftNotice = state.draftNotice && normalizedStatus === "draft" ? `<div class="events-draft-notice">Draft saved. This event will not appear on the public calendar until it is published.<div class="events-draft-actions"><button type="button" class="events-btn primary" id="event-publish-now">Publish now</button><button type="button" class="events-btn" id="event-keep-draft">Keep as draft</button></div></div>` : "";
-    return `<div class="events-control-panel ${draftVisible ? "draft-alert" : ""}"><div class="events-control-title"><strong>${esc(title)}</strong><span class="events-dirty-flag events-status ${state.dirty ? "" : "good"}">${state.dirty ? "Unsaved changes" : "No unsaved changes"}</span><span class="event-status-message events-muted ${attr(state.statusKind || "")}">${esc(state.status || "")}</span></div>${draftCallout}${draftNotice}<label class="events-field"><span class="events-label-line">Status ${help("Drafts are saved but do not appear on the public calendar. Published events appear according to event visibility. Archived events are retired from ordinary views.")}</span><select class="events-select events-control-input" id="event-status" ${canSave ? "" : "disabled"}><option value="draft" ${normalizedStatus === "draft" ? "selected" : ""}>Draft</option><option value="published" ${normalizedStatus === "published" ? "selected" : ""}>Published</option><option value="archived" ${normalizedStatus === "archived" ? "selected" : ""}>Archived</option></select></label><div class="events-control-actions"><button type="button" class="events-btn primary event-save" data-save-status="" ${canSave ? "" : "disabled"}>${state.saving ? "Saving..." : "Save Changes"}</button>${(ev && ev.event_id) ? `<button type="button" class="events-btn danger" id="event-archive">${archived ? "Restore" : "Archive"}</button>` : ""}</div></div>`;
+    const currentStatusBadge = `<span class="events-muted"><b>Current status:</b> ${esc(normalizedStatus || "draft")}</span><input type="hidden" id="event-status" value="${attr(normalizedStatus || "draft")}">`;
+    return `<div class="events-control-panel ${draftVisible ? "draft-alert" : ""}"><div class="events-control-title"><strong>${esc(title)}</strong><span class="events-dirty-flag events-status ${state.dirty ? "" : "good"}">${state.dirty ? "Unsaved changes" : "No unsaved changes"}</span><span class="event-status-message events-muted ${attr(state.statusKind || "")}">${esc(state.status || "")}</span>${currentStatusBadge}</div>${draftCallout}${draftNotice}<div class="events-control-actions"><button type="button" class="events-btn event-save" data-save-status="draft" data-default-label="Save as Draft" ${canSave ? "" : "disabled"}>${state.saving ? "Saving..." : "Save as Draft"}</button><button type="button" class="events-btn primary event-save" data-save-status="published" data-default-label="Save & Publish" ${canSave ? "" : "disabled"}>${state.saving ? "Saving..." : "Save & Publish"}</button>${(ev && ev.event_id) ? `<button type="button" class="events-btn danger" id="event-archive">${archived ? "Restore" : "Archive"}</button>` : ""}</div></div>`;
   }
 
   function editorEmptyHtml() {
@@ -560,7 +562,7 @@
 
     const eventImageUrl = ev.event_image_url || ev.image_url || "";
     const eventImagePath = ev.event_image_path || obj(ev.event_image_asset_json).storage_path || "";
-    const basicsBody = `<div class="events-grid"><label class="events-field"><span class="events-label-line">Event type ${help("The reusable category/template, such as Board Meeting, BBQ, Fly-in, or Safety Seminar. It can carry default color/settings, but this event has its own image.")}</span><select class="events-select" id="event-type-key">${typeOptions(ev)}</select></label><label class="events-field">Event title<input class="events-input" id="event-title" value="${attr(ev.title || "")}" placeholder="Example: Fall Wash and Wax"></label><label class="events-field"><span class="events-label-line">Event visibility ${help("Who can see the event listing at all.")}</span><select class="events-select" id="event-visibility"><option value="public">Public</option><option value="logged_in">Logged-in users</option><option value="member">Members/users</option><option value="admin">Admins/board only</option></select></label><label class="events-field"><span class="events-label-line">Event key ${help("Auto-generated identifier used internally and in URLs. Users should not edit this directly.")}</span><input class="events-input" id="event-key" value="${attr(keyPreview)}" placeholder="Generated automatically from title and date" readonly></label></div><div class="events-muted" style="margin-top:10px">Event type is the reusable category. Event title is the name of this particular event. If the title is blank, selecting a type will suggest a title.</div><div class="events-grid" style="margin-top:12px"><label class="events-field">Event type name<input class="events-input" id="event-type-label" value="${attr(ev.event_type_label || ev.category || typeJson.label || "")}" placeholder="Reusable type name"></label><label class="events-field">Accent color<div class="events-color-row"><input class="events-input" id="event-accent" value="${attr(accent)}"><input class="events-color-picker" id="event-color-picker" type="color" value="${attr(accent)}" title="Choose accent color"></div></label><label class="events-inline-check events-featured-check"><input type="checkbox" id="event-featured" ${ev.featured ? "checked" : ""}> Featured ${help("Marks this event for possible homepage or featured-event displays later. It does not change calendar sort order.")}</label></div><div style="margin-top:12px">${imageDropHtml("event-image", "Event image", eventImageUrl, eventImagePath, "This is the single image for this event. Replacing it changes this event only.")}</div><div class="events-reuse-box" id="event-type-reuse-box"><label class="events-inline-check"><input type="checkbox" id="event-save-type"> <span id="event-type-reuse-label"></span></label><div class="events-muted" id="event-type-reuse-help"></div></div>`;
+    const basicsBody = `<div class="events-grid"><label class="events-field"><span class="events-label-line">Event type ${help("The reusable category/template, such as Board Meeting, BBQ, Fly-in, or Safety Seminar. If you type a new type name, you can save it for future events.")}</span><select class="events-select" id="event-type-key">${typeOptions(ev)}</select></label><label class="events-field">Event title<input class="events-input" id="event-title" value="${attr(ev.title || "")}" placeholder="Example: Fall Wash and Wax"></label><label class="events-field"><span class="events-label-line">Event visibility ${help("Who can see the event listing at all.")}</span><select class="events-select" id="event-visibility"><option value="public">Public</option><option value="logged_in">Logged-in users</option><option value="member">Members/users</option><option value="admin">Admins/board only</option></select></label><label class="events-field"><span class="events-label-line">Event key ${help("Auto-generated identifier used internally and in URLs. Users should not edit this directly.")}</span><input class="events-input" id="event-key" value="${attr(keyPreview)}" placeholder="Generated automatically from title and date" readonly></label></div><div class="events-muted" style="margin-top:10px">Event type is the reusable category. Event title is the name of this particular event. If the title is blank, selecting a type will suggest a title.</div><div class="events-grid" style="margin-top:12px"><label class="events-field">Event type name<input class="events-input" id="event-type-label" value="${attr(ev.event_type_label || ev.category || typeJson.label || "")}" placeholder="Example: BBQ, Board Meeting, Wash and Wax"></label><label class="events-field">Accent color<div class="events-color-row"><input class="events-input" id="event-accent" value="${attr(accent)}"><input class="events-color-picker" id="event-color-picker" type="color" value="${attr(accent)}" title="Choose accent color"></div></label><label class="events-inline-check events-featured-check"><input type="checkbox" id="event-featured" ${ev.featured ? "checked" : ""}> Featured ${help("Marks this event for possible homepage or featured-event displays later. It does not change calendar sort order.")}</label></div><div style="margin-top:12px">${imageDropHtml("event-image", "Event image", eventImageUrl, eventImagePath, "This is the single image for this event. Replacing it changes this event only.")}</div><div class="events-reuse-box" id="event-type-reuse-box"><label class="events-inline-check"><input type="checkbox" id="event-save-type"> <span id="event-type-reuse-label"></span></label><div class="events-muted" id="event-type-reuse-help"></div></div>`;
 
     const timingBody = `${dateTimeControls("event-start", "Starts", ev.starts_at, { flagHtml: `<label class="events-inline-check"><input type="checkbox" id="event-all-day" ${ev.all_day_event ? "checked" : ""}> All-day event ${help("For events without a specific start time. Time selectors are disabled when this is checked.")}</label>` })}${dateTimeControls("event-end", "Ends", ev.ends_at, { optional: true, flagHtml: `<label class="events-inline-check"><input type="checkbox" id="event-no-end" ${noEnd ? "checked" : ""}> No end time ${help("Use when the event has a start time but no listed ending time. End controls are disabled when this is checked.")}</label>` })}<label class="events-field" style="margin-top:12px">Timezone<input class="events-input" id="event-timezone" value="${attr(ev.timezone || "America/New_York")}"></label>`;
 
@@ -624,7 +626,7 @@
     const target = document.querySelector(`.events-accordion${selector}`);
     if (!target) return;
     document.querySelectorAll(".events-accordion").forEach(section => { section.open = section === target; });
-    target.scrollIntoView({ block: "start", behavior: "smooth" });
+    requestAnimationFrame(() => target.scrollIntoView({ block: "start", behavior: "smooth" }));
   }
 
   function sectionForValidationMessage(message) {
@@ -728,7 +730,7 @@
     updateReuseControls();
     document.getElementById("event-use-address-map")?.addEventListener("click", useAddressAsMapQuery);
     document.getElementById("event-preview-map")?.addEventListener("click", () => { syncMapQueryFromAddress(true); updateMapPreview(true); setDirty(true); });
-    document.getElementById("event-publish-now")?.addEventListener("click", () => { const st = document.getElementById("event-status"); if (st) st.value = "published"; state.draftNotice = false; setDirty(true); saveEvent(""); });
+    document.getElementById("event-publish-now")?.addEventListener("click", () => { const st = document.getElementById("event-status"); if (st) st.value = "published"; state.draftNotice = false; setDirty(true); saveEvent("published"); });
     document.getElementById("event-keep-draft")?.addEventListener("click", () => { state.draftNotice = false; captureFormDraft(); renderStatusOnly(); });
 
     guardNativeSubmit();
@@ -765,7 +767,7 @@
         event.preventDefault();
         event.stopPropagation();
         captureFormDraft();
-        state.status = "Use the Save Changes button to save this event.";
+        state.status = "Use Save as Draft or Save & Publish to save this event.";
         state.statusKind = "warn";
         renderStatusOnly();
       });
@@ -968,7 +970,14 @@
     const set = (id, value, force) => { const el = document.getElementById(id); if (el && (force || !el.value)) el.value = value || ""; };
     set("event-type-label", type.label, true);
     const title = document.getElementById("event-title");
-    if (title && !clean(title.value)) title.value = typeDisplayName(type);
+    if (title) {
+      const suggested = typeDisplayName(type);
+      const priorAuto = clean(title.dataset.autoTypeTitle || "");
+      if (!clean(title.value) || (priorAuto && sameText(title.value, priorAuto))) {
+        title.value = suggested;
+        title.dataset.autoTypeTitle = suggested;
+      }
+    }
     set("event-accent", type.accent_color, true);
     updateImagePreview("event-image");
     const picker = document.getElementById("event-color-picker"); if (picker && /^#[0-9a-f]{6}$/i.test(type.accent_color || "")) picker.value = type.accent_color;
@@ -1000,7 +1009,7 @@
     const typeLabel = document.getElementById("event-type-reuse-label");
     const typeHelp = document.getElementById("event-type-reuse-help");
     const type = selectedType();
-    const typeName = clean(val("event-type-label"));
+    const typeName = clean(val("event-type-label") || (!val("event-type-key") ? val("event-title") : ""));
     if (typeBox && typeCheck && typeLabel && typeHelp) {
       let mode = "";
       let label = "";
@@ -1021,8 +1030,8 @@
         }
       } else {
         mode = "new";
-        label = "Save this as a reusable event type";
-        helpText = "Creates a reusable type so future events can select it from the dropdown.";
+        label = "Save as new reusable event type";
+        helpText = "Creates this event type so future events can select it from the dropdown.";
       }
       typeBox.dataset.mode = mode;
       typeLabel.textContent = label;
@@ -1094,7 +1103,7 @@
     const noEnd = checked("event-no-end");
     const typeMode = reuseMode("type");
     const locationMode = reuseMode("location");
-    const typeLabelValue = val("event-type-label") || (type && type.label) || "";
+    const typeLabelValue = val("event-type-label") || (!val("event-type-key") ? val("event-title") : "") || (type && type.label) || "";
     const locationNameValue = val("event-location-name") || (loc && loc.location_name) || "";
     const typeKeyValue = checked("event-save-type") && typeMode === "new" ? keyify(typeLabelValue) : (val("event-type-key") || keyify(typeLabelValue));
     const locationKeyValue = checked("event-save-location") && locationMode === "new" ? keyify(locationNameValue || val("event-address")) : (val("event-location-key") || keyify(locationNameValue || val("event-address")));
@@ -1226,9 +1235,9 @@
       state.membershipClasses = arr(result.membership_classes);
       state.roles = arr(result.roles);
       const found = state.events.find(ev => clean(ev.event_id) === clean(payload.event_id)) || state.events.find(ev => clean(ev.event_key) === clean(payload.event_key)) || state.events.find(ev => clean(ev.title) === clean(payload.title));
-      if (found) state.selectedId = clean(found.event_id);
+      if (found) state.selectedId = "";
       state.creating = false;
-      state.status = payload.status === "published" ? "Published." : (payload.status === "draft" ? "Draft saved." : "Saved.");
+      state.status = payload.status === "published" ? "Published and closed." : (payload.status === "draft" ? "Draft saved and closed." : "Saved and closed.");
       state.statusKind = payload.status === "draft" ? "warn" : "good";
       state.draftNotice = payload.status === "draft";
       state.saving = false;
@@ -1255,7 +1264,10 @@
     try {
       const result = await call(archived ? "organization_restore_event" : "organization_archive_event", { organization_id: state.orgId, event_id: ev.event_id });
       state.events = arr(result.events);
-      state.status = archived ? "Restored." : "Archived.";
+      state.selectedId = "";
+      state.creating = false;
+      state.formDraft = null;
+      state.status = archived ? "Restored and closed." : "Archived and closed.";
       state.statusKind = "good";
       state.error = "";
       setDirty(false);

@@ -1,11 +1,11 @@
 // PUBLIC-PAGE-event-rsvp-current.js
-// Internal Version: 2026-06-09-095-B
+// Internal Version: 2026-06-09-095-C
 // Purpose: Event RSVP renderer with People-linked RSVP, public fallback, and checklist/bring-items claiming.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-09-095-B";
+  const VERSION = "2026-06-09-095-C";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const PUBLIC_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-public-render`;

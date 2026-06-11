@@ -1,11 +1,11 @@
 // USER-PAGE-applicant-portal-current.js
-// Internal Version: 2026-06-10-107-A
+// Internal Version: 2026-06-10-107-B
 // Purpose: Applicant-only portal for application updates, stage tasks, and private upload tasks.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-10-107-A";
+  const VERSION = "2026-06-10-107-B";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -38,6 +38,8 @@
     requestBusy: false,
     requestMessage: "",
     requestKind: "info",
+    authProcessing: false,
+    authCallbackMessage: "",
   };
 
   function mark(label, detail) { if (DEBUG) steps.push(`${String(Date.now() - startMs).padStart(5)}ms  ${label}${detail ? " — " + detail : ""}`); }
@@ -98,12 +100,78 @@
 
   function loadScript(src) { return new Promise((resolve, reject) => { if ([...document.scripts].some((s) => s.src === src)) return resolve(); const sc = document.createElement("script"); sc.src = src; sc.async = true; sc.onload = resolve; sc.onerror = () => reject(new Error(`Unable to load ${src}`)); document.head.appendChild(sc); }); }
   function waitFor(fn, timeout=8000) { const st=Date.now(); return new Promise((resolve,reject)=>{ (function tick(){ if(fn()) return resolve(); if(Date.now()-st>timeout) return reject(new Error("Timed out waiting for Supabase")); setTimeout(tick,50); })(); }); }
-  async function ensureSupabase() { if (!window.supabase?.createClient) await loadScript(SUPABASE_JS_URL); if (!window.supabase?.createClient) await waitFor(()=>window.supabase?.createClient); if (!window.__syncetcApplicantPortalSupabase) window.__syncetcApplicantPortalSupabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY); return window.__syncetcApplicantPortalSupabase; }
+  async function ensureSupabase() { if (!window.supabase?.createClient) await loadScript(SUPABASE_JS_URL); if (!window.supabase?.createClient) await waitFor(()=>window.supabase?.createClient); if (!window.__syncetcApplicantPortalSupabase) window.__syncetcApplicantPortalSupabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } }); return window.__syncetcApplicantPortalSupabase; }
+
+  function hasAuthCallbackInUrl() {
+    const url = new URL(window.location.href);
+    const hash = new URLSearchParams(String(window.location.hash || '').replace(/^#/, ''));
+    return Boolean(
+      url.searchParams.get('code') ||
+      url.searchParams.get('token_hash') ||
+      url.searchParams.get('error') ||
+      hash.get('access_token') ||
+      hash.get('refresh_token') ||
+      hash.get('token_hash') ||
+      hash.get('error')
+    );
+  }
+
+  function cleanAuthCallbackUrl() {
+    const url = new URL(window.location.href);
+    ['code','token_hash','type','error','error_code','error_description','access_token','refresh_token','expires_in','expires_at','provider_token','provider_refresh_token'].forEach((key) => url.searchParams.delete(key));
+    url.hash = '';
+    window.history.replaceState({}, document.title, url.pathname + (url.search ? url.search : ''));
+  }
+
+  async function completeAuthCallbackIfPresent(client) {
+    if (!hasAuthCallbackInUrl()) return false;
+    state.authProcessing = true;
+    state.authCallbackMessage = 'Processing secure login link…';
+    mark('authCallback:detected');
+    const url = new URL(window.location.href);
+    const hash = new URLSearchParams(String(window.location.hash || '').replace(/^#/, ''));
+    const err = url.searchParams.get('error_description') || url.searchParams.get('error') || hash.get('error_description') || hash.get('error');
+    if (err) {
+      cleanAuthCallbackUrl();
+      throw new Error(clean(err) || 'The secure login link could not be completed. Request a new link.');
+    }
+    const code = url.searchParams.get('code');
+    if (code) {
+      mark('authCallback:exchangeCodeForSession');
+      const { error } = await client.auth.exchangeCodeForSession(code);
+      if (error) throw error;
+      cleanAuthCallbackUrl();
+      mark('authCallback:session-ready');
+      return true;
+    }
+    const tokenHash = url.searchParams.get('token_hash') || hash.get('token_hash');
+    if (tokenHash && client.auth.verifyOtp) {
+      const rawType = clean(url.searchParams.get('type') || hash.get('type') || 'magiclink');
+      const type = ['magiclink','signup','recovery','invite','email'].includes(rawType) ? rawType : 'magiclink';
+      mark('authCallback:verifyOtp', type);
+      const { error } = await client.auth.verifyOtp({ type, token_hash: tokenHash });
+      if (error) throw error;
+      cleanAuthCallbackUrl();
+      mark('authCallback:session-ready');
+      return true;
+    }
+    const accessToken = hash.get('access_token');
+    const refreshToken = hash.get('refresh_token');
+    if (accessToken && refreshToken) {
+      mark('authCallback:setSession');
+      const { error } = await client.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+      if (error) throw error;
+      cleanAuthCallbackUrl();
+      mark('authCallback:session-ready');
+      return true;
+    }
+    return false;
+  }
   async function accessCall(body) { const client = await ensureSupabase(); const { data } = await client.auth.getSession(); const token = data?.session?.access_token; if (!token) throw new Error("Log in first."); state.token = token; state.email = data.session.user?.email || ""; const rd = rootData(); const res = await fetch(ACCESS_EDGE_URL, { method:"POST", headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`}, body: JSON.stringify({ organization_key: rd.organizationKey, organization_id: rd.organizationId, ...body }) }); const json = await res.json().catch(()=>({})); if(!res.ok || json.ok===false) throw new Error(clean(json.message || json.error || `HTTP ${res.status}`)); return json; }
   async function publicCall(body) { const rd = rootData(); const res = await fetch(PUBLIC_EDGE_URL, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ organization_key: rd.organizationKey, organization_id: rd.organizationId, site_key:"primary", ...body }) }); const json = await res.json().catch(()=>({})); if(!res.ok || json.ok===false) throw new Error(clean(json.message || json.error || `HTTP ${res.status}`)); return json; }
   async function requestPortalLink() { const email = clean(val('ap-request-email') || state.requestEmail); state.requestEmail = email; if (!email || !/^\S+@\S+\.\S+$/.test(email)) { state.requestMessage = 'Enter the email address used on your application.'; state.requestKind = 'bad'; render(); return; } state.requestBusy = true; state.requestMessage = ''; render(); try { const data = await publicCall({ action:'request_applicant_portal_access', email, redirect_to: location.origin + '/applicant-portal' }); state.requestMessage = clean(data.message || 'If an eligible application exists for that email, we will send applicant portal instructions.'); state.requestKind = 'ok'; } catch (error) { state.requestMessage = 'If an eligible application exists for that email, we will send applicant portal instructions.'; state.requestKind = 'ok'; } finally { state.requestBusy = false; render(); } }
 
-  async function refresh() { mark("refresh:start"); state.loading = true; state.error = ""; render(); try { const client = await ensureSupabase(); const { data: sessionData } = await client.auth.getSession(); const session = sessionData?.session || null; if (!session?.access_token) { const landing = await publicCall({ action:'get_applicant_portal_public' }); state.payload = landing; state.organization = landing.organization || null; state.page = landing.page || null; state.settings = obj(landing.settings); state.style = obj(landing.style_profile); state.loggedOut = true; state.loading = false; setShellState(); render(); return; } const data = await accessCall({ action:"applicant_get_my_portal" }); state.payload = data; state.applicant = data.application || data.applicant || null; state.settings = obj(data.settings); state.organization = data.organization || null; state.page = data.page || null; state.style = obj(data.style_profile); state.loggedOut = false; state.loading = false; mark("refresh:done", clean(state.applicant?.display_name)); setShellState(); render(); } catch (error) { state.loading=false; state.error = error instanceof Error ? error.message : String(error); try { const landing = await publicCall({ action:'get_applicant_portal_public' }); state.payload = landing; state.organization = landing.organization || state.organization; state.page = landing.page || state.page; state.settings = obj(landing.settings || state.settings); state.style = obj(landing.style_profile || state.style); } catch (_) {} render(); } }
+  async function refresh() { mark("refresh:start"); state.loading = true; state.error = ""; state.authCallbackMessage = hasAuthCallbackInUrl() ? 'Processing secure login link…' : ''; render(); try { const client = await ensureSupabase(); const completedAuth = await completeAuthCallbackIfPresent(client); if (completedAuth) mark('refresh:auth-callback-complete'); const { data: sessionData } = await client.auth.getSession(); const session = sessionData?.session || null; if (!session?.access_token) { const landing = await publicCall({ action:'get_applicant_portal_public' }); state.payload = landing; state.organization = landing.organization || null; state.page = landing.page || null; state.settings = obj(landing.settings); state.style = obj(landing.style_profile); state.loggedOut = true; state.authProcessing = false; state.loading = false; setShellState(); render(); return; } const data = await accessCall({ action:"applicant_get_my_portal" }); state.payload = data; state.applicant = data.application || data.applicant || null; state.settings = obj(data.settings); state.organization = data.organization || null; state.page = data.page || null; state.style = obj(data.style_profile); state.loggedOut = false; state.authProcessing = false; state.loading = false; mark("refresh:done", clean(state.applicant?.display_name)); setShellState(); render(); } catch (error) { state.loading=false; state.authProcessing = false; state.error = error instanceof Error ? error.message : String(error); state.requestMessage = 'The secure login link could not be completed. Request a new link if needed.'; state.requestKind = 'bad'; try { const landing = await publicCall({ action:'get_applicant_portal_public' }); state.payload = landing; state.organization = landing.organization || state.organization; state.page = landing.page || state.page; state.settings = obj(landing.settings || state.settings); state.style = obj(landing.style_profile || state.style); } catch (_) {} render(); } }
 
   function statusHtml(app) { const status = clean(app.status_label || app.status || "Application"); return `<span class="ap-pill">${esc(status)}</span>${app.waitlist_order ? ` <span class="ap-pill">Waitlist #${esc(app.waitlist_order)}</span>` : ""}${app.ready_for_final_review ? ` <span class="ap-pill warn">Ready for final review</span>` : ""}`; }
   function taskStatusPill(task) { const s = normalize(task.status || task.review_status || task.upload_status || "pending"); const label = ({ pending:"Pending", in_progress:"In progress", completed:"Completed", waived:"Waived", blocked:"Blocked", submitted:"Submitted", accepted:"Accepted", rejected:"Needs changes", request_changes:"Changes requested" })[s] || clean(s || "pending"); const cls = ["completed","waived","accepted"].includes(s) ? "" : ["blocked","rejected","request_changes"].includes(s) ? " bad" : " warn"; return `<span class="ap-pill${cls}">${esc(label)}</span>`; }
@@ -118,7 +186,7 @@
   
   function loginRequestHtml() { const org = state.organization || {}; const title = org.display_name || 'Applicant Portal'; const email = state.requestEmail || state.email || ''; return `<style>${css()}</style><div class="ap-wrap" style="${styleVars()}"><section class="ap-panel"><div class="ap-hero"><div class="ap-kicker">Applicant Portal</div><h1>${esc(title)}</h1><p>Use the email address from your application to request a secure applicant portal link. This login is applicant-only and does not provide member access.</p></div><div class="ap-body"><div class="ap-card"><h2>Access your applicant portal</h2><p class="ap-muted">If an eligible application exists for the email you enter, we will send applicant portal instructions. For privacy, this page will not confirm whether an application exists.</p>${state.requestMessage?`<div class="ap-alert ${state.requestKind||'info'}">${esc(state.requestMessage)}</div>`:''}<label class="ap-field"><span class="ap-label">Application email</span><input class="ap-input" id="ap-request-email" type="email" autocomplete="email" inputmode="email" value="${attr(email)}" placeholder="email@example.com"></label><div class="ap-actions"><button class="ap-btn" id="ap-request-link" ${state.requestBusy?'disabled':''}>${state.requestBusy?'Sending…':'Send secure login link'}</button></div><p class="ap-muted">First time here? Use the same email you used on the application. If your organization allows applicant portal access, the secure link will let you create or access your applicant-only login.</p></div>${DEBUG?`<pre class="ap-debug">SyncEtc Applicant Portal ${VERSION}\nLogged out/request mode\nOrg: ${esc(org.organization_key||rootData().organizationKey)}\nSteps:\n${esc(steps.join("\n"))}\n\n${esc(JSON.stringify(state.payload,null,2))}</pre>`:''}</div></section></div>`; }
 
-  function html() { const app = state.applicant; const org = state.organization || {}; if (state.loading) return `<style>${css()}</style><div class="ap-wrap" style="${styleVars()}"><div class="ap-panel"><div class="ap-body">Loading applicant portal…</div></div></div>`; if (state.error) return loginRequestHtml(); if (state.loggedOut || !app) return loginRequestHtml(); const progress = requiredTaskProgress(); return `<style>${css()}</style><div class="ap-wrap" style="${styleVars()}"><section class="ap-panel"><div class="ap-hero"><div class="ap-kicker">Applicant Portal</div><h1>${esc(org.display_name || 'Applicant Portal')}</h1><p>View your application status and complete requested tasks. This login is applicant-only and does not provide member access.</p></div><div class="ap-body">${state.message?`<div class="ap-alert ${state.messageKind || 'ok'}">${esc(state.message)}</div>`:""}<div class="ap-card"><h2>${esc(app.display_name || 'Application')}</h2><div>${statusHtml(app)}</div><p class="ap-muted" style="margin-bottom:0">Submitted ${esc(fmtDate(app.submitted_at || app.created_at))}${app.last_applicant_update_at?` • Last updated ${esc(fmtDateTime(app.last_applicant_update_at))}`:""}</p>${progress.total?`<div class="ap-progress"><div class="ap-progress-row"><strong>Required applicant-visible tasks</strong><span>${progress.done} of ${progress.total} complete</span></div><div class="ap-bar"><span style="width:${progress.pct}%"></span></div></div>`:""}</div><div class="ap-accordion"><details class="ap-section" ${state.openSection==='tasks'?'open':''} data-section="tasks"><summary><span>Applicant tasks</span><span class="ap-pill">${progress.total ? `${progress.done}/${progress.total}` : 'None'}</span></summary><div class="ap-section-body"><p class="ap-muted">Complete the tasks shown here. Some tasks are reviewed by an organization officer or admin before they are marked complete.</p>${applicantVisibleTasks().map(taskHtml).join("") || '<div class="ap-muted">No applicant-visible tasks are currently assigned.</div>'}</div></details><details class="ap-section" ${state.openSection==='application'?'open':''} data-section="application"><summary><span>Application information</span><span class="ap-pill">${app.can_update === false ? 'View only' : 'Editable'}</span></summary><div class="ap-section-body">${applicationForm(app)}</div></details></div>${DEBUG?`<pre class="ap-debug">SyncEtc Applicant Portal ${VERSION}\nElapsed: ${Date.now()-startMs}ms\nEmail: ${esc(state.email)}\nSteps:\n${esc(steps.join("\n"))}\n\n${esc(JSON.stringify(state.payload,null,2))}</pre>`:""}</div></section></div>`; }
+  function html() { const app = state.applicant; const org = state.organization || {}; if (state.loading) return `<style>${css()}</style><div class="ap-wrap" style="${styleVars()}"><div class="ap-panel"><div class="ap-body">${esc(state.authCallbackMessage || 'Loading applicant portal…')}</div></div></div>`; if (state.error) return loginRequestHtml(); if (state.loggedOut || !app) return loginRequestHtml(); const progress = requiredTaskProgress(); return `<style>${css()}</style><div class="ap-wrap" style="${styleVars()}"><section class="ap-panel"><div class="ap-hero"><div class="ap-kicker">Applicant Portal</div><h1>${esc(org.display_name || 'Applicant Portal')}</h1><p>View your application status and complete requested tasks. This login is applicant-only and does not provide member access.</p></div><div class="ap-body">${state.message?`<div class="ap-alert ${state.messageKind || 'ok'}">${esc(state.message)}</div>`:""}<div class="ap-card"><h2>${esc(app.display_name || 'Application')}</h2><div>${statusHtml(app)}</div><p class="ap-muted" style="margin-bottom:0">Submitted ${esc(fmtDate(app.submitted_at || app.created_at))}${app.last_applicant_update_at?` • Last updated ${esc(fmtDateTime(app.last_applicant_update_at))}`:""}</p>${progress.total?`<div class="ap-progress"><div class="ap-progress-row"><strong>Required applicant-visible tasks</strong><span>${progress.done} of ${progress.total} complete</span></div><div class="ap-bar"><span style="width:${progress.pct}%"></span></div></div>`:""}</div><div class="ap-accordion"><details class="ap-section" ${state.openSection==='tasks'?'open':''} data-section="tasks"><summary><span>Applicant tasks</span><span class="ap-pill">${progress.total ? `${progress.done}/${progress.total}` : 'None'}</span></summary><div class="ap-section-body"><p class="ap-muted">Complete the tasks shown here. Some tasks are reviewed by an organization officer or admin before they are marked complete.</p>${applicantVisibleTasks().map(taskHtml).join("") || '<div class="ap-muted">No applicant-visible tasks are currently assigned.</div>'}</div></details><details class="ap-section" ${state.openSection==='application'?'open':''} data-section="application"><summary><span>Application information</span><span class="ap-pill">${app.can_update === false ? 'View only' : 'Editable'}</span></summary><div class="ap-section-body">${applicationForm(app)}</div></details></div>${DEBUG?`<pre class="ap-debug">SyncEtc Applicant Portal ${VERSION}\nElapsed: ${Date.now()-startMs}ms\nEmail: ${esc(state.email)}\nSteps:\n${esc(steps.join("\n"))}\n\n${esc(JSON.stringify(state.payload,null,2))}</pre>`:""}</div></section></div>`; }
 
   function render() { const r=root(); if(r) r.innerHTML = html(); bind(); }
   function collectUpdate() { return { first_name: val('ap-first'), last_name: val('ap-last'), phone: val('ap-phone'), address_1: val('ap-street'), city: val('ap-city'), state: val('ap-state'), zip: val('ap-zip'), employer: val('ap-employer'), occupation: val('ap-occupation'), pilot_certificate_number: val('ap-cert'), certificate_level: val('ap-level'), ratings: val('ap-ratings'), medical_class: val('ap-medical'), last_medical_date: val('ap-med-date'), total_hours: val('ap-total'), night_hours: val('ap-night'), ifr_hours: val('ap-ifr'), complex_hours: val('ap-complex'), aircraft_experience: val('ap-aircraft'), why_join: val('ap-why'), anything_else: val('ap-notes') }; }

@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-applicant-tracker-current.js
-// Internal Version: 2026-06-10-102-C
-// Purpose: Organization admin Applicant Tracker with archive reason workflow, settings modal, notes/activity timeline, simplified member conversion modal with modal nav-away protection, local filters, and lifecycle-ready tracker UX.
+// Internal Version: 2026-06-10-103-A
+// Purpose: Organization admin Applicant Tracker with archive reason workflow, conversion modal, lifecycle notes, applicant list initialization fix, and local filters.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-10-102-C";
+  const VERSION = "2026-06-10-103-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -96,7 +96,7 @@
   function setShell(){ if(!window.SyncEtcPortalShell?.setState || !state.accessRow) return; const row=state.accessRow; window.SyncEtcPortalShell.setState({authenticated:true,email:state.email,mode:'organization-admin',organizationName:row.organization_name,organizationKey:row.organization_key,organizationId:row.organization_id,selectedOrganizationId:row.organization_id,styleProfile:row.style_profile,accessRow:row,platformAdmin:state.platformAdmin,activePageKey:'applicant-tracker'}); }
   function rootData(){ const r=root(); return { organizationKey: r?.dataset.organizationKey || r?.dataset.customerKey || "test-customer-1" }; }
 
-  async function refresh(keepSelected=true){ mark('refresh:start'); state.loading=true; state.error=''; render(); try { if(!state.orgId){ const dash=await accessCall({ action:'get_user_dashboard', organization_key:rootData().organizationKey }); state.accessRow=arr(dash.access)[0]||dash.access||state.accessRow; state.person=dash.person||state.person; state.orgId=clean(state.accessRow?.organization_id||dash.organization_id); } const data=await accessCall({ action:'organization_list_applicants', organization_id:state.orgId, status_filter:state.filter, search:state.search, limit:350 }); state.accessRow=data.access||state.accessRow; state.person=data.person||state.person; state.orgId=clean(data.access?.organization_id||state.orgId); state.settings=obj(data.settings); state.templates=arr(data.reply_templates); state.workflowStages=arr(data.workflow_stages); state.taskDefinitions=arr(data.task_definitions); state.allApplicants=arr(data.applicants); state.applicants=visibleApplicants(); state.summary=obj(data.summary); if(keepSelected && state.selectedId){ state.selected=state.applicants.find(a=>a.application_id===state.selectedId)||state.allApplicants.find(a=>a.application_id===state.selectedId)||null; } else if(!keepSelected){ state.selected=null; state.selectedId=''; } state.loading=false; setShell(); updateApplicantHeaderBadgeLocally(); mark('refresh:done', `${state.applicants.length} applicants`); render(); } catch(error){ state.loading=false; state.error=error.message||String(error); render(); } }
+  async function refresh(keepSelected=true){ mark('refresh:start'); state.loading=true; state.error=''; render(); try { if(!state.orgId){ const dash=await accessCall({ action:'get_user_dashboard', organization_key:rootData().organizationKey }); state.accessRow=arr(dash.access)[0]||dash.access||state.accessRow; state.person=dash.person||state.person; state.orgId=clean(state.accessRow?.organization_id||dash.organization_id); } const data=await accessCall({ action:'organization_list_applicants', organization_id:state.orgId, status_filter:'all', search:'', limit:500 }); state.accessRow=data.access||state.accessRow; state.person=data.person||state.person; state.orgId=clean(data.access?.organization_id||state.orgId); state.settings=obj(data.settings); state.templates=arr(data.reply_templates); state.workflowStages=arr(data.workflow_stages); state.taskDefinitions=arr(data.task_definitions); state.allApplicants=arr(data.applicants); state.applicants=visibleApplicants(); state.summary=obj(data.summary); if(keepSelected && state.selectedId){ state.selected=state.applicants.find(a=>a.application_id===state.selectedId)||state.allApplicants.find(a=>a.application_id===state.selectedId)||null; } else if(!keepSelected){ state.selected=null; state.selectedId=''; } state.loading=false; setShell(); updateApplicantHeaderBadgeLocally(); mark('refresh:done', `${state.applicants.length} applicants`); render(); } catch(error){ state.loading=false; state.error=error.message||String(error); render(); } }
   function visibleApplicants(){
     const q=clean(state.search).toLowerCase();
     let rows=arr(state.allApplicants);

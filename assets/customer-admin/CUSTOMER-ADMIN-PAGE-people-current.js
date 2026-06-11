@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-10-102-A
+// Internal Version: 2026-06-10-103-A
 // Purpose: Organization Admin People & Access page with person lifecycle notes continuity from applicant conversion.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-10-102-A";
+  const VERSION = "2026-06-10-103-A";
   const ROOT_ID = "syncetc-organization-people-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -445,7 +445,7 @@
 
   function renderPersonTimeline(row) {
     const notes = Array.isArray(row.timeline_notes) ? row.timeline_notes : [];
-    return `<details><summary>Admin notes / activity timeline</summary><div class="people-form-grid"><label class="people-field wide"><span>Add admin note</span><textarea id="people-timeline-note" placeholder="Add a dated admin note for this person. These notes are not visible to the person."></textarea><small>Notes added here can carry forward from applicant history and continue through the person/member lifecycle.</small></label></div><div class="people-form-actions"><button id="people-add-timeline-note" type="button">Add note</button></div><div class="people-timeline-list">${notes.length ? notes.map((n) => `<div class="people-note-card"><strong>${esc(n.title || n.note_type || "Note")}</strong><span>${esc(new Date(n.created_at || Date.now()).toLocaleString())}</span><p>${esc(n.body || "")}</p><small>${esc(n.actor_name || n.actor_email || "System")}</small></div>`).join("") : `<div class="muted">No admin timeline notes yet.</div>`}</div></details>`;
+    return `<details><summary>Admin notes / activity timeline</summary><div class="people-form-grid"><label class="people-field wide"><span>Add admin note</span><textarea id="people-timeline-note" placeholder="Add a dated admin note for this person. These notes are not visible to the person."></textarea><small>Notes added here can carry forward from applicant history and continue through the person/member lifecycle.</small></label></div><div class="people-form-actions"><button id="people-add-timeline-note" type="button">Add note</button></div><div class="people-timeline-list">${notes.length ? notes.map((n) => `<div class="people-note-card"><strong>${esc((n.application_id && !String(n.title||'').toLowerCase().includes('applicant')) ? `Applicant history — ${n.title || n.note_type || 'Note'}` : (n.title || n.note_type || "Note"))}</strong><span>${esc(new Date(n.created_at || Date.now()).toLocaleString())}</span><p>${esc(n.body || "")}</p><small>${esc(n.actor_name || n.actor_email || "System")}${n.application_id ? ' • Applicant-origin history' : ''}</small></div>`).join("") : `<div class="muted">No admin timeline notes yet.</div>`}</div></details>`;
   }
 
   function renderEditor() {

@@ -1,7 +1,7 @@
 // index.ts
 // Deploy target: Supabase Edge Function named core-access-action
 // JWT verification: ON
-// Internal Version: 2026-06-10-101-A
+// Internal Version: 2026-06-10-103-A
 // Purpose: secured user/organization-admin access foundation for SyncEtc. Separates lifecycle status, membership class, onboarding/application stage, roles, permissions, and future RSVP audience rules.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
@@ -11,7 +11,7 @@ type JsonRecord = Record<string, unknown>;
 type SupabaseClientAny = any;
 declare const Deno: { env: { get: (key: string) => string | undefined } };
 
-const VERSION = "2026-06-10-101-A";
+const VERSION = "2026-06-10-103-A";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -3848,16 +3848,66 @@ async function listApplicantTimelineNotes0099(serviceClient: SupabaseClientAny, 
 
 async function listPersonTimelineNotes0099(serviceClient: SupabaseClientAny, organizationId: string, personId: string): Promise<JsonRecord[]> {
   if (!personId) return [];
-  const { data, error } = await serviceClient
+
+  // Person history is intentionally lifecycle-wide. Notes written while someone was an
+  // applicant may have an application_id but no person_id until conversion/linking.
+  // Include those linked application notes so People can show the full applicant-origin
+  // history without duplicating notes into a second table.
+  const { data: linkedApps, error: appError } = await serviceClient
+    .from("core_applications")
+    .select("application_id")
+    .eq("organization_id", organizationId)
+    .or(`person_id.eq.${personId},converted_person_id.eq.${personId}`);
+  if (appError && !String(appError.message || "").includes("converted_person_id")) throw appError;
+
+  let applicationIds = Array.from(new Set(((linkedApps || []) as JsonRecord[]).map((row) => clean(row.application_id)).filter(Boolean)));
+
+  // Some older deployments may not have converted_person_id available in the first OR query.
+  // Fall back to person_id-only lookup rather than crashing People history.
+  if (appError && String(appError.message || "").includes("converted_person_id")) {
+    const fallback = await serviceClient
+      .from("core_applications")
+      .select("application_id")
+      .eq("organization_id", organizationId)
+      .eq("person_id", personId);
+    if (fallback.error) throw fallback.error;
+    applicationIds = Array.from(new Set(((fallback.data || []) as JsonRecord[]).map((row) => clean(row.application_id)).filter(Boolean)));
+  }
+
+  const noteMap = new Map<string, JsonRecord>();
+  const addRows = (rows: JsonRecord[] | null | undefined) => {
+    for (const row of rows || []) {
+      const safe = safePersonTimelineNote0099(row);
+      const id = clean(safe.person_timeline_note_id) || `${clean(safe.application_id)}-${clean(safe.person_id)}-${clean(safe.created_at)}-${clean(safe.title)}-${clean(safe.body)}`;
+      noteMap.set(id, safe);
+    }
+  };
+
+  const personQuery = await serviceClient
     .from("core_person_timeline_notes")
     .select("*")
     .eq("organization_id", organizationId)
     .eq("person_id", personId)
     .is("archived_at", null)
     .order("created_at", { ascending: false })
-    .limit(200);
-  if (error) throw error;
-  return (data || []).map(safePersonTimelineNote0099);
+    .limit(250);
+  if (personQuery.error) throw personQuery.error;
+  addRows(personQuery.data as JsonRecord[]);
+
+  if (applicationIds.length) {
+    const appQuery = await serviceClient
+      .from("core_person_timeline_notes")
+      .select("*")
+      .eq("organization_id", organizationId)
+      .in("application_id", applicationIds)
+      .is("archived_at", null)
+      .order("created_at", { ascending: false })
+      .limit(500);
+    if (appQuery.error) throw appQuery.error;
+    addRows(appQuery.data as JsonRecord[]);
+  }
+
+  return Array.from(noteMap.values()).sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || ""))).slice(0, 300);
 }
 
 async function addApplicantTimelineNote0099(serviceClient: SupabaseClientAny, organizationId: string, body: JsonRecord, actorEmail: string, actorPerson: JsonRecord): Promise<JsonRecord> {
@@ -4936,7 +4986,7 @@ async function applicantUploadTaskFile0098(serviceClient: SupabaseClientAny, act
   const path = `organizations/${clean(found.app.organization_id)}/applicants/${applicationId}/tasks/${clean(task.task_key || taskId)}/${Date.now()}-${normalizeKey(fileName) || "upload"}.${ext}`;
   const { error: uploadError } = await serviceClient.storage.from(bucket).upload(path, bytes, { contentType: mime, upsert: false });
   if (uploadError) throw uploadError;
-  const { data: upload, error } = await serviceClient.from("core_applicant_task_uploads").insert({ application_id: applicationId, organization_id: clean(found.app.organization_id), applicant_task_id: taskId, applicant_user_id: authUserId || null, task_key: clean(task.task_key), storage_bucket: bucket, storage_path: path, original_file_name: fileName, mime_type: mime, file_size_bytes: bytes.length, upload_status: "submitted", visibility: "private", applicant_note: clean(body.applicant_note), uploaded_by_email: actorEmail, metadata_json: { version: "2026-06-10-101-A", source: "applicant_portal" } }).select("*").single();
+  const { data: upload, error } = await serviceClient.from("core_applicant_task_uploads").insert({ application_id: applicationId, organization_id: clean(found.app.organization_id), applicant_task_id: taskId, applicant_user_id: authUserId || null, task_key: clean(task.task_key), storage_bucket: bucket, storage_path: path, original_file_name: fileName, mime_type: mime, file_size_bytes: bytes.length, upload_status: "submitted", visibility: "private", applicant_note: clean(body.applicant_note), uploaded_by_email: actorEmail, metadata_json: { version: "2026-06-10-102-A", source: "applicant_portal" } }).select("*").single();
   if (error) throw error;
   await serviceClient.from("core_applicant_tasks").update({ status: "in_progress", upload_status: "submitted", review_status: "submitted", updated_at: new Date().toISOString() }).eq("applicant_task_id", taskId);
   await serviceClient.from("core_applications").update({ ready_for_final_review: false, updated_at: new Date().toISOString() }).eq("application_id", applicationId);
@@ -4986,6 +5036,281 @@ async function organizationUpdateApplicantSettings0098(serviceClient: SupabaseCl
   }
   await writeApplicantEvent(serviceClient, "applicant_settings_updated", null, organizationId, actorEmail, "Applicant portal settings updated.", existing || null, saved, {});
   return saved;
+}
+
+
+// =======================
+// Applicant-to-Person / Member Conversion 0102
+// =======================
+
+async function listApplicantConversionLookups0102(serviceClient: SupabaseClientAny, organizationId: string): Promise<JsonRecord> {
+  const [statuses, classes, stages] = await Promise.all([
+    serviceClient.from("core_membership_status_definitions").select("*").eq("organization_id", organizationId).is("archived_at", null).order("sort_order", { ascending: true }),
+    serviceClient.from("core_membership_class_definitions").select("*").eq("organization_id", organizationId).is("archived_at", null).order("sort_order", { ascending: true }),
+    serviceClient.from("core_application_stage_definitions").select("*").eq("organization_id", organizationId).is("archived_at", null).order("sort_order", { ascending: true }),
+  ]);
+  if (statuses.error) throw statuses.error;
+  if (classes.error) throw classes.error;
+  if (stages.error) throw stages.error;
+  return {
+    membership_statuses: statuses.data || [],
+    membership_classes: classes.data || [],
+    application_stages: stages.data || [],
+  };
+}
+
+function memberStatusIdByKey0102(rows: JsonRecord[], keyValue: unknown): string | null {
+  const k = normalizeKey(keyValue || "");
+  if (!k) return null;
+  const row = rows.find((r) => normalizeKey(r.status_key || r.key || r.lifecycle_status_key) === k);
+  return row?.status_definition_id ? clean(row.status_definition_id) : null;
+}
+
+function membershipClassIdByKey0102(rows: JsonRecord[], keyValue: unknown): string | null {
+  const k = normalizeKey(keyValue || "");
+  if (!k) return null;
+  const row = rows.find((r) => normalizeKey(r.class_key || r.key) === k);
+  return row?.membership_class_definition_id ? clean(row.membership_class_definition_id) : null;
+}
+
+function applicationStageIdByKey0102(rows: JsonRecord[], keyValue: unknown): string | null {
+  const k = normalizeKey(keyValue || "");
+  if (!k) return null;
+  const row = rows.find((r) => normalizeKey(r.stage_key || r.key) === k);
+  return row?.application_stage_definition_id ? clean(row.application_stage_definition_id) : null;
+}
+
+function applicantPersonProfileJson0102(applicant: JsonRecord, existing: JsonRecord | null = null): JsonRecord {
+  const existingProfile = jsonObject(existing?.profile_json);
+  const address = jsonObject(applicant.address_json);
+  const aviation = jsonObject(applicant.aviation_json);
+  const background = jsonObject(applicant.background_json);
+  const interest = jsonObject(applicant.interest_json);
+  const safety = jsonObject(applicant.safety_json);
+  const name = jsonObject(existingProfile.name);
+  const contact = jsonObject(existingProfile.contact);
+  return {
+    ...existingProfile,
+    name: {
+      ...name,
+      first_name: clean(applicant.first_name) || clean((existing as JsonRecord | null)?.first_name),
+      last_name: clean(applicant.last_name) || clean((existing as JsonRecord | null)?.last_name),
+      date_of_birth: applicant.date_of_birth || name.date_of_birth || null,
+    },
+    contact: {
+      ...contact,
+      address: clean(address.address || address.address_1 || address.street_address) || contact.address || "",
+      address_2: clean(address.address_2) || contact.address_2 || "",
+      city: clean(address.city) || contact.city || "",
+      state: clean(address.state) || contact.state || "",
+      zip: clean(address.zip) || contact.zip || "",
+      mobile_phone: clean(applicant.phone) || contact.mobile_phone || "",
+      primary_phone_type: contact.primary_phone_type || "mobile",
+    },
+    background: { ...jsonObject(existingProfile.background), ...background },
+    aviation: { ...jsonObject(existingProfile.aviation), ...aviation },
+    applicant: {
+      ...jsonObject(existingProfile.applicant),
+      application_id: applicant.application_id || null,
+      submitted_at: applicant.submitted_at || applicant.created_at || null,
+      interest_json: interest,
+      safety_json: safety,
+      converted_from_applicant: true,
+      converted_at: new Date().toISOString(),
+    },
+    scheduler: {
+      ...jsonObject(existingProfile.scheduler),
+      flight_scheduler_access: "pending_checkout",
+      checkout_required: true,
+      checkout_completed_at: null,
+      checkout_completed_by: null,
+      seeded_by: "0102-applicant-member-conversion",
+    },
+  };
+}
+
+async function applicantConversionMatches0102(serviceClient: SupabaseClientAny, organizationId: string, applicant: JsonRecord): Promise<JsonRecord[]> {
+  const email = safeEmail(applicant.email);
+  const phone = clean(applicant.phone).replace(/\D+/g, "");
+  const first = normalizeKey(applicant.first_name);
+  const last = normalizeKey(applicant.last_name);
+  const matches = new Map<string, JsonRecord>();
+
+  if (email) {
+    const { data, error } = await serviceClient.from("core_people").select("*").eq("primary_email", email).is("archived_at", null).limit(10);
+    if (error) throw error;
+    for (const row of data || []) matches.set(clean(row.person_id), { ...row, match_reason: "Email match" });
+  }
+
+  if (phone) {
+    const { data, error } = await serviceClient.from("core_people").select("*").is("archived_at", null).limit(200);
+    if (error) throw error;
+    for (const row of data || []) {
+      const p = clean(row.primary_phone).replace(/\D+/g, "");
+      if (p && p === phone) matches.set(clean(row.person_id), { ...row, match_reason: "Phone match" });
+    }
+  }
+
+  if (first && last) {
+    const { data, error } = await serviceClient.from("core_people").select("*").ilike("first_name", clean(applicant.first_name)).ilike("last_name", clean(applicant.last_name)).is("archived_at", null).limit(20);
+    if (error) throw error;
+    for (const row of data || []) {
+      const prior = matches.get(clean(row.person_id));
+      matches.set(clean(row.person_id), { ...row, match_reason: prior?.match_reason ? `${prior.match_reason}; Name match` : "Name match" });
+    }
+  }
+
+  const personIds = Array.from(matches.keys()).filter(Boolean);
+  if (!personIds.length) return [];
+  const { data: memberships, error: membershipError } = await serviceClient.from("core_organization_memberships").select("membership_id, person_id, organization_id, archived_at").eq("organization_id", organizationId).in("person_id", personIds);
+  if (membershipError) throw membershipError;
+  const membershipByPerson = new Map<string, JsonRecord>();
+  for (const row of memberships || []) membershipByPerson.set(clean(row.person_id), row);
+
+  return Array.from(matches.values()).map((row) => ({
+    person_id: row.person_id,
+    display_name: row.display_name || `${clean(row.first_name)} ${clean(row.last_name)}`,
+    first_name: row.first_name || "",
+    last_name: row.last_name || "",
+    primary_email: row.primary_email || "",
+    primary_phone: row.primary_phone || "",
+    match_reason: row.match_reason || "Possible match",
+    existing_membership_id: membershipByPerson.get(clean(row.person_id))?.membership_id || null,
+    has_active_membership: Boolean(membershipByPerson.get(clean(row.person_id)) && !membershipByPerson.get(clean(row.person_id))?.archived_at),
+  })).slice(0, 10);
+}
+
+async function organizationGetApplicantConversionOptions0102(serviceClient: SupabaseClientAny, organizationId: string, body: JsonRecord): Promise<JsonRecord> {
+  const applicationId = requireString(body, "application_id");
+  const applicant = await getApplicantApplication(serviceClient, organizationId, applicationId);
+  const lookups = await listApplicantConversionLookups0102(serviceClient, organizationId);
+  const matches = await applicantConversionMatches0102(serviceClient, organizationId, applicant);
+  return { applicant, matches, ...lookups };
+}
+
+async function organizationConvertApplicantToMember0102(serviceClient: SupabaseClientAny, organizationId: string, body: JsonRecord, actorEmail: string, actorPerson: JsonRecord): Promise<JsonRecord> {
+  const applicationId = requireString(body, "application_id");
+  const mode = normalizeKey(body.conversion_mode || body.mode || "");
+  if (!["create_new", "link_existing"].includes(mode)) throw new Error("Choose whether to create a new person or link an existing person.");
+  const applicant = await getApplicantApplication(serviceClient, organizationId, applicationId);
+  const status = normalizeApplicantStatus(applicant.applicant_status || applicant.status, "new");
+  if (!["onboarding", "ready_for_final_review"].includes(status)) throw new Error("Applicants should be in Onboarding or Ready for Final Review before conversion.");
+
+  const lookups = await listApplicantConversionLookups0102(serviceClient, organizationId);
+  const statusId = memberStatusIdByKey0102(lookups.membership_statuses, body.membership_status_key || body.status_key);
+  const classId = membershipClassIdByKey0102(lookups.membership_classes, body.membership_class_key || body.class_key);
+  const stageId = applicationStageIdByKey0102(lookups.application_stages, body.application_stage_key || body.stage_key);
+  if (!statusId && !classId && !stageId) throw new Error("Choose at least one initial member status, class, or stage before conversion.");
+
+  let person: JsonRecord | null = null;
+  if (mode === "link_existing") {
+    const personId = requireString(body, "person_id");
+    const { data, error } = await serviceClient.from("core_people").select("*").eq("person_id", personId).maybeSingle();
+    if (error) throw error;
+    if (!data?.person_id) throw new Error("Selected existing person was not found.");
+    person = data;
+    const profilePayload = applicantPersonProfileJson0102(applicant, person);
+    const { data: updated, error: updateError } = await serviceClient.from("core_people").update({
+      display_name: clean(person.display_name) || clean(applicant.display_name || `${applicant.first_name} ${applicant.last_name}`),
+      first_name: clean(person.first_name) || clean(applicant.first_name),
+      last_name: clean(person.last_name) || clean(applicant.last_name),
+      primary_email: safeEmail(person.primary_email || applicant.email) || null,
+      primary_phone: clean(person.primary_phone || applicant.phone) || null,
+      profile_json: profilePayload,
+      updated_at: new Date().toISOString(),
+    }).eq("person_id", clean(person.person_id)).select("*").single();
+    if (updateError) throw updateError;
+    person = updated;
+  } else {
+    const displayName = clean(applicant.display_name || `${applicant.first_name} ${applicant.last_name}`) || "New Member";
+    const payload = {
+      display_name: displayName,
+      first_name: clean(applicant.first_name) || null,
+      last_name: clean(applicant.last_name) || null,
+      primary_email: safeEmail(applicant.email) || null,
+      primary_phone: clean(applicant.phone) || null,
+      status: "active",
+      profile_json: applicantPersonProfileJson0102(applicant, null),
+    };
+    const { data, error } = await serviceClient.from("core_people").insert(payload).select("*").single();
+    if (error) throw error;
+    person = data;
+  }
+
+  if (!person?.person_id) throw new Error("Person record could not be created or linked.");
+  const personId = clean(person.person_id);
+  const memberSettings = {
+    source: "applicant_conversion",
+    source_application_id: applicationId,
+    converted_at: new Date().toISOString(),
+    converted_by_email: actorEmail || null,
+    flight_scheduler_access: "pending_checkout",
+    checkout_required: true,
+    checkout_completed_at: null,
+    checkout_completed_by: null,
+  };
+
+  const { data: existingMembership, error: memberLookupError } = await serviceClient.from("core_organization_memberships").select("*").eq("organization_id", organizationId).eq("person_id", personId).is("archived_at", null).maybeSingle();
+  if (memberLookupError) throw memberLookupError;
+  const membershipPayload: JsonRecord = {
+    organization_id: organizationId,
+    person_id: personId,
+    status_definition_id: statusId || existingMembership?.status_definition_id || null,
+    membership_class_definition_id: classId || existingMembership?.membership_class_definition_id || null,
+    application_stage_definition_id: stageId || existingMembership?.application_stage_definition_id || null,
+    member_number: clean(body.member_number || existingMembership?.member_number),
+    title: clean(body.title || existingMembership?.title),
+    email_override: safeEmail(applicant.email) || existingMembership?.email_override || null,
+    phone_override: clean(applicant.phone) || existingMembership?.phone_override || null,
+    joined_at: body.joined_at || existingMembership?.joined_at || new Date().toISOString().slice(0, 10),
+    settings_json: { ...jsonObject(existingMembership?.settings_json), applicant_conversion: memberSettings, scheduler: { ...jsonObject(jsonObject(existingMembership?.settings_json).scheduler), ...memberSettings } },
+    updated_at: new Date().toISOString(),
+    archived_at: null,
+  };
+  let membership: JsonRecord;
+  if (existingMembership?.membership_id) {
+    const { data, error } = await serviceClient.from("core_organization_memberships").update(membershipPayload).eq("membership_id", clean(existingMembership.membership_id)).select("*").single();
+    if (error) throw error;
+    membership = data;
+  } else {
+    const { data, error } = await serviceClient.from("core_organization_memberships").insert(membershipPayload).select("*").single();
+    if (error) throw error;
+    membership = data;
+  }
+
+  const now = new Date().toISOString();
+  const appUpdate = {
+    person_id: personId,
+    converted_person_id: personId,
+    converted_membership_id: membership.membership_id || null,
+    converted_at: now,
+    converted_by_email: actorEmail || null,
+    applicant_status: "archived",
+    status: "archived",
+    stage_key: "archived",
+    archived_at: now,
+    archived_by_email: actorEmail || null,
+    archive_reason_key: "added_as_member",
+    archive_reason_label: "Added as Member",
+    archive_reason_note: clean(body.conversion_note || "Applicant added as member."),
+    conversion_json: { mode, person_id: personId, membership_id: membership.membership_id || null, membership_status_key: body.membership_status_key || null, membership_class_key: body.membership_class_key || null, application_stage_key: body.application_stage_key || null, scheduler: memberSettings },
+    last_activity_at: now,
+    updated_at: now,
+  };
+  const { data: updatedApplicant, error: applicantUpdateError } = await serviceClient.from("core_applications").update(appUpdate).eq("organization_id", organizationId).eq("application_id", applicationId).select("*").single();
+  if (applicantUpdateError) throw applicantUpdateError;
+
+  const conversionMeta = { mode, person_id: personId, membership_id: membership.membership_id || null, application_id: applicationId };
+  await writeApplicantEvent(serviceClient, "applicant_converted_to_member", applicationId, organizationId, actorEmail, "Applicant added as member.", applicant, updatedApplicant, conversionMeta);
+  try {
+    await serviceClient.from("core_person_timeline_notes").insert({ organization_id: organizationId, application_id: applicationId, person_id: personId, note_type: "conversion", source: "system", title: "Applicant added as member", body: `Applicant record was converted/linked to People by ${actorEmail || "an admin"}.`, actor_email: actorEmail || null, actor_name: clean(actorPerson?.display_name || actorPerson?.first_name || actorEmail), metadata_json: conversionMeta });
+  } catch (timelineError) { console.warn("applicant_conversion_timeline_failed", timelineError instanceof Error ? timelineError.message : String(timelineError)); }
+  try {
+    await serviceClient.from("core_applicant_conversion_log").insert({ application_id: applicationId, organization_id: organizationId, person_id: personId, membership_id: membership.membership_id || null, conversion_mode: mode, actor_email: actorEmail || null, before_json: applicant, after_json: updatedApplicant, conversion_json: conversionMeta });
+  } catch (logError) { console.warn("applicant_conversion_log_failed", logError instanceof Error ? logError.message : String(logError)); }
+
+  const enrichedApplicant = await getApplicantApplication(serviceClient, organizationId, applicationId);
+  return { applicant: enrichedApplicant, person, membership, conversion: conversionMeta };
 }
 
 serve(async (req: Request) => {
@@ -5251,6 +5576,21 @@ serve(async (req: Request) => {
         await getPortalPageForAction(serviceClient, organizationId, "applicant-tracker", platformAdmin);
         const settings = await organizationUpdateApplicantSettings0098(serviceClient, organizationId, body, actorEmail);
         return jsonResponse(200, { ok: true, action, access: actorAccess, settings });
+      }
+
+      if (action === "organization_get_applicant_conversion_options") {
+        const actorAccess = await requireApplicantTrackerAccess(serviceClient, personId, organizationId, platformAdmin);
+        await getPortalPageForAction(serviceClient, organizationId, "applicant-tracker", platformAdmin);
+        const result = await organizationGetApplicantConversionOptions0102(serviceClient, organizationId, body);
+        return jsonResponse(200, { ok: true, action, access: actorAccess, ...result });
+      }
+
+      if (action === "organization_convert_applicant_to_member") {
+        const actorAccess = await requireApplicantTrackerAccess(serviceClient, personId, organizationId, platformAdmin);
+        await getPortalPageForAction(serviceClient, organizationId, "applicant-tracker", platformAdmin);
+        const result = await organizationConvertApplicantToMember0102(serviceClient, organizationId, body, actorEmail, person);
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_applications", clean(body.application_id), { ...body, person_id: body.person_id ? "[selected]" : undefined }, { application_id: result.applicant?.application_id, person_id: result.person?.person_id, membership_id: result.membership?.membership_id });
+        return jsonResponse(200, { ok: true, action, access: actorAccess, ...result });
       }
 
       if (action === "organization_add_applicant_note") {

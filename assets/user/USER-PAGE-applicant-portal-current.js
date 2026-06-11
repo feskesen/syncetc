@@ -1,11 +1,11 @@
 // USER-PAGE-applicant-portal-current.js
-// Internal Version: 2026-06-10-107-B
+// Internal Version: 2026-06-10-107-C
 // Purpose: Applicant-only portal for application updates, stage tasks, and private upload tasks.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-10-107-B";
+  const VERSION = "2026-06-10-107-C";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -148,7 +148,7 @@
     if (tokenHash && client.auth.verifyOtp) {
       const rawType = clean(url.searchParams.get('type') || hash.get('type') || 'magiclink');
       const type = ['magiclink','signup','recovery','invite','email'].includes(rawType) ? rawType : 'magiclink';
-      mark('authCallback:verifyOtp', type);
+      mark('authCallback:verifyOtp', `${type} token_hash`);
       const { error } = await client.auth.verifyOtp({ type, token_hash: tokenHash });
       if (error) throw error;
       cleanAuthCallbackUrl();

@@ -1,11 +1,11 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-12-108-D
+// Internal Version: 2026-06-12-108-F
 // Purpose: Public page wrapper. It never renders its own header; it feeds context to the single organization header engine.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-12-108-D";
+  const VERSION = "2026-06-12-108-F";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -519,7 +519,21 @@
     if (!response.ok || !result || result.ok === false) {
       const message = clean(result?.message || result?.error || `HTTP ${response.status}`);
       const errorKey = key(`${result?.error || ""} ${message}`);
-      if (errorKey.includes("no-organization") || errorKey.includes("not-linked") || errorKey.includes("no-active") || errorKey.includes("access-denied") || errorKey.includes("not-authorized")) return null;
+      // Public pages must remain public even when the current Supabase session is an applicant-only login.
+      // The backend correctly refuses member/admin access with applicant_access_only, but that should not
+      // replace the public header with an error. Treat it like "no member access" and render public nav only.
+      if (
+        errorKey.includes("applicant-access-only") ||
+        errorKey.includes("applicant-portal-login-only") ||
+        errorKey.includes("no-organization") ||
+        errorKey.includes("not-linked") ||
+        errorKey.includes("no-active") ||
+        errorKey.includes("access-denied") ||
+        errorKey.includes("not-authorized")
+      ) {
+        debugStep("callAccess:public-only", errorKey);
+        return null;
+      }
       throw new Error(message || "Organization access context failed.");
     }
     return result;

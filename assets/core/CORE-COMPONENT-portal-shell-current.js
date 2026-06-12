@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-12-107-D
-// Purpose: Portal shell for user/admin/applicant pages with applicant-safe navigation boundaries.
+// Internal Version: 2026-06-12-108-C
+// Purpose: Portal shell for user/admin/applicant pages with applicant-safe navigation boundaries and applicant logout redirect.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-12-107-D";
+  const VERSION = "2026-06-12-108-C";
   const SHELL_ID = "syncetc-organization-header";
   const FOOTER_ID = "syncetc-portal-footer";
   const LOGIN_MODAL_ID = "syncetc-portal-login-modal";
@@ -599,11 +599,24 @@
     setLoginMessage("Password reset email requested.", "ok");
   }
 
+  function shouldRedirectHomeAfterLogout() {
+    const accessRow = obj(state.accessRow);
+    return state.mode === "applicant"
+      || accessRow.is_applicant === true
+      || clean(accessRow.access_level) === "applicant"
+      || /\/applicant-portal\/?$/i.test(window.location.pathname || "");
+  }
+
   async function shellLogout() {
+    const redirectHome = shouldRedirectHomeAfterLogout();
     const client = await ensureShellSupabase();
     await client.auth.signOut();
     setState({ authenticated: false, email: "", organizations: [], organizationOptions: [], accessRow: null, platformAdmin: false, shellAuthChecked: true });
     window.dispatchEvent(new CustomEvent("syncetc:portal-auth-changed", { detail: { authenticated: false, email: "" } }));
+    if (redirectHome) {
+      try { window.sessionStorage.setItem("syncetc_just_logged_out", "1"); } catch {}
+      window.location.assign("/");
+    }
   }
 
   async function syncShellAuth(skipRender = false) {

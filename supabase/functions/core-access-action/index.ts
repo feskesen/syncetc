@@ -1,7 +1,7 @@
 // index.ts
 // Deploy target: Supabase Edge Function named core-access-action
 // JWT verification: ON
-// Internal Version: 2026-06-10-103-A
+// Internal Version: 2026-06-10-107-C
 // Purpose: secured user/organization-admin access foundation for SyncEtc. Separates lifecycle status, membership class, onboarding/application stage, roles, permissions, and future RSVP audience rules.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
@@ -11,7 +11,7 @@ type JsonRecord = Record<string, unknown>;
 type SupabaseClientAny = any;
 declare const Deno: { env: { get: (key: string) => string | undefined } };
 
-const VERSION = "2026-06-10-103-A";
+const VERSION = "2026-06-10-107-C";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -419,14 +419,16 @@ async function attachApplicantTrackerBadges(serviceClient: SupabaseClientAny, or
   try {
     const { data, error } = await serviceClient
       .from("core_applications")
-      .select("organization_id, application_id, applicant_status, archived_at")
+      .select("organization_id, application_id, applicant_status, stage_key, archived_at, needs_attention, ready_for_final_review")
       .in("organization_id", ids)
-      .in("applicant_status", ["new", "ready_for_final_review"])
       .is("archived_at", null)
       .limit(10000);
     if (error) return;
     const counts = new Map<string, number>();
     for (const row of ((data || []) as JsonRecord[])) {
+      const status = normalizeApplicantStatus(row.applicant_status || row.stage_key || "new", "new");
+      const attention = status === "new" || row.needs_attention === true || row.ready_for_final_review === true || status === "ready_for_final_review";
+      if (!attention) continue;
       const orgId = clean(row.organization_id);
       if (orgId) counts.set(orgId, (counts.get(orgId) || 0) + 1);
     }
@@ -437,7 +439,7 @@ async function attachApplicantTrackerBadges(serviceClient: SupabaseClientAny, or
         if (normalizeKey(item.item_key || item.page_key) === "applicant-tracker") {
           item.badge_count = count;
           item.badge_label = count > 0 ? String(count) : "";
-          item.badge_source = "open_applicant_count";
+          item.badge_source = "applicant_attention_count";
         }
       }
     }
@@ -3549,7 +3551,122 @@ async function getApplicantApplication(serviceClient: SupabaseClientAny, organiz
   return applicant;
 }
 
-async function updateApplicantApplication(serviceClient: SupabaseClientAny, organizationId: string, body: JsonRecord, actorEmail: string): Promise<JsonRecord> {
+
+const APPLICANT_STAGE_ORDER_0104: Record<string, number> = { new: 10, waitlist: 20, invited_to_interview: 30, onboarding: 40, ready_for_final_review: 50, archived: 999 };
+function applicantStageOrder0104(stageKey: unknown): number { return APPLICANT_STAGE_ORDER_0104[normalizeApplicantStatus(stageKey, "new")] || 0; }
+function applicantTaskComplete0104(task: JsonRecord): boolean {
+  const status = normalizeKey(task.status || "pending");
+  return status === "completed" || status === "waived";
+}
+function applicantTaskNeedsAdminAttention0104(task: JsonRecord): boolean {
+  const status = normalizeKey(task.status || "pending");
+  const responsible = normalizeKey(task.responsible_party || "admin");
+  const review = normalizeKey(task.review_status || task.upload_status || "");
+  return (responsible !== "applicant" && task.is_required !== false && !["completed", "waived"].includes(status)) || ["submitted", "request_changes", "rejected"].includes(review);
+}
+async function incompleteRequiredTasksForStage0104(serviceClient: SupabaseClientAny, organizationId: string, applicationId: string, stageKey: string): Promise<JsonRecord[]> {
+  await ensureApplicantStageTasks0099(serviceClient, organizationId, applicationId, stageKey);
+  const { data, error } = await serviceClient
+    .from("core_applicant_tasks")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .eq("application_id", applicationId)
+    .eq("stage_key", stageKey)
+    .is("archived_at", null)
+    .order("sort_order", { ascending: true });
+  if (error) throw error;
+  return ((data || []) as JsonRecord[]).map(safeApplicantTask).filter((task) => task.is_required !== false && !applicantTaskComplete0104(task));
+}
+async function updateApplicantAttentionFlags0104(serviceClient: SupabaseClientAny, organizationId: string, applicationId: string): Promise<void> {
+  try {
+    const app = await getApplicantApplication(serviceClient, organizationId, applicationId);
+    const stageKey = normalizeApplicantStatus(app.stage_key || app.status || "new", "new");
+    const appCurrentTasks = Array.isArray(app.current_stage_tasks) ? app.current_stage_tasks as JsonRecord[] : []; const appTasks = Array.isArray(app.tasks) ? app.tasks as JsonRecord[] : []; const currentTasks = appCurrentTasks.length ? appCurrentTasks : appTasks.filter((task: JsonRecord) => clean(task.stage_key) === stageKey);
+    const needsAttention = stageKey === "new" || stageKey === "ready_for_final_review" || currentTasks.some(applicantTaskNeedsAdminAttention0104);
+    const ready = currentTasks.length > 0 && currentTasks.filter((task: JsonRecord) => task.is_required !== false).every(applicantTaskComplete0104);
+    await serviceClient.from("core_applications").update({ needs_attention: needsAttention, ready_for_final_review: ready && stageKey === "ready_for_final_review", ready_for_final_review_at: ready && stageKey === "ready_for_final_review" ? new Date().toISOString() : null, updated_at: new Date().toISOString() }).eq("organization_id", organizationId).eq("application_id", applicationId);
+  } catch (error) {
+    console.warn("applicant_attention_update_failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
+function applicantTaskIsCompleteForStage0104(task: JsonRecord): boolean {
+  const status = normalizeKey(task.status || "pending");
+  const review = normalizeKey(task.review_status || task.upload_status || "");
+  if (["completed", "waived"].includes(status)) return true;
+  if (task.task_type === "upload" && review === "accepted") return true;
+  return false;
+}
+
+async function assertApplicantCanAdvanceStage0104(serviceClient: SupabaseClientAny, organizationId: string, applicationId: string, fromStage: string, toStage: string): Promise<void> {
+  const stages = await listApplicantWorkflowStages0099(serviceClient, organizationId);
+  const order = new Map<string, number>();
+  for (const st of stages) order.set(clean(st.stage_key), Number(st.sort_order || 100));
+  const fromOrder = order.get(clean(fromStage)) ?? 0;
+  const toOrder = order.get(clean(toStage)) ?? fromOrder;
+  if (toOrder <= fromOrder || clean(toStage) === "archived") return;
+  await ensureApplicantStageTasks0099(serviceClient, organizationId, applicationId, fromStage);
+  const taskMap = await listApplicantTasks(serviceClient, [applicationId]);
+  const missing = (taskMap.get(applicationId) || []).filter((task: JsonRecord) => {
+    return clean(task.stage_key || fromStage) === clean(fromStage) && task.is_required !== false && !applicantTaskIsCompleteForStage0104(task);
+  });
+  if (missing.length) {
+    const labels = missing.map((task: JsonRecord) => clean(task.label || task.task_key)).filter(Boolean).join(", ");
+    throw new Error(`Required checklist items must be completed before moving to the next stage: ${labels}`);
+  }
+}
+
+
+function applicantTransitionEntries0105(body: JsonRecord): { confirmations: JsonRecord[]; actions: JsonRecord[]; note: string } {
+  const confirmationsRaw = jsonObject(body.transition_confirmations);
+  const actionsRaw = jsonObject(body.transition_actions);
+  const confirmations = Object.keys(confirmationsRaw)
+    .filter((key) => confirmationsRaw[key] === true)
+    .map((key) => ({ key, label: key.replace(/_/g, " "), confirmed: true }));
+  const actions = Object.keys(actionsRaw)
+    .filter((key) => actionsRaw[key] !== false)
+    .map((key) => ({ key, label: key.replace(/_/g, " "), selected: true }));
+  return { confirmations, actions, note: clean(body.transition_note || body.note) };
+}
+
+function applicantTransitionEmailTemplateKey0105(actionKey: string): string {
+  if (actionKey === "send_interview_invitation") return "interview-invite";
+  if (actionKey === "send_onboarding_instructions") return "onboarding-instructions";
+  return "";
+}
+
+async function applyApplicantTransitionActions0105(serviceClient: SupabaseClientAny, organizationId: string, applicationId: string, body: JsonRecord, actorEmail: string, actorPerson: JsonRecord | null = null): Promise<void> {
+  const { confirmations, actions, note } = applicantTransitionEntries0105(body);
+  const fromStage = clean(body.transition_from);
+  const toStage = clean(body.transition_to || body.applicant_status || body.status);
+  if (!confirmations.length && !actions.length && !note && !fromStage && !toStage) return;
+  await writeApplicantEvent(serviceClient, "applicant_stage_transition", applicationId, organizationId, actorEmail, note || `Applicant moved to ${toStage || "next stage"}.`, null, null, { from_stage: fromStage || null, to_stage: toStage || null, confirmations, actions });
+  for (const confirmation of confirmations) {
+    await writeApplicantEvent(serviceClient, "applicant_transition_confirmation", applicationId, organizationId, actorEmail, clean(confirmation.label), null, null, { from_stage: fromStage || null, to_stage: toStage || null, confirmation_key: confirmation.key, confirmed: true });
+  }
+  for (const action of actions) {
+    const actionKey = clean(action.key);
+    if (actionKey === "grant_applicant_portal_access") {
+      const { error } = await serviceClient.from("core_applications").update({ portal_access_granted: true, portal_access_granted_at: new Date().toISOString(), portal_access_granted_by_email: actorEmail || null, updated_at: new Date().toISOString() }).eq("organization_id", organizationId).eq("application_id", applicationId);
+      if (error) throw error;
+      await writeApplicantEvent(serviceClient, "applicant_portal_access_granted", applicationId, organizationId, actorEmail, "Applicant portal access granted during stage transition.", null, null, { from_stage: fromStage || null, to_stage: toStage || null });
+      continue;
+    }
+    const templateKey = applicantTransitionEmailTemplateKey0105(actionKey);
+    if (templateKey) {
+      try {
+        const result = await sendApplicantReply(serviceClient, organizationId, { application_id: applicationId, reply_kind: "prefab", template_key: templateKey, note: `Automatic workflow email: ${templateKey}` }, actorEmail, actorPerson || {});
+        await writeApplicantEvent(serviceClient, "applicant_automatic_email_sent", applicationId, organizationId, actorEmail, `Automatic workflow email sent: ${templateKey}`, null, null, { template_key: templateKey, result });
+      } catch (error) {
+        await writeApplicantEvent(serviceClient, "applicant_automatic_email_failed", applicationId, organizationId, actorEmail, `Automatic workflow email could not be sent: ${templateKey}`, null, null, { template_key: templateKey, error: error instanceof Error ? error.message : String(error) });
+      }
+      continue;
+    }
+    await writeApplicantEvent(serviceClient, "applicant_automatic_action_logged", applicationId, organizationId, actorEmail, clean(action.label || actionKey), null, null, { action_key: actionKey, from_stage: fromStage || null, to_stage: toStage || null });
+  }
+}
+
+async function updateApplicantApplication(serviceClient: SupabaseClientAny, organizationId: string, body: JsonRecord, actorEmail: string, actorPerson: JsonRecord | null = null): Promise<JsonRecord> {
   const applicationId = requireString(body, "application_id");
   const before = await getApplicantApplication(serviceClient, organizationId, applicationId);
   const payload: JsonRecord = { updated_at: new Date().toISOString(), last_activity_at: new Date().toISOString() };
@@ -3557,6 +3674,13 @@ async function updateApplicantApplication(serviceClient: SupabaseClientAny, orga
   let restoredFromArchived = false;
   if (Object.prototype.hasOwnProperty.call(body, "applicant_status") || Object.prototype.hasOwnProperty.call(body, "status")) {
     const status = normalizeApplicantStatus(body.applicant_status || body.status, clean(before.status));
+    const beforeStage = normalizeApplicantStatus(before.stage_key || before.status || before.applicant_status, "new");
+    if (status !== "archived" && applicantStageOrder0104(status) > applicantStageOrder0104(beforeStage)) {
+      const missingTasks = await incompleteRequiredTasksForStage0104(serviceClient, organizationId, applicationId, beforeStage);
+      if (missingTasks.length) {
+        throw new Error(`Required checklist items must be completed before advancing: ${missingTasks.map((task) => clean(task.label || task.task_key)).join(", ")}`);
+      }
+    }
     payload.applicant_status = status;
     payload.status = status;
     payload.stage_key = status;
@@ -3600,6 +3724,7 @@ async function updateApplicantApplication(serviceClient: SupabaseClientAny, orga
   } else {
     await writeApplicantEvent(serviceClient, "application_updated", applicationId, organizationId, actorEmail, clean(body.note), before, after, { changed_fields: Object.keys(payload) });
   }
+  await applyApplicantTransitionActions0105(serviceClient, organizationId, applicationId, body, actorEmail, actorPerson || {});
   return await getApplicantApplication(serviceClient, organizationId, applicationId);
 }
 
@@ -3616,6 +3741,7 @@ async function updateApplicantTask(serviceClient: SupabaseClientAny, organizatio
   const { data, error } = await serviceClient.from("core_applicant_tasks").update(payload).eq("applicant_task_id", taskItemId).eq("organization_id", organizationId).select("*").single();
   if (error) throw error;
   await writeApplicantEvent(serviceClient, "task_updated", clean(before.application_id), organizationId, actorEmail, clean(body.note), safeApplicantTask(before), safeApplicantTask(data), { task_key: before.task_key, status });
+  await updateApplicantAttentionFlags0104(serviceClient, organizationId, clean(before.application_id));
   return safeApplicantTask(data);
 }
 
@@ -3819,7 +3945,7 @@ async function ensureApplicantStageTasks0099(serviceClient: SupabaseClientAny, o
     task_type: clean(task.task_type || "manual"),
     is_required: task.is_required !== false,
     sort_order: Number(task.sort_order || 100),
-    applicant_visible: true,
+    applicant_visible: task.applicant_visible !== false,
     settings_json: jsonObject(task.settings_json),
   })).filter((row) => row.task_key && row.label);
   if (rows.length) await serviceClient.from("core_applicant_tasks").upsert(rows, { onConflict: "application_id,task_key" });
@@ -4852,7 +4978,23 @@ async function listApplicantUploadsMap0098(serviceClient: SupabaseClientAny, app
   if (!ids.length) return out;
   const { data, error } = await serviceClient.from("core_applicant_task_uploads").select("*").in("application_id", ids).is("archived_at", null).order("uploaded_at", { ascending: false });
   if (error) throw error;
-  for (const row of ((data || []) as JsonRecord[])) {
+  for (const rawRow of ((data || []) as JsonRecord[])) {
+    const row: JsonRecord = { ...rawRow };
+    const bucket = clean(row.storage_bucket || "core-applicant-documents") || "core-applicant-documents";
+    const storagePath = clean(row.storage_path);
+    if (storagePath) {
+      try {
+        const { data: signed } = await serviceClient.storage.from(bucket).createSignedUrl(storagePath, 3600, { download: clean(row.original_file_name || "applicant-upload") || "applicant-upload" });
+        if (signed?.signedUrl) {
+          row.signed_url = signed.signedUrl;
+          row.download_signed_url = signed.signedUrl;
+          row.signed_url_expires_in = 3600;
+        }
+      } catch (signedError) {
+        console.warn("applicant_upload_signed_url_failed", signedError instanceof Error ? signedError.message : String(signedError));
+      }
+    }
+    row.display_name = clean(row.original_file_name || row.task_key || "Applicant upload");
     const taskId = clean(row.applicant_task_id || row.task_key || "");
     const list = out.get(taskId) || [];
     list.push(row);
@@ -4868,6 +5010,89 @@ function enrichApplicantTasksWithUploads0098(tasks: JsonRecord[], uploadsMap: Ma
     const newest = uploads[0] || null;
     return { ...task, uploads, latest_upload: newest, upload_required: task.upload_required === true || jsonObject(task.settings_json).upload_required === true || ["upload", "document"].includes(clean(task.task_type)) };
   });
+}
+
+
+function escapeHtml0107(value: unknown): string {
+  return String(value ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#039;");
+}
+
+function applicantPortalCallbackUrl0107(redirectTo: string, tokenHash: string): string {
+  const fallback = "https://syncetc.webflow.io/applicant-portal";
+  const safeRedirect = clean(redirectTo) || fallback;
+  const url = new URL(safeRedirect, fallback);
+  url.searchParams.set("token_hash", tokenHash);
+  url.searchParams.set("type", "magiclink");
+  url.searchParams.set("applicant_magic", "1");
+  return url.toString();
+}
+
+async function ensureApplicantPortalAuthLink0107(serviceClient: SupabaseClientAny, email: string, redirectTo: string): Promise<string> {
+  try {
+    await serviceClient.auth.admin.createUser({ email, email_confirm: true, user_metadata: { syncetc_account_type: "applicant" } } as any);
+  } catch (createError) {
+    const msg = String((createError as Error)?.message || createError || "").toLowerCase();
+    if (!msg.includes("already") && !msg.includes("registered") && !msg.includes("exists")) console.warn("applicant_portal_create_auth_user_warning", createError);
+  }
+  const { data, error } = await serviceClient.auth.admin.generateLink({ type: "magiclink", email, options: { redirectTo } } as any);
+  if (error) throw error;
+  const raw: any = data || {};
+  const props: any = raw.properties || {};
+  let tokenHash = clean(props.hashed_token || props.token_hash || raw.hashed_token || raw.token_hash || "");
+  if (!tokenHash) {
+    const actionLink = clean(props.action_link || raw.action_link || "");
+    if (actionLink) {
+      try { tokenHash = clean(new URL(actionLink).searchParams.get("token")); } catch (_) {}
+    }
+  }
+  if (!tokenHash) throw new Error("Could not create applicant portal login token.");
+  return applicantPortalCallbackUrl0107(redirectTo, tokenHash);
+}
+
+async function sendApplicantPortalLinkEmail0107(email: string, orgName: string, link: string): Promise<JsonRecord> {
+  const apiKey = clean(Deno.env.get("RESEND_API_KEY"));
+  if (!apiKey) throw new Error("Outbound email is not configured. Missing RESEND_API_KEY for this Edge Function.");
+  const fromEmail = clean(Deno.env.get("SYNCETC_CONTACT_FROM_EMAIL") || Deno.env.get("RESEND_FROM_EMAIL") || "no-reply@syncetc.com");
+  const subject = `${orgName || "Applicant Portal"} applicant portal link`;
+  const text = `Use this secure link to access your applicant portal for ${orgName || "the organization"}:\n\n${link}\n\nIf you did not request this link, you can ignore this email.`;
+  const html = `<p>Use this secure link to access your applicant portal for <strong>${escapeHtml0107(orgName || "the organization")}</strong>:</p><p><a href="${escapeHtml0107(link)}">Open applicant portal</a></p><p>If you did not request this link, you can ignore this email.</p>`;
+  const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ from: `${orgName || "SyncEtc"} via SyncEtc <${fromEmail}>`, to: [email], subject, text, html }) });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(clean(json?.message || json?.error || `Resend HTTP ${response.status}`));
+  return { provider: "resend", provider_response: json };
+}
+
+async function organizationSendApplicantPortalInvite0107(serviceClient: SupabaseClientAny, organizationId: string, body: JsonRecord, actorEmail: string): Promise<JsonRecord> {
+  const applicationId = requireString(body, "application_id");
+  const { data: applicant, error } = await serviceClient.from("core_applications").select("*").eq("organization_id", organizationId).eq("application_id", applicationId).maybeSingle();
+  if (error) throw error;
+  if (!applicant?.application_id) throw new Error("Applicant was not found.");
+  const email = safeEmail(applicant.email || applicant.primary_email);
+  if (!email) throw new Error("Applicant does not have a valid email address.");
+  const { data: org } = await serviceClient.from("core_organizations").select("display_name").eq("organization_id", organizationId).maybeSingle();
+  const redirectTo = clean(body.redirect_to) || "https://syncetc.webflow.io/applicant-portal";
+  const link = await ensureApplicantPortalAuthLink0107(serviceClient, email, redirectTo);
+  const sendResult = await sendApplicantPortalLinkEmail0107(email, clean(org?.display_name || applicant.organization_name || "Applicant Portal"), link);
+  const now = new Date().toISOString();
+  const { data: saved, error: updateError } = await serviceClient.from("core_applications").update({ portal_access_granted: true, portal_access_granted_at: applicant.portal_access_granted_at || now, portal_access_granted_by_email: applicant.portal_access_granted_by_email || actorEmail || null, portal_invite_sent_at: now, portal_invite_sent_by_email: actorEmail || null, updated_at: now }).eq("application_id", applicationId).select("*").single();
+  if (updateError) throw updateError;
+  await writeApplicantEvent(serviceClient, "applicant_portal_invite_sent", applicationId, organizationId, actorEmail, "Applicant portal access link sent.", applicant, saved, { to_email: email, send_result: sendResult });
+  return { applicant: await getApplicantApplication(serviceClient, organizationId, applicationId), to: email, sent: true };
+}
+
+async function applicantPortalResolveOrganizationId0106(serviceClient: SupabaseClientAny, body: JsonRecord): Promise<string> {
+  const direct = clean(body.organization_id);
+  if (direct) return direct;
+  const orgKey = normalizeKey(body.organization_key || body.customer_key || body.org_key);
+  if (!orgKey) return "";
+  const { data, error } = await serviceClient
+    .from("core_organizations")
+    .select("organization_id")
+    .eq("organization_key", orgKey)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (error) throw error;
+  return clean(data?.organization_id);
 }
 
 async function applicantPortalFindApplication0098(serviceClient: SupabaseClientAny, actorEmail: string, authUserId: string, organizationId = ""): Promise<{ app: JsonRecord; settings: JsonRecord; organization: JsonRecord; page: JsonRecord | null; }> {
@@ -4986,7 +5211,7 @@ async function applicantUploadTaskFile0098(serviceClient: SupabaseClientAny, act
   const path = `organizations/${clean(found.app.organization_id)}/applicants/${applicationId}/tasks/${clean(task.task_key || taskId)}/${Date.now()}-${normalizeKey(fileName) || "upload"}.${ext}`;
   const { error: uploadError } = await serviceClient.storage.from(bucket).upload(path, bytes, { contentType: mime, upsert: false });
   if (uploadError) throw uploadError;
-  const { data: upload, error } = await serviceClient.from("core_applicant_task_uploads").insert({ application_id: applicationId, organization_id: clean(found.app.organization_id), applicant_task_id: taskId, applicant_user_id: authUserId || null, task_key: clean(task.task_key), storage_bucket: bucket, storage_path: path, original_file_name: fileName, mime_type: mime, file_size_bytes: bytes.length, upload_status: "submitted", visibility: "private", applicant_note: clean(body.applicant_note), uploaded_by_email: actorEmail, metadata_json: { version: "2026-06-10-102-A", source: "applicant_portal" } }).select("*").single();
+  const { data: upload, error } = await serviceClient.from("core_applicant_task_uploads").insert({ application_id: applicationId, organization_id: clean(found.app.organization_id), applicant_task_id: taskId, applicant_user_id: authUserId || null, task_key: clean(task.task_key), storage_bucket: bucket, storage_path: path, original_file_name: fileName, mime_type: mime, file_size_bytes: bytes.length, upload_status: "submitted", visibility: "private", applicant_note: clean(body.applicant_note), uploaded_by_email: actorEmail, metadata_json: { version: "2026-06-10-107-C", source: "applicant_portal" } }).select("*").single();
   if (error) throw error;
   await serviceClient.from("core_applicant_tasks").update({ status: "in_progress", upload_status: "submitted", review_status: "submitted", updated_at: new Date().toISOString() }).eq("applicant_task_id", taskId);
   await serviceClient.from("core_applications").update({ ready_for_final_review: false, updated_at: new Date().toISOString() }).eq("application_id", applicationId);
@@ -5017,6 +5242,98 @@ function applicantReadyForFinalReview0098(applicant: JsonRecord): boolean {
 }
 
 
+
+async function upsertApplicantTaskDefinitions0104(serviceClient: SupabaseClientAny, organizationId: string, definitions: unknown, actorEmail: string): Promise<JsonRecord[]> {
+  const rows = Array.isArray(definitions) ? definitions as JsonRecord[] : [];
+  if (!rows.length) return await listApplicantTaskDefinitions0099(serviceClient, organizationId);
+  for (const row of rows) {
+    const defId = clean(row.applicant_task_definition_id || row.task_definition_id);
+    const archived = row.archived === true || clean(row.status) === "archived";
+    if (archived) {
+      if (defId) {
+        await serviceClient.from("core_applicant_task_definitions").update({ status: "archived", archived_at: new Date().toISOString(), updated_at: new Date().toISOString(), settings_json: jsonObject(row.settings_json) }).eq("organization_id", organizationId).eq("applicant_task_definition_id", defId);
+      }
+      continue;
+    }
+    const stageKey = normalizeApplicantStatus(row.stage_key || "new", "new");
+    const label = clean(row.label);
+    if (!label) continue;
+    const taskKey = normalizeKey(row.task_key || `${stageKey}-${label}`);
+    const payload: JsonRecord = {
+      organization_id: organizationId,
+      stage_key: stageKey,
+      task_key: taskKey,
+      label,
+      description: clean(row.description),
+      responsible_party: normalizeKey(row.responsible_party || "admin"),
+      completion_actor: normalizeKey(row.responsible_party || "admin"),
+      task_type: normalizeKey(row.task_type || "manual"),
+      is_required: row.is_required !== false,
+      required_for_next_stage: row.is_required !== false,
+      applicant_visible: row.applicant_visible !== false,
+      sort_order: Number(row.sort_order || 100),
+      status: "active",
+      archived_at: null,
+      updated_at: new Date().toISOString(),
+      settings_json: { ...jsonObject(row.settings_json), updated_by: "0104-applicant-checklist-editor", updated_by_email: actorEmail || null },
+    };
+    if (defId) {
+      const { error } = await serviceClient.from("core_applicant_task_definitions").update(payload).eq("organization_id", organizationId).eq("applicant_task_definition_id", defId);
+      if (error) throw error;
+    } else {
+      const { error } = await serviceClient.from("core_applicant_task_definitions").upsert(payload, { onConflict: "organization_id,task_key" });
+      if (error) throw error;
+    }
+  }
+  await writeApplicantEvent(serviceClient, "applicant_checklist_settings_updated", null, organizationId, actorEmail, "Applicant checklist settings updated.", null, { count: rows.length }, {});
+  return await listApplicantTaskDefinitions0099(serviceClient, organizationId);
+}
+
+async function organizationUpsertApplicantTaskDefinition0104(serviceClient: SupabaseClientAny, organizationId: string, body: JsonRecord, actorEmail: string): Promise<JsonRecord> {
+  const taskId = clean(body.applicant_task_definition_id || body.task_definition_id);
+  const stageKey = normalizeApplicantStatus(body.stage_key || "new", "new");
+  const label = requireString(body, "label");
+  const taskKey = normalizeKey(body.task_key || `${stageKey}-${label}`);
+  const sortOrder = Number(body.sort_order || 100);
+  const payload: JsonRecord = {
+    organization_id: organizationId,
+    stage_key: stageKey,
+    task_key: taskKey,
+    label,
+    description: clean(body.description),
+    completion_actor: normalizeKey(body.responsible_party || body.completion_actor || "admin"),
+    responsible_party: normalizeKey(body.responsible_party || body.completion_actor || "admin"),
+    task_type: normalizeKey(body.task_type || "manual"),
+    required_for_next_stage: body.is_required !== false,
+    is_required: body.is_required !== false,
+    sort_order: Number.isFinite(sortOrder) ? sortOrder : 100,
+    status: "active",
+    archived_at: null,
+    settings_json: jsonObject(body.settings_json),
+    updated_at: new Date().toISOString(),
+  };
+  let result;
+  if (taskId) {
+    result = await serviceClient.from("core_applicant_task_definitions").update(payload).eq("organization_id", organizationId).eq("applicant_task_definition_id", taskId).select("*").single();
+  } else {
+    result = await serviceClient.from("core_applicant_task_definitions").upsert(payload, { onConflict: "organization_id,task_key" }).select("*").single();
+  }
+  if (result.error) throw result.error;
+  await writeApplicantEvent(serviceClient, "task_definition_saved", null, organizationId, actorEmail, `Checklist task saved: ${label}`, null, result.data, { stage_key: stageKey, task_key: taskKey });
+  return safeApplicantTaskDefinition0099(result.data);
+}
+
+async function organizationArchiveApplicantTaskDefinition0104(serviceClient: SupabaseClientAny, organizationId: string, body: JsonRecord, actorEmail: string): Promise<JsonRecord> {
+  const taskId = requireString(body, "applicant_task_definition_id");
+  const { data: before, error: lookupError } = await serviceClient.from("core_applicant_task_definitions").select("*").eq("organization_id", organizationId).eq("applicant_task_definition_id", taskId).maybeSingle();
+  if (lookupError) throw lookupError;
+  if (!before) throw new Error("Checklist task definition was not found.");
+  const { data, error } = await serviceClient.from("core_applicant_task_definitions").update({ status: "archived", archived_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("organization_id", organizationId).eq("applicant_task_definition_id", taskId).select("*").single();
+  if (error) throw error;
+  await writeApplicantEvent(serviceClient, "task_definition_archived", null, organizationId, actorEmail, `Checklist task archived: ${clean(before.label)}`, before, data, { stage_key: before.stage_key, task_key: before.task_key });
+  return safeApplicantTaskDefinition0099(data);
+}
+
 async function organizationUpdateApplicantSettings0098(serviceClient: SupabaseClientAny, organizationId: string, body: JsonRecord, actorEmail: string): Promise<JsonRecord> {
   const payload: JsonRecord = { updated_at: new Date().toISOString() };
   if (Object.prototype.hasOwnProperty.call(body, "portal_access_mode")) payload.portal_access_mode = portalAccessMode0098(body.portal_access_mode);
@@ -5034,8 +5351,12 @@ async function organizationUpdateApplicantSettings0098(serviceClient: SupabaseCl
     if (error) throw error;
     saved = data;
   }
-  await writeApplicantEvent(serviceClient, "applicant_settings_updated", null, organizationId, actorEmail, "Applicant portal settings updated.", existing || null, saved, {});
-  return saved;
+  let taskDefinitions: JsonRecord[] | null = null;
+  if (Array.isArray(body.task_definitions)) {
+    taskDefinitions = await upsertApplicantTaskDefinitions0104(serviceClient, organizationId, body.task_definitions, actorEmail);
+  }
+  await writeApplicantEvent(serviceClient, "applicant_settings_updated", null, organizationId, actorEmail, "Applicant portal/checklist settings updated.", existing || null, saved, { task_definitions_updated: Array.isArray(body.task_definitions) });
+  return { ...saved, task_definitions: taskDefinitions || undefined };
 }
 
 
@@ -5357,18 +5678,21 @@ serve(async (req: Request) => {
       return jsonResponse(200, { ok: true, action, email: actorEmail, platform_admin: platformAdmin });
     }
 
-    if (action === "applicant_get_my_portal") {
-      const result = await applicantGetPortal0098(serviceClient, actorEmail, clean(authUser.id), clean(body.organization_id));
+    if (action === "applicant_get_my_portal" || action === "applicant_get_portal") {
+      const applicantOrgId = await applicantPortalResolveOrganizationId0106(serviceClient, body);
+      const result = await applicantGetPortal0098(serviceClient, actorEmail, clean(authUser.id), applicantOrgId);
       return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
     }
 
     if (action === "applicant_save_my_application") {
-      const result = await applicantSavePortal0098(serviceClient, actorEmail, clean(authUser.id), body);
+      const applicantOrgId = await applicantPortalResolveOrganizationId0106(serviceClient, body);
+      const result = await applicantSavePortal0098(serviceClient, actorEmail, clean(authUser.id), { ...body, organization_id: applicantOrgId || clean(body.organization_id) });
       return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
     }
 
     if (action === "applicant_upload_task_file") {
-      const result = await applicantUploadTaskFile0098(serviceClient, actorEmail, clean(authUser.id), body);
+      const applicantOrgId = await applicantPortalResolveOrganizationId0106(serviceClient, body);
+      const result = await applicantUploadTaskFile0098(serviceClient, actorEmail, clean(authUser.id), { ...body, organization_id: applicantOrgId || clean(body.organization_id) });
       return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
     }
 
@@ -5571,11 +5895,27 @@ serve(async (req: Request) => {
         return jsonResponse(200, { ok: true, action, access: actorAccess, template, reply_templates: await listContactReplyTemplatesForAdmin(serviceClient, organizationId) });
       }
 
+      if (action === "organization_upsert_applicant_task_definition") {
+        const actorAccess = await requireApplicantTrackerAccess(serviceClient, personId, organizationId, platformAdmin);
+        await getPortalPageForAction(serviceClient, organizationId, "applicant-tracker", platformAdmin);
+        const task_definition = await organizationUpsertApplicantTaskDefinition0104(serviceClient, organizationId, body, actorEmail);
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_applicant_task_definitions", clean(task_definition.applicant_task_definition_id || task_definition.task_definition_id), body, task_definition);
+        return jsonResponse(200, { ok: true, action, access: actorAccess, task_definition });
+      }
+
+      if (action === "organization_archive_applicant_task_definition") {
+        const actorAccess = await requireApplicantTrackerAccess(serviceClient, personId, organizationId, platformAdmin);
+        await getPortalPageForAction(serviceClient, organizationId, "applicant-tracker", platformAdmin);
+        const task_definition = await organizationArchiveApplicantTaskDefinition0104(serviceClient, organizationId, body, actorEmail);
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_applicant_task_definitions", clean(task_definition.applicant_task_definition_id || task_definition.task_definition_id), body, task_definition);
+        return jsonResponse(200, { ok: true, action, access: actorAccess, task_definition });
+      }
+
       if (action === "organization_update_applicant_settings") {
         const actorAccess = await requireApplicantTrackerAccess(serviceClient, personId, organizationId, platformAdmin);
         await getPortalPageForAction(serviceClient, organizationId, "applicant-tracker", platformAdmin);
         const settings = await organizationUpdateApplicantSettings0098(serviceClient, organizationId, body, actorEmail);
-        return jsonResponse(200, { ok: true, action, access: actorAccess, settings });
+        return jsonResponse(200, { ok: true, action, access: actorAccess, settings, task_definitions: Array.isArray(settings.task_definitions) ? settings.task_definitions : await listApplicantTaskDefinitions0099(serviceClient, organizationId) });
       }
 
       if (action === "organization_get_applicant_conversion_options") {
@@ -5615,7 +5955,7 @@ serve(async (req: Request) => {
       if (action === "organization_update_applicant") {
         const actorAccess = await requireApplicantTrackerAccess(serviceClient, personId, organizationId, platformAdmin);
         await getPortalPageForAction(serviceClient, organizationId, "applicant-tracker", platformAdmin);
-        const applicant = await updateApplicantApplication(serviceClient, organizationId, body, actorEmail);
+        const applicant = await updateApplicantApplication(serviceClient, organizationId, body, actorEmail, person);
         await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_applications", clean(applicant.application_id), body, { application_id: applicant.application_id, status: applicant.status });
         return jsonResponse(200, { ok: true, action, access: actorAccess, applicant });
       }
@@ -5633,6 +5973,14 @@ serve(async (req: Request) => {
         await getPortalPageForAction(serviceClient, organizationId, "applicant-tracker", platformAdmin);
         const applicant = await organizationReviewApplicantUpload0098(serviceClient, organizationId, body, actorEmail);
         return jsonResponse(200, { ok: true, action, access: actorAccess, applicant });
+      }
+
+      if (action === "organization_send_applicant_portal_invite") {
+        const actorAccess = await requireApplicantTrackerAccess(serviceClient, personId, organizationId, platformAdmin);
+        await getPortalPageForAction(serviceClient, organizationId, "applicant-tracker", platformAdmin);
+        const result = await organizationSendApplicantPortalInvite0107(serviceClient, organizationId, body, actorEmail);
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_applications", clean(body.application_id), { application_id: body.application_id }, { to: result.to, sent: result.sent });
+        return jsonResponse(200, { ok: true, action, access: actorAccess, ...result });
       }
 
       if (action === "organization_send_applicant_reply") {

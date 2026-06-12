@@ -1,12 +1,12 @@
 // ADMIN-PAGE-header-navigation-setup-current.js
-// Internal Version: 2026-06-08-081-B
+// Internal Version: 2026-06-12-108-A
 // Purpose: Platform-admin Header / Navigation Setup Foundation. Configures labels, rows, order, visibility, and privacy-first access settings.
 // Uses core-admin-action backend actions: navigation_list_organizations, navigation_get_setup, navigation_save_setup.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-08-081-B";
+  const VERSION = "2026-06-12-108-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -308,7 +308,7 @@
     r.innerHTML = `<style>${css()}</style>
       <section class="se-card">
         <h1 class="se-title">Header / Navigation Setup</h1>
-        <p class="se-sub">Platform-admin configuration for header row labels, page/link labels, row placement, order, show/hide, and privacy-first access boundaries. Unknown and sensitive pages are private by default.</p>
+        <p class="se-sub">Platform-admin configuration for header recipes, row labels, page/link labels, row placement, order, show/hide, and privacy-first access boundaries. Unknown and sensitive pages are private by default.</p>
         <div class="se-toolbar">
           <label>Organization<select id="se-org-select">${organizations.map((org) => `<option value="${esc(org.organization_id)}" ${clean(org.organization_id) === selectedOrganizationId ? "selected" : ""}>${esc(org.display_name || org.organization_key)}</option>`).join("")}</select></label>
           <button id="se-refresh" class="secondary" type="button">Refresh</button>
@@ -324,7 +324,7 @@
         <h2>Header layout</h2>
         <div class="se-grid">
           <label>Profile name${input("profile_name", setup.profile?.profile_name || "", "data-profile='true'")}</label>
-          <label>Layout style${select("header_layout_key", setup.profile?.header_layout_key || "pill-rows", [["pill-rows","Pill rows (current)"],["compact-pill-rows","Compact rows — future"],["dropdown","Dropdown menus — future"]], "data-profile='true'")}</label>
+          <label>Header recipe${select("header_layout_key", setup.profile?.header_layout_key || setup.profile?.header_recipe_key || "standard_horizontal", [["standard_horizontal","Standard horizontal"],["compact_horizontal","Compact horizontal"],["two_row","Two row"],["dropdowns","Dropdown groups"],["minimal_login_only","Minimal login only + menu"],["side_menu","Side menu"],["hybrid_top_and_side","Hybrid top + side"]], "data-profile='true'")}</label>
           <label><span>Show organization context sub-row <small>(the duplicate org-name/key row)</small></span><input data-profile="true" data-field="show_org_context_row" type="checkbox" ${setup.profile?.show_org_context_row ? "checked" : ""}></label>
           <label><span>Show login / logout button</span><input data-profile="true" data-field="show_logout_button" type="checkbox" ${checked(setup.profile?.show_logout_button)}></label>
         </div>

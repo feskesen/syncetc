@@ -1,13 +1,13 @@
 // CORE-COMPONENT-organization-header-current.js
-// Internal Version: 2026-06-12-108-A
+// Internal Version: 2026-06-12-108-D
 // Purpose: Single shared organization header engine with controlled header/nav recipe modes. No page should render its own organization header.
 // Usage: window.SyncEtcOrganizationHeader.render(containerOrId, context)
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-12-108-A";
-  const PUBLIC_ORDER = ["home", "about", "info", "aircraft", "calendar", "calendar-events", "events", "gallery", "documents", "documents-resources", "contact"];
+  const VERSION = "2026-06-12-108-D";
+  const PUBLIC_ORDER = ["home", "about", "info", "aircraft", "calendar", "calendar-events", "events", "gallery", "documents", "documents-resources", "apply-now", "apply", "contact"];
   const USER_ORDER = ["user-dashboard", "dashboard", "my-profile", "profile", "roster", "member-roster", "member-documents", "user-documents", "gallery-submission", "submit-gallery"];
   const ADMIN_ORDER = ["organization-admin", "admin-dashboard", "organization-people", "people", "internal-documents", "board-documents", "admin-documents", "events-admin", "documents-admin", "gallery-admin", "aircraft-admin", "assets"];
 

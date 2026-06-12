@@ -1,11 +1,11 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-09-091-A
+// Internal Version: 2026-06-12-108-D
 // Purpose: Public page wrapper. It never renders its own header; it feeds context to the single organization header engine.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-09-091-A";
+  const VERSION = "2026-06-12-108-D";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -674,7 +674,9 @@
       onLogout: async () => {
         const client = await ensureSupabase();
         await client.auth.signOut();
-        await refreshOrganizationHeader();
+        try { window.sessionStorage.setItem("syncetc_just_logged_out", "1"); } catch {}
+        if (window.location.pathname === "/") window.location.reload();
+        else window.location.assign("/");
       },
       onOrganizationChange: () => {}
     };

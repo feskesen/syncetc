@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-12-108-C
-// Purpose: Portal shell for user/admin/applicant pages with applicant-safe navigation boundaries and applicant logout redirect.
+// Internal Version: 2026-06-12-108-D
+// Purpose: Portal shell for user/admin/applicant pages with global logout-home behavior and public nav fallback.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-12-108-C";
+  const VERSION = "2026-06-12-108-D";
   const SHELL_ID = "syncetc-organization-header";
   const FOOTER_ID = "syncetc-portal-footer";
   const LOGIN_MODAL_ID = "syncetc-portal-login-modal";
@@ -31,10 +31,16 @@
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
   const ORGANIZATION_HEADER_URL = "https://feskesen.github.io/syncetc/assets/core/CORE-COMPONENT-organization-header-current.js";
 
-  const PUBLIC_ORDER = ["home", "about", "info", "aircraft", "calendar", "events", "gallery", "documents", "documents-resources", "contact"];
+  const PUBLIC_ORDER = ["home", "about", "info", "aircraft", "calendar", "events", "gallery", "documents", "documents-resources", "apply-now", "apply", "contact"];
   const USER_ORDER = ["user-dashboard", "dashboard", "roster", "member-roster", "documents", "events", "gallery-submission", "submit-gallery", "my-profile", "profile"];
   const ADMIN_ORDER = ["organization-admin", "admin-dashboard", "organization-people", "people", "events-admin", "documents-admin", "gallery-admin", "aircraft-admin", "assets"];
   const PLATFORM_ORDER = ["platform-access-tools", "access-admin", "customer-builder", "page-setup", "layout-designer"];
+
+  const PUBLIC_FALLBACK_LINKS = [
+    { key: "home", href: "/", label: "Home", order: 0, zone: "public" },
+    { key: "calendar", href: "/calendar", label: "Calendar", order: 40, zone: "public" },
+    { key: "apply-now", href: "/apply-now", label: "Apply Now", order: 50, zone: "public" }
+  ];
 
   let shellSupabaseClient = null;
   let authListenerStarted = false;
@@ -331,7 +337,8 @@
   }
 
   function publicLinks() {
-    const links = arr(state.publicNavItems).map((item, i) => normalizeLink(item, i + 10));
+    const configured = arr(state.publicNavItems).map((item, i) => normalizeLink(item, i + 10));
+    const links = configured.length ? configured : PUBLIC_FALLBACK_LINKS.slice();
     links.push({ key: "home", href: "/", label: "Home", order: 0, zone: "public" });
     return dedupeLinks(links, PUBLIC_ORDER);
   }
@@ -600,11 +607,7 @@
   }
 
   function shouldRedirectHomeAfterLogout() {
-    const accessRow = obj(state.accessRow);
-    return state.mode === "applicant"
-      || accessRow.is_applicant === true
-      || clean(accessRow.access_level) === "applicant"
-      || /\/applicant-portal\/?$/i.test(window.location.pathname || "");
+    return true;
   }
 
   async function shellLogout() {
@@ -615,7 +618,11 @@
     window.dispatchEvent(new CustomEvent("syncetc:portal-auth-changed", { detail: { authenticated: false, email: "" } }));
     if (redirectHome) {
       try { window.sessionStorage.setItem("syncetc_just_logged_out", "1"); } catch {}
-      window.location.assign("/");
+      if (window.location.pathname === "/") {
+        window.location.reload();
+      } else {
+        window.location.assign("/");
+      }
     }
   }
 

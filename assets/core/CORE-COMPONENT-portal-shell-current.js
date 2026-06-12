@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-08-027-B
-// Purpose: Portal shell navigation config safety repair: initializes navigation arrays so page scripts cannot crash while setting shell state.
+// Internal Version: 2026-06-12-107-D
+// Purpose: Portal shell for user/admin/applicant pages with applicant-safe navigation boundaries.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-08-027-B";
+  const VERSION = "2026-06-12-107-D";
   const SHELL_ID = "syncetc-organization-header";
   const FOOTER_ID = "syncetc-portal-footer";
   const LOGIN_MODAL_ID = "syncetc-portal-login-modal";
@@ -23,7 +23,8 @@
     "#syncetc-user-documents-root",
     "#syncetc-member-documents-root",
     "#syncetc-internal-documents-root",
-    "#syncetc-organization-internal-documents-root"
+    "#syncetc-organization-internal-documents-root",
+    "#syncetc-applicant-portal-root"
   ];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -391,9 +392,11 @@
   }
 
   function navGroups() {
-    const caps = obj(obj(state.accessRow).capabilities);
-    const adminVisible = Boolean(state.platformAdmin || obj(state.accessRow).is_organization_admin || caps.can_view_organization_admin);
-    const userVisible = Boolean(state.authenticated && (state.platformAdmin || obj(state.accessRow).organization_id || caps.can_view_user_dashboard));
+    const accessRow = obj(state.accessRow);
+    const applicantMode = state.mode === "applicant" || accessRow.is_applicant === true || clean(accessRow.access_level) === "applicant";
+    const caps = obj(accessRow.capabilities);
+    const adminVisible = !applicantMode && Boolean(state.platformAdmin || accessRow.is_organization_admin || caps.can_view_organization_admin);
+    const userVisible = !applicantMode && Boolean(state.authenticated && (state.platformAdmin || accessRow.organization_id || caps.can_view_user_dashboard));
     const pages = portalPages();
     const publicRow = publicLinks();
     const userRow = [];
@@ -409,7 +412,7 @@
     if (userVisible) userRow.push(makeLink("user-dashboard", "/user-dashboard", "Dashboard", orderIndex(USER_ORDER, "user-dashboard", 5)));
     if (adminVisible) adminRow.push(makeLink("organization-admin", "/organization-admin", "Admin Dashboard", orderIndex(ADMIN_ORDER, "organization-admin", 5)));
 
-    const platformRow = Boolean(state.platformAdmin) ? dedupeLinks([
+    const platformRow = Boolean(!applicantMode && state.platformAdmin) ? dedupeLinks([
       makeLink("platform-access-tools", "/access-admin", "Platform Access Tools", orderIndex(PLATFORM_ORDER, "platform-access-tools", 10)),
       makeLink("customer-builder", "/customer-builder", "Customer Builder", orderIndex(PLATFORM_ORDER, "customer-builder", 20)),
       makeLink("page-setup", "/page-setup", "Page Setup", orderIndex(PLATFORM_ORDER, "page-setup", 30)),
@@ -493,8 +496,16 @@
   function closeLoginModal() { document.getElementById(LOGIN_MODAL_ID)?.classList.remove("open"); }
 
   function renderLoggedOutShell(shell) {
+    if (state.mode === "applicant") {
+      mark("render:logged-out", "applicant page owns login/request UI");
+      shell.style.visibility = "visible";
+      shell.style.minHeight = "";
+      shell.innerHTML = "";
+      removeEarlyHideStyle();
+      renderDebugPanel();
+      return;
+    }
     mark("render:logged-out", "showing neutral portal login");
-    const next = encodeURIComponent(window.location.pathname + window.location.search);
     shell.style.visibility = "visible";
     shell.style.minHeight = "";
     shell.innerHTML = `<style>
@@ -526,7 +537,6 @@
         </div>
         <div class="portal-login-actions">
           <button id="portal-inline-login-reset" class="secondary" type="button">Send password reset</button>
-          <a href="/login?next=${next}" style="align-self:center;color:#26344d;font-weight:900;text-decoration:underline;">Open full login page</a>
         </div>
         <div class="portal-inline-login-message">${esc(loginMessage)}</div>
       </section>
@@ -649,7 +659,7 @@
 
     const cfg = config();
     const groups = navGroups();
-    const modeLabel = state.mode === "org-admin" ? "Organization Admin" : "User Portal";
+    const modeLabel = state.mode === "applicant" ? "Applicant Portal" : state.mode === "org-admin" ? "Organization Admin" : "User Portal";
     const organizationName = clean(state.organizationName) ? state.organizationName : `SyncEtc ${modeLabel}`;
     const selected = selectedOrgId();
     const orgOptions = organizationOptions();

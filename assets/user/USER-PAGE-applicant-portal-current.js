@@ -1,11 +1,11 @@
 // USER-PAGE-applicant-portal-current.js
-// Internal Version: 2026-06-12-107-G
+// Internal Version: 2026-06-12-108-E
 // Purpose: Applicant-only portal for application updates, stage tasks, and private upload tasks.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-12-107-G";
+  const VERSION = "2026-06-12-108-E";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -40,6 +40,12 @@
     requestKind: "info",
     authProcessing: false,
     authCallbackMessage: "",
+    siteShell: null,
+    publicNavItems: [],
+    navigationProfile: null,
+    navigationRows: [],
+    navigationItems: [],
+    logo: null,
   };
 
   function mark(label, detail) { if (DEBUG) steps.push(`${String(Date.now() - startMs).padStart(5)}ms  ${label}${detail ? " — " + detail : ""}`); }
@@ -105,6 +111,11 @@
       selectedOrganizationId: org.organization_id || "",
       organizations: org.organization_id ? [{ organization_id: org.organization_id, organization_key: org.organization_key, organization_name: org.display_name }] : [],
       styleProfile: state.style || null,
+      logo: state.logo || obj(state.siteShell).logo || null,
+      publicNavItems: state.publicNavItems,
+      navigationProfile: state.navigationProfile,
+      navigationRows: state.navigationRows,
+      navigationItems: state.navigationItems,
       accessRow: {
         organization_id: org.organization_id || "",
         organization_key: org.organization_key || "",
@@ -117,6 +128,9 @@
         can_view_member_portal: false,
         is_applicant: true,
         style_profile: state.style || null,
+        navigation_profile: state.navigationProfile,
+        navigation_rows: state.navigationRows,
+        navigation_items: state.navigationItems,
       },
       platformAdmin: false,
       activePageKey: "applicant-portal",
@@ -197,9 +211,35 @@
   }
   async function accessCall(body) { const client = await ensureSupabase(); const { data } = await client.auth.getSession(); const token = data?.session?.access_token; if (!token) throw new Error("Log in first."); state.token = token; state.email = data.session.user?.email || ""; const rd = rootData(); const res = await fetch(ACCESS_EDGE_URL, { method:"POST", headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`}, body: JSON.stringify({ organization_key: rd.organizationKey, organization_id: rd.organizationId, ...body }) }); const json = await res.json().catch(()=>({})); if(!res.ok || json.ok===false) { const err = new Error(readableJsonError(json, res.status)); err.payload = json; err.status = res.status; throw err; } return json; }
   async function publicCall(body) { const rd = rootData(); const res = await fetch(PUBLIC_EDGE_URL, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ organization_key: rd.organizationKey, organization_id: rd.organizationId, site_key:"primary", ...body }) }); const json = await res.json().catch(()=>({})); if(!res.ok || json.ok===false) throw new Error(readableJsonError(json, res.status)); return json; }
+
+  function applyPublicShellPayload(payload) {
+    const shell = obj(payload?.site_shell);
+    if (!Object.keys(shell).length) return;
+    state.siteShell = shell;
+    state.logo = shell.logo || state.logo || null;
+    state.publicNavItems = arr(shell.public_nav_items).length ? arr(shell.public_nav_items) : arr(shell.nav_items);
+    state.navigationProfile = payload.navigation_profile || shell.navigation_profile || state.navigationProfile || null;
+    state.navigationRows = arr(payload.navigation_rows).length ? arr(payload.navigation_rows) : (arr(shell.navigation_rows).length ? arr(shell.navigation_rows) : state.navigationRows);
+    state.navigationItems = arr(payload.navigation_items).length ? arr(payload.navigation_items) : (arr(shell.navigation_items).length ? arr(shell.navigation_items) : state.navigationItems);
+    mark('publicShell:applied', `${state.publicNavItems.length} public nav items`);
+  }
+
+  async function refreshPublicShellForOrganization(org) {
+    const organizationKey = clean(obj(org).organization_key || rootData().organizationKey);
+    const organizationId = clean(obj(org).organization_id || rootData().organizationId);
+    if (!organizationKey && !organizationId) return null;
+    try {
+      const landing = await publicCall({ action:'get_applicant_portal_public', organization_key: organizationKey, organization_id: organizationId });
+      applyPublicShellPayload(landing);
+      return landing;
+    } catch (error) {
+      mark('publicShell:error', readableError(error, 'public shell unavailable'));
+      return null;
+    }
+  }
   async function requestPortalLink() { const email = clean(val('ap-request-email') || state.requestEmail); state.requestEmail = email; if (!email || !/^\S+@\S+\.\S+$/.test(email)) { state.requestMessage = 'Enter the email address used on your application.'; state.requestKind = 'bad'; render(); return; } state.requestBusy = true; state.requestMessage = ''; render(); try { const data = await publicCall({ action:'request_applicant_portal_access', email, redirect_to: location.origin + '/applicant-portal' }); state.requestMessage = clean(data.message || 'If an eligible application exists for that email, we will send applicant portal instructions.'); state.requestKind = 'ok'; } catch (error) { state.requestMessage = 'If an eligible application exists for that email, we will send applicant portal instructions.'; state.requestKind = 'ok'; } finally { state.requestBusy = false; render(); } }
 
-  async function refresh() { mark("refresh:start"); state.loading = true; state.error = ""; state.authCallbackMessage = hasAuthCallbackInUrl() ? 'Processing secure login link…' : ''; render(); try { const client = await ensureSupabase(); const completedAuth = await completeAuthCallbackIfPresent(client); if (completedAuth) mark('refresh:auth-callback-complete'); const { data: sessionData } = await client.auth.getSession(); const session = sessionData?.session || null; state.email = session?.user?.email || state.email || ""; if (!session?.access_token) { const landing = await publicCall({ action:'get_applicant_portal_public' }); state.payload = landing; state.organization = landing.organization || null; state.page = landing.page || null; state.settings = obj(landing.settings); state.style = obj(landing.style_profile); state.loggedOut = true; state.authProcessing = false; state.loading = false; setShellState(); render(); return; } const data = await accessCall({ action:"applicant_get_my_portal" }); state.payload = data; state.applicant = data.application || data.applicant || null; state.settings = obj(data.settings); state.organization = data.organization || null; state.page = data.page || null; state.style = obj(data.style_profile); state.loggedOut = false; state.authProcessing = false; state.loading = false; mark("refresh:done", clean(state.applicant?.display_name)); setShellState(); render(); } catch (error) { state.loading=false; state.authProcessing = false; const payload = error?.payload && typeof error.payload === 'object' ? error.payload : null; const message = readableError(error, 'Applicant portal could not load. Open this page with ?syncetc_debug=1 for details.'); state.error = message; state.payload = payload || state.payload; try { const client = await ensureSupabase(); const { data: sessionData } = await client.auth.getSession(); state.email = sessionData?.session?.user?.email || state.email || ""; } catch (_) {} state.requestMessage = state.email ? message : 'The secure login link could not be completed. Request a new link if needed.'; state.requestKind = 'bad'; try { const landing = await publicCall({ action:'get_applicant_portal_public' }); state.payload = payload || landing; state.organization = landing.organization || state.organization; state.page = landing.page || state.page; state.settings = obj(landing.settings || state.settings); state.style = obj(landing.style_profile || state.style); } catch (_) {} state.loggedOut = !state.email; setShellState(); render(); } }
+  async function refresh() { mark("refresh:start"); state.loading = true; state.error = ""; state.authCallbackMessage = hasAuthCallbackInUrl() ? 'Processing secure login link…' : ''; render(); try { const client = await ensureSupabase(); const completedAuth = await completeAuthCallbackIfPresent(client); if (completedAuth) mark('refresh:auth-callback-complete'); const { data: sessionData } = await client.auth.getSession(); const session = sessionData?.session || null; state.email = session?.user?.email || state.email || ""; if (!session?.access_token) { const landing = await publicCall({ action:'get_applicant_portal_public' }); applyPublicShellPayload(landing); state.payload = landing; state.organization = landing.organization || null; state.page = landing.page || null; state.settings = obj(landing.settings); state.style = obj(landing.style_profile); state.loggedOut = true; state.authProcessing = false; state.loading = false; setShellState(); render(); return; } const data = await accessCall({ action:"applicant_get_my_portal" }); state.payload = data; state.applicant = data.application || data.applicant || null; state.settings = obj(data.settings); state.organization = data.organization || null; state.page = data.page || null; state.style = obj(data.style_profile); await refreshPublicShellForOrganization(state.organization); state.loggedOut = false; state.authProcessing = false; state.loading = false; mark("refresh:done", clean(state.applicant?.display_name)); setShellState(); render(); } catch (error) { state.loading=false; state.authProcessing = false; const payload = error?.payload && typeof error.payload === 'object' ? error.payload : null; const message = readableError(error, 'Applicant portal could not load. Open this page with ?syncetc_debug=1 for details.'); state.error = message; state.payload = payload || state.payload; try { const client = await ensureSupabase(); const { data: sessionData } = await client.auth.getSession(); state.email = sessionData?.session?.user?.email || state.email || ""; } catch (_) {} state.requestMessage = state.email ? message : 'The secure login link could not be completed. Request a new link if needed.'; state.requestKind = 'bad'; try { const landing = await publicCall({ action:'get_applicant_portal_public', organization_key: clean(obj(state.organization).organization_key || rootData().organizationKey), organization_id: clean(obj(state.organization).organization_id || rootData().organizationId) }); applyPublicShellPayload(landing); state.payload = payload || landing; state.organization = landing.organization || state.organization; state.page = landing.page || state.page; state.settings = obj(landing.settings || state.settings); state.style = obj(landing.style_profile || state.style); } catch (_) {} state.loggedOut = !state.email; setShellState(); render(); } }
 
   function applicantStageKey(app) { return normalize(app.stage_key || app.applicant_status || app.status || "new"); }
   function applicantStatusCopy(app) {

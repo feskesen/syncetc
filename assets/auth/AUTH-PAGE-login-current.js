@@ -1,11 +1,11 @@
 // AUTH-PAGE-login-current.js
-// Internal Version: 2026-06-13-110-C
+// Internal Version: 2026-06-13-110-D
 // Purpose: Simple shared login page for /login route. Uses Supabase Auth and sends users to the portal after login.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-13-110-C";
+  const VERSION = "2026-06-13-110-D";
   const ROOT_ID = "syncetc-login-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -47,12 +47,20 @@
 
   function setMessage(text, kind = "") { message = text || `Version ${VERSION}`; messageKind = kind; render(); }
   function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+  function normalizeLoginDestination(raw) {
+    const value = String(raw || "").trim();
+    if (!value || !value.startsWith("/") || value.startsWith("//") || value === "/login") return "/user-dashboard";
+    const path = value.split("?")[0].replace(/\/$/, "") || "/";
+    const publicPaths = new Set(["/", "/home", "/info", "/aircraft", "/calendar", "/events", "/gallery", "/documents", "/resources", "/contact", "/apply-now", "/apply"]);
+    if (publicPaths.has(path)) return "/user-dashboard";
+    return value;
+  }
   function redirectTarget() {
     const params = new URLSearchParams(window.location.search);
     let target = clean(params.get("next") || params.get("returnTo") || params.get("redirect") || "");
     try { target = target || window.sessionStorage.getItem("syncetc_return_to") || ""; } catch {}
-    if (!target || target.startsWith("http") || target === "/login") target = "/user-dashboard";
-    return target;
+    if (target.startsWith("http")) target = "/user-dashboard";
+    return normalizeLoginDestination(target);
   }
   async function waitForSession(client, attempts = 12, delay = 150) {
     for (let i = 0; i < attempts; i += 1) {
@@ -67,8 +75,7 @@
     const params = new URLSearchParams(window.location.search);
     const raw = params.get("next") || params.get("redirect") || window.sessionStorage.getItem("syncetc_login_next") || "/user-dashboard";
     try { window.sessionStorage.removeItem("syncetc_login_next"); } catch {}
-    if (!raw || !String(raw).startsWith("/") || String(raw).startsWith("//")) return "/user-dashboard";
-    return String(raw);
+    return normalizeLoginDestination(raw);
   }
   async function waitForSession(client, maxAttempts = 18) {
     for (let i = 0; i < maxAttempts; i += 1) {

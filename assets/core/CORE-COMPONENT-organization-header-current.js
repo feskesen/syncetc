@@ -1,12 +1,12 @@
 // CORE-COMPONENT-organization-header-current.js
-// Internal Version: 2026-06-13-110-A
+// Internal Version: 2026-06-13-110-D
 // Purpose: Single shared organization header engine with controlled header/nav recipe modes. No page should render its own organization header.
 // Usage: window.SyncEtcOrganizationHeader.render(containerOrId, context)
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-13-110-A";
+  const VERSION = "2026-06-13-110-D";
   const PUBLIC_ORDER = ["home", "about", "info", "aircraft", "calendar", "calendar-events", "events", "gallery", "documents", "documents-resources", "apply-now", "apply", "contact"];
   const USER_ORDER = ["member-dashboard", "user-dashboard", "dashboard", "my-profile", "profile", "roster", "member-roster", "member-documents", "user-documents", "gallery-submission", "submit-gallery"];
   const ADMIN_ORDER = ["organization-admin", "admin-dashboard", "organization-people", "people", "internal-documents", "board-documents", "admin-documents", "events-admin", "documents-admin", "gallery-admin", "aircraft-admin", "assets"];
@@ -554,7 +554,7 @@
     const organizationName = firstText(context.organizationName, organization.display_name, organization.name, organization.organization_name, "SyncEtc User Portal");
     const rows = normalizeRows(context);
     const recipe = resolveHeaderRecipe(context, rows);
-    const loginUrl = firstText(context.loginUrl, `/login?next=${encodeURIComponent(location.pathname + location.search)}`);
+    const loginUrl = firstText(context.loginUrl, `/login?next=${encodeURIComponent("/user-dashboard")}`);
     const email = firstText(context.email, obj(context.auth).email);
     const rowDefs = allRowDefs(rows, context);
     const navRowsHtml = navRowsForRecipe(rowDefs, context, recipe);

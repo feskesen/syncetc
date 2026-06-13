@@ -1,11 +1,11 @@
 // MEMBER-PAGE-forum-current.js
-// Internal Version: 2026-06-13-111-B
-// Purpose: Member-only organization message board foundation with categories, topics, replies, simple polls, mentions groundwork, and admin moderation.
+// Internal Version: 2026-06-13-111-C
+// Purpose: Member-only organization message board with category index, topic list/detail routing, replies, polls, trip topics, mentions groundwork, and admin moderation.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-13-111-B";
+  const VERSION = "2026-06-13-111-C";
   const ROOT_IDS = ["syncetc-member-forum-root", "syncetc-user-forum-root", "syncetc-forum-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -13,7 +13,6 @@
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
 
   const DEBUG = new URLSearchParams(location.search).get("syncetc_debug") === "1";
-  const initialTopicId = new URLSearchParams(location.search).get("topic") || new URLSearchParams(location.search).get("forum_topic_id") || "";
   const diagSteps = [];
   const startMs = (performance && performance.now) ? performance.now() : Date.now();
 
@@ -39,15 +38,17 @@
   let preferences = {};
   let dirty = false;
   let createTopicType = "discussion";
-  let categoryFilter = "";
   let createFormOpen = false;
+  let routeCategory = "";
+  let routeTopicId = "";
+  let routeSearch = "";
 
   const $ = (id) => document.getElementById(id);
   const esc = (v) => String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#039;");
   const clean = (v) => String(v ?? "").replace(/\s+/g," ").trim();
-  const key = (v) => clean(v).toLowerCase().replace(/[^a-z0-9_.:-]+/g,"-").replace(/-+/g,"-").replace(/^-|-$/g,"");
   const obj = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
   const arr = (v) => Array.isArray(v) ? v : [];
+  const slug = (v) => clean(v).toLowerCase().replace(/[^a-z0-9_.:-]+/g,"-").replace(/-+/g,"-").replace(/^-|-$/g,"");
 
   function diag(step, detail = "") {
     if (!DEBUG) return;
@@ -114,11 +115,12 @@
     const width = getText(spacing, "page_width", getText(layout, "default_width", "wide"));
     const corners = getText(effects, "corners", "soft");
     const radius = corners === "sharp" ? "8px" : corners === "pill" ? "30px" : "22px";
-    return { primary, secondary, surface, text, muted: rgba(text, .68), border: rgba(primary, .16), soft: rgba(primary, .08), shadow: `0 14px 42px ${rgba(primary, .14)}`, radius, pageWidth: width === "narrow" ? "880px" : width === "normal" ? "1040px" : "1180px" };
+    return { primary, secondary, surface, text, muted: rgba(text, .68), border: rgba(primary, .16), soft: rgba(primary, .08), shadow: `0 14px 42px ${rgba(primary, .14)}`, radius, pageWidth: width === "narrow" ? "900px" : width === "normal" ? "1080px" : "1200px" };
   }
   function cssVars(cfg) { return `--mf-primary:${cfg.primary};--mf-secondary:${cfg.secondary};--mf-surface:${cfg.surface};--mf-text:${cfg.text};--mf-muted:${cfg.muted};--mf-border:${cfg.border};--mf-soft:${cfg.soft};--mf-shadow:${cfg.shadow};--mf-radius:${cfg.radius};--mf-page-width:${cfg.pageWidth};`; }
 
   function selectedAccess() { return forumAccessRow || access.find((row) => String(row.organization_id) === String(selectedOrgId)) || access[0] || null; }
+  function selectedOrgName() { return clean(selectedAccess()?.organization_name || "your organization"); }
 
   function setShellState() {
     const row = selectedAccess();
@@ -182,11 +184,46 @@
     setShellState();
   }
 
+  function parseRoute() {
+    const params = new URLSearchParams(location.search);
+    routeTopicId = clean(params.get("topic") || params.get("forum_topic_id") || "");
+    routeCategory = clean(params.get("category") || params.get("forum_category") || "");
+    routeSearch = clean(params.get("q") || params.get("search") || "");
+  }
+
+  function routeUrl(next = {}) {
+    const params = new URLSearchParams();
+    const topic = clean(next.topic !== undefined ? next.topic : routeTopicId);
+    const category = clean(next.category !== undefined ? next.category : routeCategory);
+    const q = clean(next.q !== undefined ? next.q : routeSearch);
+    if (DEBUG) params.set("syncetc_debug", "1");
+    if (topic) params.set("topic", topic);
+    else if (category) params.set("category", category);
+    if (q) params.set("q", q);
+    const qs = params.toString();
+    return `${location.pathname}${qs ? `?${qs}` : ""}`;
+  }
+
+  function pushRoute(next = {}) {
+    history.pushState({}, "", routeUrl(next));
+    parseRoute();
+  }
+
+  async function navigate(next = {}, reloadTopic = false) {
+    if (!confirmDirty()) return;
+    pushRoute(next);
+    setDirty(false);
+    createFormOpen = false;
+    if (reloadTopic || clean(next.topic)) await loadForum({ forum_topic_id: clean(next.topic || routeTopicId) });
+    else render();
+  }
+
   async function loadForum(extra = {}) {
     loading = true;
     render();
     await ensureOrganizationContext();
-    const res = await call("member_forum_get_context", { organization_id: selectedOrgId, forum_category_id: categoryFilter, forum_topic_id: initialTopicId || "", ...extra });
+    const topicId = clean(extra.forum_topic_id || routeTopicId);
+    const res = await call("member_forum_get_context", { organization_id: selectedOrgId, forum_topic_id: topicId });
     applyContext(res);
     loading = false;
     render();
@@ -194,6 +231,7 @@
 
   async function refreshAuth() {
     diag("auth:start");
+    parseRoute();
     await ensureSupabase();
     const session = await getStableSession();
     token = session?.access_token || "";
@@ -243,13 +281,58 @@
   }
   function setDirty(next = true) { dirty = next; }
 
+  function categoryByAny(value) {
+    const v = clean(value);
+    const vKey = slug(v);
+    return categories.find((c) => clean(c.forum_category_id) === v || slug(c.category_key) === vKey || slug(c.label) === vKey) || null;
+  }
+
+  function activeCategory() {
+    return routeCategory ? categoryByAny(routeCategory) : null;
+  }
+
+  function textMatch(topic, q) {
+    if (!q) return true;
+    const hay = [topic.title, topic.body, topic.created_by_name, topic.category?.label, topic.topic_type].map(clean).join(" ").toLowerCase();
+    return hay.includes(q.toLowerCase());
+  }
+
+  function visibleTopicsFor(category = null) {
+    const q = clean(routeSearch);
+    return topics.filter((topic) => {
+      if (category && clean(topic.forum_category_id) !== clean(category.forum_category_id)) return false;
+      return textMatch(topic, q);
+    });
+  }
+
+  function sortedTopics(list) {
+    return [...list].sort((a, b) => {
+      if (Boolean(a.pinned) !== Boolean(b.pinned)) return Boolean(a.pinned) ? -1 : 1;
+      return new Date(b.last_activity_at || b.created_at || 0).getTime() - new Date(a.last_activity_at || a.created_at || 0).getTime();
+    });
+  }
+
+  function categoryStats(cat) {
+    const list = sortedTopics(topics.filter((topic) => clean(topic.forum_category_id) === clean(cat.forum_category_id)));
+    const replyCount = list.reduce((sum, topic) => sum + Number(topic.reply_count || 0), 0);
+    const latest = list[0] || null;
+    return { topicCount: list.length, replyCount, latest };
+  }
+
+  function topicBadge(topic) {
+    if (topic.topic_type === "poll") return "Poll";
+    if (topic.topic_type === "trip") return "Trip";
+    if (topic.topic_type === "announcement") return "Announcement";
+    return clean(topic.category?.label || "Topic");
+  }
+
   function renderLogin() {
     return `<div class="mf-card"><h2>Log in</h2><p class="mf-help">Use your organization login to open the member message board.</p><div class="mf-login-grid"><input id="forum-email" type="email" placeholder="Email" autocomplete="username"><input id="forum-password" type="password" placeholder="Password" autocomplete="current-password"><button id="forum-login" class="mf-btn" type="button">Log in</button></div></div>`;
   }
 
-  function renderCategories() {
-    const allActive = !categoryFilter;
-    return `<section class="mf-card mf-category-bar"><div class="mf-section-head"><div><span class="mf-eyebrow">Categories</span><h2>Message board</h2></div>${unreadMentionCount ? `<span class="mf-attention">${unreadMentionCount} mention${unreadMentionCount === 1 ? "" : "s"}</span>` : ""}</div><div class="mf-category-scroll"><button class="mf-cat ${allActive ? "is-active" : ""}" data-category=""><strong>All topics</strong><span>Everything</span></button>${categories.map((cat) => `<button class="mf-cat ${categoryFilter === cat.forum_category_id ? "is-active" : ""}" data-category="${esc(cat.forum_category_id)}"><strong>${esc(cat.label)}</strong><span>${esc(cat.description || "")}</span>${cat.posting_mode === "admins_only" ? `<em>Admin posts</em>` : ""}</button>`).join("")}</div></section>`;
+  function renderTopNav() {
+    const current = activeCategory();
+    return `<section class="mf-card mf-nav-card"><div class="mf-board-head"><div><span class="mf-eyebrow">Message board</span><h2>${esc(selectedOrgName())} Discussions</h2></div>${unreadMentionCount ? `<span class="mf-attention">${unreadMentionCount} mention${unreadMentionCount === 1 ? "" : "s"}</span>` : ""}</div><div class="mf-search-row"><input id="forum-search" type="search" placeholder="Search discussions" value="${esc(routeSearch)}"><button id="forum-search-button" class="mf-btn secondary" type="button">Search</button>${routeSearch ? `<button id="forum-clear-search" class="mf-btn secondary" type="button">Clear</button>` : ""}<button id="forum-toggle-create" class="mf-btn" type="button">${createFormOpen ? "Close new topic" : "Start new discussion"}</button></div><div class="mf-tabs"><button class="mf-tab ${!current ? "is-active" : ""}" data-category="">All categories</button>${categories.map((cat) => `<button class="mf-tab ${current?.forum_category_id === cat.forum_category_id ? "is-active" : ""}" data-category="${esc(cat.category_key || cat.forum_category_id)}">${esc(cat.label)}</button>`).join("")}</div></section>`;
   }
 
   function renderMentionSelect(id) {
@@ -263,21 +346,47 @@
     return Array.from(el.selectedOptions || []).map((o) => o.value).filter(Boolean);
   }
 
+  function canPostInCategory(cat) {
+    if (!cat || cat.status !== "active") return false;
+    if (cat.posting_mode === "locked") return false;
+    if (cat.posting_mode === "admins_only" && !canModerate) return false;
+    return true;
+  }
+
   function renderCreateTopic() {
-    const activeCats = categories.filter((cat) => cat.status === "active" && (cat.posting_mode === "members" || canModerate));
-    return `<section class="mf-card mf-create"><span class="mf-eyebrow">New topic</span><h2>Start a discussion</h2><p class="mf-help">Post a topic for members of this organization.</p><div class="mf-form-grid"><label>Category<select id="forum-new-category">${activeCats.map((cat) => `<option value="${esc(cat.forum_category_id)}">${esc(cat.label)}</option>`).join("")}</select></label><label>Topic type<select id="forum-new-type"><option value="discussion">Discussion</option><option value="trip">Trip planning</option><option value="poll">Poll</option>${canModerate ? `<option value="announcement">Announcement</option>` : ""}</select></label></div><label>Title<input id="forum-new-title" type="text" maxlength="180" placeholder="Topic title"></label><label>Message<textarea id="forum-new-body" rows="5" placeholder="Write your message…"></textarea></label><div id="forum-trip-wrap" class="mf-extra" style="display:${createTopicType === "trip" ? "block" : "none"}"><div class="mf-form-grid"><label>Destination<input id="forum-trip-destination" type="text" placeholder="Destination or idea"></label><label>Proposed date<input id="forum-trip-date" type="text" placeholder="Optional"></label></div></div><div id="forum-poll-wrap" class="mf-extra" style="display:${createTopicType === "poll" ? "block" : "none"}"><label>Poll options<textarea id="forum-new-poll-options" rows="5" placeholder="One option per line"></textarea></label><p class="mf-help">Add one option per line.</p></div>${renderMentionSelect("forum-new-mentions")}<button id="forum-create-topic" class="mf-btn" type="button">Post topic</button></section>`;
+    const current = activeCategory();
+    const activeCats = categories.filter(canPostInCategory);
+    if (!activeCats.length) return `<section class="mf-card"><h2>Start a discussion</h2><p class="mf-help">No categories are currently open for member posting.</p></section>`;
+    const defaultCatId = canPostInCategory(current) ? current.forum_category_id : activeCats[0].forum_category_id;
+    return `<section class="mf-card mf-create"><span class="mf-eyebrow">New topic</span><h2>Start a discussion</h2><p class="mf-help">Members may start topics inside open categories. Organization admins control the categories.</p><div class="mf-form-grid"><label>Category<select id="forum-new-category">${activeCats.map((cat) => `<option value="${esc(cat.forum_category_id)}" ${cat.forum_category_id === defaultCatId ? "selected" : ""}>${esc(cat.label)}</option>`).join("")}</select></label><label>Topic type<select id="forum-new-type"><option value="discussion">Discussion</option><option value="trip">Trip planning</option><option value="poll">Poll</option>${canModerate ? `<option value="announcement">Announcement</option>` : ""}</select></label></div><label>Title<input id="forum-new-title" type="text" maxlength="180" placeholder="Topic title"></label><label>Message<textarea id="forum-new-body" rows="5" placeholder="Write your message…"></textarea></label><div id="forum-trip-wrap" class="mf-extra" style="display:${createTopicType === "trip" ? "block" : "none"}"><div class="mf-form-grid"><label>Destination<input id="forum-trip-destination" type="text" placeholder="Destination or idea"></label><label>Proposed date<input id="forum-trip-date" type="text" placeholder="Optional"></label></div></div><div id="forum-poll-wrap" class="mf-extra" style="display:${createTopicType === "poll" ? "block" : "none"}"><label>Poll options<textarea id="forum-new-poll-options" rows="5" placeholder="One option per line"></textarea></label><p class="mf-help">Add one option per line.</p></div>${renderMentionSelect("forum-new-mentions")}<button id="forum-create-topic" class="mf-btn" type="button">Post topic</button></section>`;
   }
 
-  function topicBadge(topic) {
-    if (topic.topic_type === "poll") return "Poll";
-    if (topic.topic_type === "trip") return "Trip";
-    if (topic.topic_type === "announcement") return "Announcement";
-    return clean(topic.category?.label || "Topic");
+  function renderCategoryIndex() {
+    const q = clean(routeSearch);
+    if (q) return renderSearchResults();
+    return `<section class="mf-card mf-forum-index"><div class="mf-section-head"><div><span class="mf-eyebrow">Categories</span><h2>Discussion areas</h2></div><span class="mf-mini">${esc(categories.length)} categories</span></div><div class="mf-category-table">${categories.map((cat) => {
+      const stats = categoryStats(cat);
+      const latest = stats.latest;
+      return `<button class="mf-category-row" data-category="${esc(cat.category_key || cat.forum_category_id)}"><div class="mf-category-main"><strong>${esc(cat.label)}</strong><span>${esc(cat.description || "")}</span>${cat.posting_mode === "admins_only" ? `<em>Admin posts only</em>` : ""}</div><div class="mf-counts"><span><b>${stats.topicCount}</b> topics</span><span><b>${stats.replyCount}</b> replies</span></div><div class="mf-latest">${latest ? `<strong>${esc(latest.title)}</strong><span>${esc(latest.created_by_name || "Member")} · ${esc(fmt(latest.last_activity_at || latest.created_at))}</span>` : `<span>No topics yet</span>`}</div></button>`;
+    }).join("")}</div></section>`;
   }
 
-  function renderTopicList() {
-    const empty = `<div class="mf-empty"><strong>No topics yet.</strong><span>Start the first topic for this category.</span></div>`;
-    return `<section class="mf-card mf-topic-list"><div class="mf-section-head"><div><span class="mf-eyebrow">Topics</span><h2>Recent discussions</h2></div><span class="mf-mini">${esc(topics.length)} topics</span></div><div class="mf-list">${topics.length ? topics.map((topic) => `<button class="mf-topic ${selectedTopic?.forum_topic_id === topic.forum_topic_id ? "is-active" : ""}" data-topic="${esc(topic.forum_topic_id)}"><span class="mf-topic-top"><strong>${topic.pinned ? "📌 " : ""}${esc(topic.title)}</strong><em>${esc(topicBadge(topic))}</em></span><span>${esc(topic.created_by_name || "Member")} · ${esc(fmt(topic.last_activity_at || topic.created_at))}</span><small>${esc(topic.reply_count || 0)} replies${topic.locked ? " · locked" : ""}${topic.mention_count ? ` · ${esc(topic.mention_count)} mentions` : ""}</small></button>`).join("") : empty}</div></section>`;
+  function renderTopicRows(list, emptyText = "No topics yet.") {
+    const sorted = sortedTopics(list);
+    if (!sorted.length) return `<div class="mf-empty"><strong>${esc(emptyText)}</strong><span>Start the first discussion when you are ready.</span></div>`;
+    return `<div class="mf-topic-table">${sorted.map((topic) => `<button class="mf-topic-row" data-topic="${esc(topic.forum_topic_id)}"><div class="mf-topic-title"><strong>${topic.pinned ? "📌 " : ""}${esc(topic.title)}</strong><span>${esc(topicBadge(topic))} · ${esc(topic.created_by_name || "Member")} · ${esc(fmt(topic.last_activity_at || topic.created_at))}${topic.locked ? " · locked" : ""}</span></div><div class="mf-counts"><span><b>${esc(topic.reply_count || 0)}</b> replies</span>${topic.mention_count ? `<span><b>${esc(topic.mention_count)}</b> mentions</span>` : ""}</div></button>`).join("")}</div>`;
+  }
+
+  function renderCategoryView() {
+    const cat = activeCategory();
+    if (!cat) return renderCategoryIndex();
+    const list = visibleTopicsFor(cat);
+    return `<section class="mf-card"><div class="mf-detail-head"><div><button class="mf-text-btn" id="forum-back-categories" type="button">← All categories</button><h2>${esc(cat.label)}</h2><p class="mf-help">${esc(cat.description || "")}</p></div><span class="mf-mini">${esc(list.length)} topics</span></div>${cat.posting_mode === "admins_only" && !canModerate ? `<p class="mf-help">This category is for organization announcements. Members may read and reply where enabled, but only admins can start announcement topics.</p>` : ""}${renderTopicRows(list, "No topics in this category yet.")}</section>`;
+  }
+
+  function renderSearchResults() {
+    const list = visibleTopicsFor(null);
+    return `<section class="mf-card"><div class="mf-detail-head"><div><span class="mf-eyebrow">Search</span><h2>Search results</h2><p class="mf-help">Showing topics matching “${esc(routeSearch)}”.</p></div><span class="mf-mini">${esc(list.length)} results</span></div>${renderTopicRows(list, "No topics matched your search.")}</section>`;
   }
 
   function renderPoll(topic) {
@@ -307,8 +416,16 @@
 
   function renderTopicDetail() {
     const topic = selectedTopic;
-    if (!topic?.forum_topic_id) return `<section class="mf-card mf-detail"><span class="mf-eyebrow">Topic</span><h2>Select a topic</h2><p class="mf-help">Choose a topic from the list or start a new discussion.</p></section>`;
-    return `<section class="mf-card mf-detail"><div class="mf-topic-detail-head"><div><span class="mf-eyebrow">${esc(topicBadge(topic))}</span><h2>${esc(topic.title)}</h2><p class="mf-help">Posted by ${esc(topic.created_by_name || "Member")} · ${esc(fmt(topic.created_at))}${topic.locked ? " · Locked" : ""}</p></div>${topic.pinned ? `<span class="mf-mini">Pinned</span>` : ""}</div><p class="mf-topic-body">${esc(topic.body).replace(/\n/g,"<br>")}</p>${renderTrip(topic)}${renderPoll(topic)}${renderModeration(topic)}<hr><div class="mf-section-head"><div><span class="mf-eyebrow">Replies</span><h3>${esc(topic.reply_count || 0)} replies</h3></div></div><div class="mf-replies">${renderReplies()}</div>${topic.locked && !canModerate ? `<p class="mf-help">This topic is locked.</p>` : `<label>Reply<textarea id="forum-reply-body" rows="4" placeholder="Write a reply…"></textarea></label>${renderMentionSelect("forum-reply-mentions")}<button id="forum-create-reply" class="mf-btn" type="button">Post reply</button>`}</section>`;
+    if (!topic?.forum_topic_id) return `<section class="mf-card"><h2>Topic not found</h2><p class="mf-help">Choose a topic from the message board.</p></section>`;
+    const category = topic.category || categoryByAny(topic.forum_category_id) || null;
+    return `<section class="mf-card mf-detail"><div class="mf-topic-detail-head"><div><button class="mf-text-btn" id="forum-back-category" type="button">← ${category ? esc(category.label) : "Topics"}</button><span class="mf-eyebrow">${esc(topicBadge(topic))}</span><h2>${esc(topic.title)}</h2><p class="mf-help">Posted by ${esc(topic.created_by_name || "Member")} · ${esc(fmt(topic.created_at))}${topic.locked ? " · Locked" : ""}</p></div>${topic.pinned ? `<span class="mf-mini">Pinned</span>` : ""}</div><p class="mf-topic-body">${esc(topic.body).replace(/\n/g,"<br>")}</p>${renderTrip(topic)}${renderPoll(topic)}${renderModeration(topic)}<hr><div class="mf-section-head"><div><span class="mf-eyebrow">Replies</span><h3>${esc(topic.reply_count || 0)} replies</h3></div></div><div class="mf-replies">${renderReplies()}</div>${topic.locked && !canModerate ? `<p class="mf-help">This topic is locked.</p>` : `<label>Reply<textarea id="forum-reply-body" rows="4" placeholder="Write a reply…"></textarea></label>${renderMentionSelect("forum-reply-mentions")}<button id="forum-create-reply" class="mf-btn" type="button">Post reply</button>`}</section>`;
+  }
+
+  function renderMainContent() {
+    if (routeTopicId) return renderTopicDetail();
+    if (routeSearch) return renderSearchResults();
+    if (routeCategory) return renderCategoryView();
+    return renderCategoryIndex();
   }
 
   function renderBoard() {
@@ -316,15 +433,13 @@
     if (!token) return renderLogin();
     if (loading && !categories.length) return `<div class="mf-card"><h2>Loading message board…</h2><p>Please wait while SyncEtc loads organization topics.</p></div>`;
     if (!access.length && !forumAccessRow) return `<div class="mf-card"><h2>No organization access found</h2><p>Your login is valid, but this account is not linked to an active organization membership.</p></div>`;
-    const orgName = clean(selectedAccess()?.organization_name || "your organization");
-    const createButton = `<div class="mf-toolbar"><div><span class="mf-eyebrow">Member discussions</span><h2>Topics</h2></div><button id="forum-toggle-create" class="mf-btn" type="button">${createFormOpen ? "Close new topic" : "Start new topic"}</button></div>`;
-    return `<section class="mf-card mf-hero"><span class="mf-eyebrow light">Message board</span><h1>${esc(orgName)} Message Board</h1><p>Post topics, reply to member discussions, plan trips, and run simple polls inside your organization.</p></section>${renderCategories()}${createButton}${createFormOpen ? renderCreateTopic() : ""}<div class="mf-main">${renderTopicList()}${renderTopicDetail()}</div>`;
+    return `<section class="mf-card mf-hero"><span class="mf-eyebrow light">Member message board</span><h1>${esc(selectedOrgName())} Forum</h1><p>Read organization updates, start member discussions, plan fly-outs, run simple polls, and reply to club topics.</p></section>${renderTopNav()}${createFormOpen ? renderCreateTopic() : ""}${renderMainContent()}`;
   }
 
   function diagnosticsHtml() {
     if (!DEBUG) return "";
     const lines = diagSteps.map((d) => `${String(d.ms).padStart(6," ")}ms  ${d.step}${d.detail ? " — " + d.detail : ""}`).join("\n");
-    return `<details class="mf-card"><summary>Message board diagnostics</summary><pre class="mf-backend">SyncEtc Message Board ${esc(VERSION)}\nEmail: ${esc(email || "none")}\nSelected org: ${esc(selectedOrgId || "none")}\nAccess rows: ${esc(access.length)}\nBackend version: ${esc(backend?.version || "none")}\nCategories: ${esc(categories.length)}\nTopics: ${esc(topics.length)}\nSelected topic: ${esc(selectedTopic?.forum_topic_id || "none")}\nUnread mentions: ${esc(unreadMentionCount)}\n\nSteps:\n${esc(lines)}\n\nBackend result:\n${esc(JSON.stringify(backend || {}, null, 2))}</pre></details>`;
+    return `<details class="mf-card"><summary>Message board diagnostics</summary><pre class="mf-backend">SyncEtc Message Board ${esc(VERSION)}\nEmail: ${esc(email || "none")}\nSelected org: ${esc(selectedOrgId || "none")}\nBackend version: ${esc(backend?.version || "none")}\nRoute category: ${esc(routeCategory || "none")}\nRoute topic: ${esc(routeTopicId || "none")}\nSearch: ${esc(routeSearch || "none")}\nCategories: ${esc(categories.length)}\nTopics: ${esc(topics.length)}\nSelected topic: ${esc(selectedTopic?.forum_topic_id || "none")}\nUnread mentions: ${esc(unreadMentionCount)}\n\nSteps:\n${esc(lines)}\n\nBackend result:\n${esc(JSON.stringify(backend || {}, null, 2))}</pre></details>`;
   }
 
   function render() {
@@ -332,16 +447,41 @@
     if (!root) return;
     const cfg = styleConfig(selectedAccess());
     root.innerHTML = `<style>
-      .mf-wrap{${cssVars(cfg)}max-width:var(--mf-page-width);margin:24px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:var(--mf-text);box-sizing:border-box}.mf-wrap *{box-sizing:border-box}.mf-card{background:rgba(255,255,255,.95);border:1px solid var(--mf-border);border-radius:var(--mf-radius);box-shadow:var(--mf-shadow);padding:20px;margin:16px 0}.mf-hero{background:linear-gradient(135deg,var(--mf-primary),${rgba(cfg.primary,.76)});color:#fff}.mf-hero h1{margin:8px 0 6px;font-size:38px;line-height:1.05;color:#fff;letter-spacing:-.03em}.mf-hero p{color:rgba(255,255,255,.9);font-weight:850}.mf-eyebrow{display:inline-flex;align-items:center;width:max-content;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);font-size:11px;font-weight:950;letter-spacing:.06em;text-transform:uppercase;padding:6px 10px}.mf-eyebrow.light{background:rgba(255,255,255,.16);color:#fff}.mf-main{display:grid;grid-template-columns:minmax(320px,.9fr) minmax(420px,1.15fr);gap:16px;align-items:start}.mf-toolbar{display:flex;justify-content:space-between;align-items:center;gap:14px;margin:16px 0}.mf-toolbar h2{margin:6px 0 0;color:var(--mf-text);font-size:26px}.mf-section-head,.mf-topic-detail-head,.mf-topic-top,.mf-reply-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.mf-category-bar{padding-bottom:14px}.mf-category-bar h2{margin:6px 0 0;color:var(--mf-text)}.mf-category-scroll{display:flex;gap:10px;overflow-x:auto;scrollbar-width:thin;padding:2px 2px 8px;margin-top:12px}.mf-cat{flex:0 0 auto;min-width:170px;max-width:230px}.mf-cat,.mf-topic{width:100%;text-align:left;border:1px solid var(--mf-border);border-radius:16px;background:#fff;color:var(--mf-text);padding:12px;margin-top:0;cursor:pointer}.mf-cat:hover,.mf-topic:hover{border-color:var(--mf-primary);box-shadow:0 8px 22px ${rgba(cfg.primary,.10)}}.mf-cat.is-active,.mf-topic.is-active{border-color:var(--mf-primary);background:var(--mf-soft)}.mf-cat strong,.mf-topic strong{display:block;color:var(--mf-primary)}.mf-cat span,.mf-topic span,.mf-topic small{display:block;color:var(--mf-muted);font-size:12px;font-weight:800;margin-top:4px}.mf-cat em,.mf-topic em{font-style:normal;display:inline-flex;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);font-size:11px;font-weight:950;padding:4px 7px}.mf-form-grid,.mf-login-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.mf-wrap label{display:block;margin:10px 0 6px;font-weight:950;color:var(--mf-text)}.mf-wrap input,.mf-wrap select,.mf-wrap textarea{width:100%;min-height:42px;border:1px solid var(--mf-border);border-radius:12px;padding:10px 12px;background:#fff;color:var(--mf-text);font:inherit}.mf-wrap textarea{resize:vertical}.mf-btn{display:inline-flex;align-items:center;justify-content:center;min-height:40px;border-radius:999px;border:1px solid var(--mf-primary);background:var(--mf-primary);color:#fff;font-weight:950;padding:9px 15px;text-decoration:none;cursor:pointer;margin-top:8px}.mf-btn.secondary{background:#fff;color:var(--mf-primary)}.mf-btn:disabled{opacity:.58;cursor:not-allowed}.mf-help{color:var(--mf-muted);font-size:13px;line-height:1.45;font-weight:750}.mf-mini,.mf-attention{display:inline-flex;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);padding:5px 9px;font-size:11px;font-weight:950;text-transform:uppercase}.mf-attention{background:#fee2e2;color:#991b1b}.mf-empty{border:1px dashed var(--mf-border);border-radius:16px;padding:16px;color:var(--mf-muted);font-weight:850}.mf-empty strong,.mf-empty span{display:block}.mf-topic-body{font-size:15px;line-height:1.55;font-weight:750;background:#f8fafc;border:1px solid #dbe3ef;border-radius:16px;padding:14px}.mf-detail hr{border:0;border-top:1px solid var(--mf-border);margin:18px 0}.mf-reply{border:1px solid var(--mf-border);border-radius:16px;padding:13px;margin:10px 0;background:#fff}.mf-reply.is-hidden{opacity:.65}.mf-reply p{margin:8px 0 0;line-height:1.5}.mf-actions{display:flex;gap:8px;flex-wrap:wrap}.mf-moderation{border-top:1px solid var(--mf-border);padding-top:10px;margin-top:12px}.mf-poll,.mf-trip{border:1px solid var(--mf-border);border-radius:16px;padding:14px;margin:14px 0;background:#fff}.mf-trip span{display:block;color:var(--mf-muted);font-weight:850;margin-top:4px}.mf-poll h3{margin:0 0 10px;color:var(--mf-primary)}.mf-poll-option{position:relative;overflow:hidden;display:block;width:100%;border:1px solid var(--mf-border);border-radius:14px;background:#fff;text-align:left;padding:11px;margin:8px 0;cursor:pointer}.mf-poll-option i{position:absolute;left:0;top:0;bottom:0;background:var(--mf-soft);z-index:0}.mf-poll-option span,.mf-poll-option em{position:relative;z-index:1;display:flex;justify-content:space-between;gap:10px}.mf-poll-option em{font-style:normal;color:var(--mf-muted);font-weight:850}.mf-poll-option.is-selected{border-color:var(--mf-primary)}.mf-extra{border-left:4px solid var(--mf-primary);padding-left:12px}.mf-message{display:inline-flex;margin-top:10px;border-radius:12px;padding:9px 11px;font-size:13px;font-weight:900;background:${messageKind === "ok" ? "#e7f6ec" : messageKind === "warn" ? "#fff7ec" : "rgba(255,255,255,.14)"};color:${messageKind === "ok" ? "#14532d" : messageKind === "warn" ? "#8a4d00" : "inherit"}}.mf-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font-size:12px;max-height:360px;overflow:auto}details summary{cursor:pointer;font-weight:950;color:var(--mf-primary)}@media(max-width:980px){.mf-main,.mf-form-grid,.mf-login-grid{grid-template-columns:1fr}.mf-toolbar{align-items:flex-start;flex-direction:column}.mf-hero h1{font-size:31px}.mf-topic-detail-head,.mf-topic-top,.mf-reply-head{display:block}.mf-category-scroll{padding-bottom:10px}.mf-cat{min-width:190px}}
+      .mf-wrap{${cssVars(cfg)}max-width:var(--mf-page-width);margin:24px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:var(--mf-text);box-sizing:border-box}.mf-wrap *{box-sizing:border-box}.mf-card{background:rgba(255,255,255,.95);border:1px solid var(--mf-border);border-radius:var(--mf-radius);box-shadow:var(--mf-shadow);padding:20px;margin:16px 0}.mf-hero{background:linear-gradient(135deg,var(--mf-primary),${rgba(cfg.primary,.76)});color:#fff}.mf-hero h1{margin:8px 0 6px;font-size:38px;line-height:1.05;color:#fff;letter-spacing:-.03em}.mf-hero p{color:rgba(255,255,255,.9);font-weight:850}.mf-eyebrow{display:inline-flex;align-items:center;width:max-content;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);font-size:11px;font-weight:950;letter-spacing:.06em;text-transform:uppercase;padding:6px 10px}.mf-eyebrow.light{background:rgba(255,255,255,.16);color:#fff}.mf-board-head,.mf-section-head,.mf-detail-head,.mf-topic-detail-head,.mf-reply-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}.mf-board-head h2,.mf-section-head h2,.mf-detail-head h2{margin:7px 0 0;color:var(--mf-text);font-size:27px}.mf-search-row{display:grid;grid-template-columns:minmax(220px,1fr) auto auto auto;gap:9px;align-items:center;margin-top:16px}.mf-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.mf-tab{border:1px solid var(--mf-border);border-radius:999px;background:#fff;color:var(--mf-primary);font-weight:950;padding:8px 12px;cursor:pointer}.mf-tab.is-active,.mf-tab:hover{background:var(--mf-primary);color:#fff}.mf-category-table,.mf-topic-table{display:grid;gap:10px;margin-top:14px}.mf-category-row,.mf-topic-row{width:100%;display:grid;grid-template-columns:minmax(260px,1.4fr) minmax(130px,.35fr) minmax(260px,.9fr);gap:14px;align-items:center;text-align:left;border:1px solid var(--mf-border);border-radius:16px;background:#fff;color:var(--mf-text);padding:15px;cursor:pointer}.mf-topic-row{grid-template-columns:minmax(320px,1.5fr) minmax(130px,.35fr)}.mf-category-row:hover,.mf-topic-row:hover{border-color:var(--mf-primary);box-shadow:0 8px 22px ${rgba(cfg.primary,.10)}}.mf-category-main strong,.mf-topic-title strong{display:block;color:var(--mf-primary);font-size:16px}.mf-category-main span,.mf-topic-title span,.mf-latest span,.mf-help{color:var(--mf-muted);font-size:13px;line-height:1.45;font-weight:750}.mf-category-main em{font-style:normal;display:inline-flex;margin-top:6px;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);font-size:11px;font-weight:950;padding:4px 7px}.mf-counts{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-start}.mf-counts span,.mf-mini,.mf-attention{display:inline-flex;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);padding:6px 9px;font-size:11px;font-weight:950;text-transform:uppercase}.mf-counts b{margin-right:4px}.mf-attention{background:#fee2e2;color:#991b1b}.mf-latest strong{display:block;color:var(--mf-text);font-size:13px}.mf-form-grid,.mf-login-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.mf-wrap label{display:block;margin:10px 0 6px;font-weight:950;color:var(--mf-text)}.mf-wrap input,.mf-wrap select,.mf-wrap textarea{width:100%;min-height:42px;border:1px solid var(--mf-border);border-radius:12px;padding:10px 12px;background:#fff;color:var(--mf-text);font:inherit}.mf-wrap textarea{resize:vertical}.mf-btn{display:inline-flex;align-items:center;justify-content:center;min-height:40px;border-radius:999px;border:1px solid var(--mf-primary);background:var(--mf-primary);color:#fff;font-weight:950;padding:9px 15px;text-decoration:none;cursor:pointer}.mf-btn.secondary{background:#fff;color:var(--mf-primary)}.mf-btn:disabled{opacity:.58;cursor:not-allowed}.mf-text-btn{border:0;background:transparent;color:var(--mf-primary);font-weight:950;text-decoration:underline;padding:0;margin:0 0 10px;cursor:pointer}.mf-empty{border:1px dashed var(--mf-border);border-radius:16px;padding:16px;color:var(--mf-muted);font-weight:850}.mf-empty strong,.mf-empty span{display:block}.mf-topic-body{font-size:15px;line-height:1.55;font-weight:750;background:#f8fafc;border:1px solid #dbe3ef;border-radius:16px;padding:14px}.mf-detail hr{border:0;border-top:1px solid var(--mf-border);margin:18px 0}.mf-reply{border:1px solid var(--mf-border);border-radius:16px;padding:13px;margin:10px 0;background:#fff}.mf-reply.is-hidden{opacity:.65}.mf-reply p{margin:8px 0 0;line-height:1.5}.mf-actions{display:flex;gap:8px;flex-wrap:wrap}.mf-moderation{border-top:1px solid var(--mf-border);padding-top:10px;margin-top:12px}.mf-poll,.mf-trip{border:1px solid var(--mf-border);border-radius:16px;padding:14px;margin:14px 0;background:#fff}.mf-trip span{display:block;color:var(--mf-muted);font-weight:850;margin-top:4px}.mf-poll h3{margin:0 0 10px;color:var(--mf-primary)}.mf-poll-option{position:relative;overflow:hidden;display:block;width:100%;border:1px solid var(--mf-border);border-radius:14px;background:#fff;text-align:left;padding:11px;margin:8px 0;cursor:pointer}.mf-poll-option i{position:absolute;left:0;top:0;bottom:0;background:var(--mf-soft);z-index:0}.mf-poll-option span,.mf-poll-option em{position:relative;z-index:1;display:flex;justify-content:space-between;gap:10px}.mf-poll-option em{font-style:normal;color:var(--mf-muted);font-weight:850}.mf-poll-option.is-selected{border-color:var(--mf-primary)}.mf-extra{border-left:4px solid var(--mf-primary);padding-left:12px}.mf-message{display:inline-flex;margin-top:10px;border-radius:12px;padding:9px 11px;font-size:13px;font-weight:900;background:${messageKind === "ok" ? "#e7f6ec" : messageKind === "warn" ? "#fff7ec" : "rgba(255,255,255,.14)"};color:${messageKind === "ok" ? "#14532d" : messageKind === "warn" ? "#8a4d00" : "inherit"}}.mf-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font-size:12px;max-height:360px;overflow:auto}details summary{cursor:pointer;font-weight:950;color:var(--mf-primary)}@media(max-width:980px){.mf-search-row,.mf-category-row,.mf-topic-row,.mf-form-grid,.mf-login-grid{grid-template-columns:1fr}.mf-board-head,.mf-section-head,.mf-detail-head,.mf-topic-detail-head,.mf-reply-head{display:block}.mf-hero h1{font-size:31px}.mf-counts{margin-top:8px}}
     </style><div class="mf-wrap">${renderBoard()}<div class="mf-message ${esc(messageKind)}">${esc(message)}</div>${diagnosticsHtml()}</div>`;
     bindEvents();
+  }
+
+  function goCategory(categoryValue) {
+    if (!confirmDirty()) return;
+    categoryFilter = clean(categoryValue);
+    routeTopicId = "";
+    selectedTopic = null;
+    createFormOpen = false;
+    setDirty(false);
+    updateRoute({ category: categoryFilter, topic: "" });
+    render();
+  }
+
+  function goTopic(topicId) {
+    if (!confirmDirty()) return;
+    routeTopicId = clean(topicId);
+    categoryFilter = "";
+    createFormOpen = false;
+    setDirty(false);
+    updateRoute({ topic: routeTopicId, category: "" });
+    loadForum({ forum_topic_id: routeTopicId }).catch((e) => setMessage(e.message || String(e), "warn"));
   }
 
   function bindEvents() {
     $("forum-login")?.addEventListener("click", () => runButton("forum-login", "Logging in…", login));
     $("forum-toggle-create")?.addEventListener("click", () => { if (createFormOpen && !confirmDirty()) return; createFormOpen = !createFormOpen; if (!createFormOpen) setDirty(false); render(); });
-    document.querySelectorAll(".mf-cat").forEach((btn) => btn.addEventListener("click", () => { if (!confirmDirty()) return; categoryFilter = btn.getAttribute("data-category") || ""; createFormOpen = false; setDirty(false); loadForum({ forum_category_id: categoryFilter, forum_topic_id: "" }).catch((e) => setMessage(e.message || String(e), "warn")); }));
-    document.querySelectorAll(".mf-topic").forEach((btn) => btn.addEventListener("click", () => { if (!confirmDirty()) return; setDirty(false); loadForum({ forum_topic_id: btn.getAttribute("data-topic") || "" }).catch((e) => setMessage(e.message || String(e), "warn")); }));
+    $("forum-close-create")?.addEventListener("click", () => { if (!confirmDirty()) return; createFormOpen = false; setDirty(false); render(); });
+    $("forum-search-form")?.addEventListener("submit", (e) => { e.preventDefault(); if (!confirmDirty()) return; searchQuery = clean($("forum-search")?.value); routeTopicId = ""; selectedTopic = null; updateRoute({ q: searchQuery, topic: "" }); render(); });
+    $("forum-clear-search")?.addEventListener("click", () => { if (!confirmDirty()) return; searchQuery = ""; updateRoute({ q: "" }); render(); });
+    document.querySelectorAll("[data-forum-home]").forEach((btn) => btn.addEventListener("click", () => { if (!confirmDirty()) return; clearRouteToHome(); }));
+    document.querySelectorAll("[data-category]").forEach((btn) => btn.addEventListener("click", () => goCategory(btn.getAttribute("data-category") || "")));
+    document.querySelectorAll("[data-topic]").forEach((btn) => btn.addEventListener("click", () => goTopic(btn.getAttribute("data-topic") || "")));
     $("forum-new-type")?.addEventListener("change", (e) => { createTopicType = e.target.value || "discussion"; render(); });
     ["forum-new-title","forum-new-body","forum-new-poll-options","forum-reply-body","forum-trip-destination","forum-trip-date"].forEach((id) => $(id)?.addEventListener("input", () => setDirty(true)));
     $("forum-create-topic")?.addEventListener("click", () => runButton("forum-create-topic", "Posting…", createTopic));
@@ -365,6 +505,13 @@
       mentioned_person_ids: selectedMentionIds("forum-new-mentions"),
     };
     const res = await call("member_forum_create_topic", payload);
+    const nextTopic = clean(obj(res.selected_topic).forum_topic_id);
+    if (nextTopic) {
+      routeTopicId = nextTopic;
+      categoryFilter = "";
+      searchQuery = "";
+      updateRoute({ topic: nextTopic, category: "", q: "" });
+    }
     applyContext(res);
     createFormOpen = false;
     setDirty(false);
@@ -376,6 +523,7 @@
     const body = $("forum-reply-body")?.value || "";
     if (!selectedTopic?.forum_topic_id) throw new Error("Choose a topic first.");
     const res = await call("member_forum_create_reply", { organization_id: selectedOrgId, forum_topic_id: selectedTopic.forum_topic_id, body, mentioned_person_ids: selectedMentionIds("forum-reply-mentions") });
+    routeTopicId = clean(selectedTopic.forum_topic_id);
     applyContext(res);
     setDirty(false);
     setMessage("Reply posted.", "ok");
@@ -406,11 +554,14 @@
     selectedOrgId = nextOrgId;
     forumAccessRow = null;
     setDirty(false);
+    routeCategory = "";
+    routeTopicId = "";
     try { await loadForum({ organization_id: nextOrgId, forum_topic_id: "" }); setMessage("Organization loaded.", "ok"); }
     catch (e) { backend = { ok:false, message:e.message || String(e) }; setMessage(e.message || String(e), "warn"); }
   }
 
   window.addEventListener("beforeunload", (event) => { if (!dirty) return; event.preventDefault(); event.returnValue = ""; });
+  window.addEventListener("popstate", () => { if (!confirmDirty()) return; parseRoute(); loadForum({ forum_topic_id: routeTopicId }).catch((e) => setMessage(e.message || String(e), "warn")); });
   window.addEventListener("syncetc:portal-auth-changed", () => { refreshAuth().catch((e) => { backend = { ok:false, message:e.message || String(e) }; render(); }); });
   window.addEventListener("syncetc:portal-organization-change-request", (event) => { handleOrganizationChange(event.detail?.organizationId || event.detail?.organization_id); });
   window.addEventListener("syncetc:portal-organization-change", (event) => { handleOrganizationChange(event.detail?.organization_id || event.detail?.organizationId); });

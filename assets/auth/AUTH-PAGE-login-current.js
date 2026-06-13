@@ -1,11 +1,11 @@
 // AUTH-PAGE-login-current.js
-// Internal Version: 2026-06-13-110-A
+// Internal Version: 2026-06-13-110-C
 // Purpose: Simple shared login page for /login route. Uses Supabase Auth and sends users to the portal after login.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-13-110-A";
+  const VERSION = "2026-06-13-110-C";
   const ROOT_ID = "syncetc-login-root";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -51,7 +51,7 @@
     const params = new URLSearchParams(window.location.search);
     let target = clean(params.get("next") || params.get("returnTo") || params.get("redirect") || "");
     try { target = target || window.sessionStorage.getItem("syncetc_return_to") || ""; } catch {}
-    if (!target || target.startsWith("http") || target === "/login") target = "/member/dashboard";
+    if (!target || target.startsWith("http") || target === "/login") target = "/user-dashboard";
     return target;
   }
   async function waitForSession(client, attempts = 12, delay = 150) {
@@ -65,9 +65,9 @@
   function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
   function intendedDestination() {
     const params = new URLSearchParams(window.location.search);
-    const raw = params.get("next") || params.get("redirect") || window.sessionStorage.getItem("syncetc_login_next") || "/member/dashboard";
+    const raw = params.get("next") || params.get("redirect") || window.sessionStorage.getItem("syncetc_login_next") || "/user-dashboard";
     try { window.sessionStorage.removeItem("syncetc_login_next"); } catch {}
-    if (!raw || !String(raw).startsWith("/") || String(raw).startsWith("//")) return "/member/dashboard";
+    if (!raw || !String(raw).startsWith("/") || String(raw).startsWith("//")) return "/user-dashboard";
     return String(raw);
   }
   async function waitForSession(client, maxAttempts = 18) {
@@ -132,7 +132,7 @@
     const root = rootEl();
     root.innerHTML = `<style>
       #${ROOT_ID}{font-family:Arial,Helvetica,sans-serif;max-width:720px;margin:42px auto;padding:0 18px;color:#172033;box-sizing:border-box}#${ROOT_ID} *{box-sizing:border-box}.login-card{background:#fff;border:1px solid #d9e2ef;border-radius:22px;box-shadow:0 18px 48px rgba(15,23,42,.12);padding:24px}.brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}.mark{width:54px;height:54px;border-radius:16px;background:linear-gradient(135deg,#0b3f75,#ff7100);color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:950}.brand h1{margin:0;font-size:30px;color:#102a56}.login-grid{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:center}.login-grid input{min-height:44px;border:1px solid #c8d4e4;border-radius:12px;padding:10px 12px}.btn{border:1px solid #102a56;background:#102a56;color:#fff;border-radius:999px;min-height:42px;padding:9px 15px;font-weight:950;cursor:pointer}.btn.secondary{background:#fff;color:#102a56}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.msg{display:inline-flex;margin-top:14px;border-radius:12px;padding:10px 12px;font-size:13px;font-weight:900;background:${messageKind === "ok" ? "#e7f6ec" : messageKind === "warn" ? "#fff7ec" : "#eef3f8"};color:${messageKind === "ok" ? "#14532d" : messageKind === "warn" ? "#8a4d00" : "#102a56"}}.help{color:#5d6b82;line-height:1.45;font-weight:700}@media(max-width:760px){.login-grid{grid-template-columns:1fr}.btn{width:100%}}
-    </style><div class="login-card"><div class="brand"><div class="mark">S</div><div><h1>SyncEtc Login</h1><div class="help">One login for user access, organization admin, and platform tools.</div></div></div>${authenticated ? `<p><strong>Logged in as ${esc(email)}</strong></p><div class="actions"><a class="btn" href="/member/dashboard" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center">Open Member Dashboard</a><a class="btn secondary" href="/organization-admin" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center">Open Organization Admin</a><button id="login-logout" class="btn secondary" type="button">Log out</button></div>` : `<div class="login-grid"><input id="login-email" type="email" placeholder="Email" autocomplete="username"><input id="login-password" type="password" placeholder="Password" autocomplete="current-password"><button id="login-submit" class="btn" type="button">Log in</button></div><div class="actions"><button id="login-reset" class="btn secondary" type="button">Send password reset</button></div>`}<div class="msg">${esc(message)}</div></div>`;
+    </style><div class="login-card"><div class="brand"><div class="mark">S</div><div><h1>SyncEtc Login</h1><div class="help">One login for user access, organization admin, and platform tools.</div></div></div>${authenticated ? `<p><strong>Logged in as ${esc(email)}</strong></p><div class="actions"><a class="btn" href="/user-dashboard" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center">Open Member Dashboard</a><a class="btn secondary" href="/organization-admin" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center">Open Organization Admin</a><button id="login-logout" class="btn secondary" type="button">Log out</button></div>` : `<div class="login-grid"><input id="login-email" type="email" placeholder="Email" autocomplete="username"><input id="login-password" type="password" placeholder="Password" autocomplete="current-password"><button id="login-submit" class="btn" type="button">Log in</button></div><div class="actions"><button id="login-reset" class="btn secondary" type="button">Send password reset</button></div>`}<div class="msg">${esc(message)}</div></div>`;
     $("login-submit")?.addEventListener("click", () => run("login-submit", "Logging in…", login));
     $("login-reset")?.addEventListener("click", () => run("login-reset", "Sending…", reset));
     $("login-logout")?.addEventListener("click", () => run("login-logout", "Logging out…", logout));

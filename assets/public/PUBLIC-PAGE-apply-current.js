@@ -1,11 +1,11 @@
 // PUBLIC-PAGE-apply-current.js
-// Internal Version: 2026-06-12-108-H
-// Purpose: Public Apply Now intake page with new-applicant framing, returning-applicant portal path, and masked email-on-file continuation.
+// Internal Version: 2026-06-12-108-I
+// Purpose: Public Apply / Update Application page with new-applicant precheck and inline returning-applicant secure-link request.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-12-108-H";
+  const VERSION = "2026-06-12-108-I";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const PUBLIC_EDGE_URL = `${SUPABASE_URL}/functions/v1/core-public-render`;
   const ROOT_SELECTOR = "#syncetc-apply-page-root, [data-syncetc-page='apply-now']";
@@ -103,7 +103,7 @@
 
   function pageTitle() {
     const page = state.payload?.page_settings || {};
-    return clean(page.title || "Apply Now");
+    return clean(page.title || "Apply / Update Application");
   }
 
   function pageIntro() {
@@ -116,7 +116,7 @@
   }
 
   function precheckHtml() {
-    return `<div class="syncetc-apply"><section class="syncetc-apply-card"><div class="syncetc-apply-hero"><div class="syncetc-apply-eyebrow">Application</div><h1>${esc(pageTitle())}</h1><p>${esc(pageIntro())}</p></div><div class="syncetc-apply-body"><div class="syncetc-precheck-split"><section class="syncetc-section"><span class="syncetc-pill">New applicant?</span><h2 style="margin-top:10px">Begin the application process here</h2><p>If this is your first time applying, enter your information accurately below. We will first check whether an application already exists so we can avoid duplicates and help you continue securely if needed.</p><p class="syncetc-small">If no existing application is found, the system will ask for additional information to complete your application.</p><form id="syncetc-apply-precheck-form"><div class="syncetc-grid">${preField("first_name","First name","text",true,placeholder("Wilbur"))}${preField("last_name","Last name","text",true,placeholder("Wright"))}${preField("date_of_birth","Date of birth","date",true)}${preField("email","Email","email",true,`${placeholder("wilbur.wright@example.com")} autocomplete="email" inputmode="email"`)}${preField("phone","Mobile phone","tel",true,`${placeholder("(555) 123-4567")} autocomplete="tel" inputmode="tel"`)}</div><div id="syncetc-precheck-alert"></div><div class="syncetc-actions"><button id="syncetc-precheck-submit" class="syncetc-btn" type="submit" ${state.precheckBusy ? "disabled" : ""}>${state.precheckBusy ? "Checking…" : "Begin application"}</button></div></form></section><aside class="syncetc-section"><span class="syncetc-pill">Already applied?</span><h3 style="margin-top:10px">View or update your application</h3><p>Use the Applicant Portal to view or update your application information and complete requested next steps.</p><p class="syncetc-small">Enter the same email address you used when you applied. If you do not remember which email you used, begin on the left with your name, date of birth, phone number, and current email. If the system finds a likely matching application, it may show a partial hint for the email address on file.</p><div class="syncetc-actions left"><button type="button" class="syncetc-btn secondary" id="syncetc-open-applicant-portal">Open Applicant Portal</button></div></aside></div>${debugBlock("Precheck mode", state.backend || state.payload)}</div></section></div>`;
+    return `<div class="syncetc-apply"><section class="syncetc-apply-card"><div class="syncetc-apply-hero"><div class="syncetc-apply-eyebrow">Application</div><h1>${esc(pageTitle())}</h1><p>${esc(pageIntro())}</p></div><div class="syncetc-apply-body"><div class="syncetc-precheck-split"><section class="syncetc-section"><span class="syncetc-pill">New applicant?</span><h2 style="margin-top:10px">Begin the application process here</h2><p>If this is your first time applying, enter your information accurately below.</p><p class="syncetc-small">The system will first check whether an application already exists. If no application is found, you will be asked for additional information to complete your application.</p><form id="syncetc-apply-precheck-form"><div class="syncetc-grid">${preField("first_name","First name","text",true,placeholder("Wilbur"))}${preField("last_name","Last name","text",true,placeholder("Wright"))}${preField("date_of_birth","Date of birth","date",true)}${preField("email","Email","email",true,`${placeholder("wilbur.wright@example.com")} autocomplete="email" inputmode="email"`)}${preField("phone","Mobile phone","tel",true,`${placeholder("(555) 123-4567")} autocomplete="tel" inputmode="tel"`)}</div><div id="syncetc-precheck-alert"></div><div class="syncetc-actions"><button id="syncetc-precheck-submit" class="syncetc-btn" type="submit" ${state.precheckBusy ? "disabled" : ""}>${state.precheckBusy ? "Checking…" : "Begin application"}</button></div></form></section><aside class="syncetc-section"><span class="syncetc-pill">Already applied?</span><h3 style="margin-top:10px">View or update your application</h3><p>Use the applicant portal to view or update your application information and complete any requested next steps.</p><p class="syncetc-small">Enter the same email address you used when you applied. We will send a secure link to that address.</p><label class="syncetc-field"><span>Application email</span><input class="syncetc-input" id="returning-email" type="email" autocomplete="email" inputmode="email" value="${attr(state.prefill.email || '')}" placeholder="email@example.com"></label><div id="syncetc-returning-alert"></div><div class="syncetc-actions left"><button type="button" class="syncetc-btn" id="syncetc-returning-request-link">Send secure link</button></div><p class="syncetc-small" style="margin-top:12px">Do not remember which email you used? Begin on the left with your name, date of birth, phone number, and current email. If the system finds a likely matching application, it may show a partial hint for the email address on file.</p><p class="syncetc-small">No longer have access to the email on file? Use the Contact link at the top of the page so the organization can help verify and update your record.</p></aside></div>${debugBlock("Precheck mode", state.backend || state.payload)}</div></section></div>`;
   }
 
   function precheckResultHtml(result) {
@@ -128,8 +128,9 @@
     const portalAvailable = obj(result.portal).available !== false;
     const masked = clean(result.masked_email || obj(result.precheck).masked_email || "");
     const maskedBlock = masked ? `<div class="syncetc-alert info"><strong>Email on file:</strong> ${esc(masked)}</div>` : "";
-    const contactNote = `<p class="syncetc-small" style="margin-top:12px">If you no longer have access to the email address on file, please contact the organization using the Contact link at the top of this page.</p>`;
-    return `<div class="syncetc-apply"><section class="syncetc-apply-card"><div class="syncetc-apply-hero"><div class="syncetc-apply-eyebrow">Application</div><h1>${esc(pageTitle())}</h1><p>${esc(pageIntro())}</p></div><div class="syncetc-apply-body"><section class="syncetc-section"><span class="syncetc-pill">Precheck complete</span><h2 style="margin-top:10px">${esc(title)}</h2><div class="syncetc-alert ${alertKind}">${esc(result.message || "This information may match an application already on file.")}</div>${maskedBlock}<div id="syncetc-precheck-action-alert"></div>${isActive ? `<p class="syncetc-small" style="margin-top:12px">We did not open a duplicate application form because this looks like an active application. If this is your application and you still have access to the email address on file, we can send a secure applicant portal link there.</p>${contactNote}<div class="syncetc-actions left">${portalAvailable ? `<button type="button" class="syncetc-btn" id="syncetc-precheck-request-link">${state.portalRequestBusy ? "Sending…" : "Send secure link to email on file"}</button><button type="button" class="syncetc-btn secondary" id="syncetc-precheck-open-portal">Open Applicant Portal</button><a class="syncetc-btn ghost" href="/contact">Contact us</a>` : `<a class="syncetc-btn secondary" href="/contact">Contact us</a><button type="button" class="syncetc-btn ghost" id="syncetc-precheck-back">Back</button>`}</div>` : `<p class="syncetc-small" style="margin-top:12px">You may continue, but the organization may review this as a possible duplicate or reapplication.</p>${masked ? contactNote : ""}<div class="syncetc-actions left"><button type="button" class="syncetc-btn" id="syncetc-precheck-continue">Continue with application</button>${portalAvailable && masked ? `<button type="button" class="syncetc-btn secondary" id="syncetc-precheck-request-link">${state.portalRequestBusy ? "Sending…" : "Send secure link to email on file"}</button>` : ""}<button type="button" class="syncetc-btn ghost" id="syncetc-precheck-back">Back</button></div>`}${debugBlock("Precheck result", result)}</section></div></section></div>`;
+    const contactNote = `<p class="syncetc-small" style="margin-top:12px">If you no longer have access to the email address on file, please use the Contact link at the top of this page so the organization can help verify and update your record.</p>`;
+    const confirmEmailBlock = masked ? `<label class="syncetc-field" style="margin-top:12px"><span>Confirm the full email address on file</span><input class="syncetc-input" id="precheck-confirm-email" type="email" autocomplete="email" inputmode="email" placeholder="Type the full email address shown above in masked form"></label>` : "";
+    return `<div class="syncetc-apply"><section class="syncetc-apply-card"><div class="syncetc-apply-hero"><div class="syncetc-apply-eyebrow">Application</div><h1>${esc(pageTitle())}</h1><p>${esc(pageIntro())}</p></div><div class="syncetc-apply-body"><section class="syncetc-section"><span class="syncetc-pill">Precheck complete</span><h2 style="margin-top:10px">${esc(title)}</h2><div class="syncetc-alert ${alertKind}">${esc(result.message || "This information may match an application already on file.")}</div>${maskedBlock}<div id="syncetc-precheck-action-alert"></div>${isActive ? `<p class="syncetc-small" style="margin-top:12px">We did not open a duplicate application form because this looks like an active application. To receive a secure applicant portal link, confirm the full email address on file below.</p>${confirmEmailBlock}${contactNote}<div class="syncetc-actions left">${portalAvailable ? `<button type="button" class="syncetc-btn" id="syncetc-precheck-request-link">${state.portalRequestBusy ? "Sending…" : "Send secure link to email on file"}</button><a class="syncetc-btn secondary" href="/contact">Contact us</a><button type="button" class="syncetc-btn ghost" id="syncetc-precheck-back">Back</button>` : `<a class="syncetc-btn secondary" href="/contact">Contact us</a><button type="button" class="syncetc-btn ghost" id="syncetc-precheck-back">Back</button>`}</div>` : `<p class="syncetc-small" style="margin-top:12px">You may continue, but the organization may review this as a possible duplicate or reapplication.</p>${masked ? contactNote : ""}<div class="syncetc-actions left"><button type="button" class="syncetc-btn" id="syncetc-precheck-continue">Continue with application</button><button type="button" class="syncetc-btn ghost" id="syncetc-precheck-back">Back</button></div>`}${debugBlock("Precheck result", result)}</section></div></section></div>`;
   }
 
   function formHtml() {
@@ -197,7 +198,7 @@
     if (!validateEmail(cleanEmail)) { actionAlert(alertId, "Enter a valid application email first.", "error"); return; }
     state.portalRequestBusy = true;
     setApplicantEmailHint(cleanEmail);
-    const btns = document.querySelectorAll("#syncetc-precheck-request-link,#syncetc-success-request-link");
+    const btns = document.querySelectorAll("#syncetc-precheck-request-link,#syncetc-success-request-link,#syncetc-returning-request-link");
     btns.forEach((btn) => { btn.disabled = true; btn.textContent = "Sending…"; });
     try {
       const data = await callPublic("request_applicant_portal_access", { organization_key: organizationKey(), site_key: siteKey(), email: cleanEmail, redirect_to: location.origin + "/applicant-portal" });
@@ -206,12 +207,20 @@
       actionAlert(alertId, "If an eligible application exists for that email, we will send applicant portal instructions.", "ok");
     } finally {
       state.portalRequestBusy = false;
-      btns.forEach((btn) => { btn.disabled = false; btn.textContent = btn.id === "syncetc-success-request-link" ? "Send secure login link" : "Send secure login link"; });
+      btns.forEach((btn) => { btn.disabled = false; btn.textContent = btn.id === "syncetc-returning-request-link" ? "Send secure link" : "Send secure login link"; });
     }
+  }
+
+  function returningApplicantEmail() {
+    const el = byId("returning-email");
+    return el ? raw(el.value) : clean(state.prefill.email || preValue("email"));
   }
 
   async function sendPrecheckPortalLink(result, alertId) {
     const prefill = obj(result?.prefill || state.prefill);
+    const confirmEl = byId("precheck-confirm-email");
+    const confirmedEmail = confirmEl ? raw(confirmEl.value) : "";
+    if (confirmEl && !validateEmail(confirmedEmail)) { actionAlert(alertId, "Enter the full email address on file before requesting the secure link.", "error"); confirmEl.focus(); return; }
     const btn = byId("syncetc-precheck-request-link");
     state.portalRequestBusy = true;
     if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
@@ -224,6 +233,7 @@
         date_of_birth: clean(prefill.date_of_birth),
         email: clean(prefill.email),
         phone: clean(prefill.phone),
+        confirmed_email: clean(confirmedEmail),
         redirect_to: location.origin + "/applicant-portal"
       });
       actionAlert(alertId, clean(data.message || "If this matches an eligible application, we will send applicant portal instructions to the email address on file."), "ok");
@@ -260,8 +270,10 @@
   }
 
   function bindPrecheck() {
-    const portal = byId("syncetc-open-applicant-portal");
-    if (portal) portal.onclick = () => openApplicantPortal(state.prefill.email || preValue("email"));
+    const returningReq = byId("syncetc-returning-request-link");
+    if (returningReq) returningReq.onclick = () => sendPortalLink(returningApplicantEmail(), "syncetc-returning-alert");
+    const returningEmail = byId("returning-email");
+    if (returningEmail) returningEmail.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); sendPortalLink(returningApplicantEmail(), "syncetc-returning-alert"); } });
     const form = byId("syncetc-apply-precheck-form");
     if (!form) return;
     form.addEventListener("submit", async (event) => {

@@ -1,12 +1,12 @@
 // ADMIN-PAGE-header-navigation-setup-current.js
-// Internal Version: 2026-06-12-109-B
+// Internal Version: 2026-06-12-109-C
 // Purpose: Platform-admin Header & Navigation Manager. Platform-admin controlled editor for header recipes, navigation labels, order, visibility, and safe access settings.
 // Uses core-admin-action backend actions: navigation_list_organizations, navigation_get_setup, navigation_save_setup.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-12-109-B";
+  const VERSION = "2026-06-12-109-C";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -110,6 +110,29 @@
     const el = document.getElementById("se-nav-output");
     if (!el) return;
     el.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  }
+
+  function debugPayload() {
+    return {
+      frontend_version: VERSION,
+      authenticated_email: authenticatedEmail || null,
+      selected_organization_id: selectedOrganizationId || null,
+      selected_organization_name: organizations.find((o) => clean(o.organization_id) === selectedOrganizationId)?.display_name || null,
+      setup_version: setup?.version || null,
+      profile_id: setup?.profile?.navigation_profile_id || null,
+      header_recipe_key: setup?.profile?.header_recipe_key || setup?.profile?.header_layout_key || null,
+      nav_display_mode: setup?.profile?.nav_display_mode || null,
+      rows_loaded: arr(setup?.rows).length,
+      items_loaded: arr(setup?.items).length,
+      recipes_loaded: arr(setup?.recipes).length,
+      access_settings_loaded: arr(setup?.access_settings).length,
+      last_error: lastErrorMessage || null,
+      dirty: hasUnsavedChanges,
+    };
+  }
+
+  function renderDebugPre() {
+    return esc(JSON.stringify(debugPayload(), null, 2));
   }
 
   function errorText(value) {
@@ -397,6 +420,7 @@
       <section class="se-card"><h2>Preview</h2>${renderPreview()}</section>
       <section class="se-card"><h2>Save note and dangerous-change confirmation</h2><label>Reason/note<textarea id="se-note" placeholder="Why are you changing this header/navigation setup?"></textarea></label><label>Dangerous confirmation, only when required<input id="se-danger-confirmation" placeholder="Type I AM SURE when required"></label></section>` : ""}
 
+      <section class="se-card"><h2>Debug</h2><pre id="se-nav-debug">${renderDebugPre()}</pre></section>
       <section class="se-card"><h2>Backend result</h2><pre id="se-nav-output"></pre></section>`;
 
     bindEvents();

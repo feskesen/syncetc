@@ -1,12 +1,12 @@
 // ADMIN-PAGE-header-navigation-setup-current.js
-// Internal Version: 2026-06-12-109-A
+// Internal Version: 2026-06-12-109-B
 // Purpose: Platform-admin Header & Navigation Manager. Platform-admin controlled editor for header recipes, navigation labels, order, visibility, and safe access settings.
 // Uses core-admin-action backend actions: navigation_list_organizations, navigation_get_setup, navigation_save_setup.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-12-109-A";
+  const VERSION = "2026-06-12-109-B";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/core-admin-action`;
@@ -112,6 +112,18 @@
     el.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   }
 
+  function errorText(value) {
+    if (!value) return "";
+    if (typeof value === "string") return value;
+    if (value instanceof Error) return value.message;
+    if (typeof value === "object") {
+      const parts = [value.message, value.details, value.hint, value.code].filter((part) => typeof part === "string" && part.trim());
+      if (parts.length) return parts.join(" | ");
+      try { return JSON.stringify(value); } catch { return String(value); }
+    }
+    return String(value);
+  }
+
   function loadScript(src) {
     return new Promise((resolve, reject) => {
       const existing = document.querySelector(`script[src="${src}"]`);
@@ -157,7 +169,12 @@
       body: JSON.stringify({ action, ...payload }),
     });
     const result = await response.json().catch(() => null);
-    if (!response.ok || !result || result.ok === false) throw new Error(result?.message || result?.error || `HTTP ${response.status}`);
+    if (!response.ok || !result || result.ok === false) {
+      const message = result?.message || errorText(result?.error) || `HTTP ${response.status}`;
+      const err = new Error(message);
+      err.backendResult = result;
+      throw err;
+    }
     return result;
   }
 
@@ -398,7 +415,8 @@
     root().querySelectorAll("[data-profile='true'][data-field]").forEach((el) => {
       out[el.dataset.field] = el.type === "checkbox" ? !!el.checked : el.value;
     });
-    out.header_layout_key = out.header_recipe_key || setup.profile?.header_recipe_key || "standard_horizontal";
+    const recipe = out.header_recipe_key || setup.profile?.header_recipe_key || "standard_horizontal";
+    out.header_layout_key = recipe === "compact_horizontal" ? "compact-pill-rows" : (["dropdowns", "minimal_login_only", "side_menu", "hybrid_top_and_side"].includes(recipe) ? "dropdown" : "pill-rows");
     return out;
   }
 
@@ -526,10 +544,10 @@
 
   function showError(error) {
     console.error(error);
-    lastErrorMessage = error?.message || String(error);
+    lastErrorMessage = error?.message || errorText(error) || String(error);
     if (/No active Supabase login session/i.test(lastErrorMessage)) render();
     setStatus(lastErrorMessage, "error");
-    setOutput({ error: lastErrorMessage });
+    setOutput(error?.backendResult || { error: lastErrorMessage });
   }
 
   async function boot() {

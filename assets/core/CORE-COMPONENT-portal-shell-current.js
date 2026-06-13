@@ -1,11 +1,11 @@
 // CORE-COMPONENT-portal-shell-current.js
-// Internal Version: 2026-06-12-108-D
+// Internal Version: 2026-06-13-110-A
 // Purpose: Portal shell for user/admin/applicant pages with global logout-home behavior and public nav fallback.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-12-108-D";
+  const VERSION = "2026-06-13-110-A";
   const SHELL_ID = "syncetc-organization-header";
   const FOOTER_ID = "syncetc-portal-footer";
   const LOGIN_MODAL_ID = "syncetc-portal-login-modal";
@@ -32,7 +32,7 @@
   const ORGANIZATION_HEADER_URL = "https://feskesen.github.io/syncetc/assets/core/CORE-COMPONENT-organization-header-current.js";
 
   const PUBLIC_ORDER = ["home", "about", "info", "aircraft", "calendar", "events", "gallery", "documents", "documents-resources", "apply-now", "apply", "contact"];
-  const USER_ORDER = ["user-dashboard", "dashboard", "roster", "member-roster", "documents", "events", "gallery-submission", "submit-gallery", "my-profile", "profile"];
+  const USER_ORDER = ["member-dashboard", "user-dashboard", "dashboard", "roster", "member-roster", "documents", "events", "gallery-submission", "submit-gallery", "my-profile", "profile"];
   const ADMIN_ORDER = ["organization-admin", "admin-dashboard", "organization-people", "people", "events-admin", "documents-admin", "gallery-admin", "aircraft-admin", "assets"];
   const PLATFORM_ORDER = ["platform-access-tools", "access-admin", "customer-builder", "page-setup", "layout-designer"];
 
@@ -328,7 +328,7 @@
     const k = pageKey === "" && label ? key(label) : pageKey;
     if (k === "home") label = "Home";
     if (k === "organization-people") label = "People";
-    if (k === "user-dashboard") label = "Dashboard";
+    if (k === "user-dashboard" || k === "member-dashboard") label = "Dashboard";
     if (k === "organization-admin") label = "Admin Dashboard";
     if (k === "roster") label = "Roster";
     const href = normalizePath(r.href || r.path || r.url || (r.page_slug ? `/${String(r.page_slug).replace(/^\/+/, "")}` : ""), k);
@@ -363,7 +363,7 @@
     if (k === "documents") return "Documents";
     if (k === "organization-people") return "People";
     if (k === "roster") return "Roster";
-    if (k === "user-dashboard") return "Dashboard";
+    if (k === "user-dashboard" || k === "member-dashboard") return "Dashboard";
     if (k === "organization-admin") return "Admin Dashboard";
     return page.label || k;
   }
@@ -416,7 +416,7 @@
       if (zone === "admin" && adminVisible) adminRow.push(makeLink(page.key, page.path, navLabelForPage(page), page.sort));
     }
 
-    if (userVisible) userRow.push(makeLink("user-dashboard", "/user-dashboard", "Dashboard", orderIndex(USER_ORDER, "user-dashboard", 5)));
+    if (userVisible) userRow.push(makeLink("member-dashboard", "/member/dashboard", "Dashboard", orderIndex(USER_ORDER, "member-dashboard", 5)));
     if (adminVisible) adminRow.push(makeLink("organization-admin", "/organization-admin", "Admin Dashboard", orderIndex(ADMIN_ORDER, "organization-admin", 5)));
 
     const platformRow = Boolean(!applicantMode && state.platformAdmin) ? dedupeLinks([
@@ -444,6 +444,7 @@
     if (path === "organization-admin") return "organization-admin";
     if (path === "organization-people") return "organization-people";
     if (path === "user-dashboard") return "user-dashboard";
+    if (path === "member/dashboard" || path === "member-dashboard") return "member-dashboard";
     return key(path);
   }
 

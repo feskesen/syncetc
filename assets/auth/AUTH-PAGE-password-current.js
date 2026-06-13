@@ -64,7 +64,7 @@
           <p class="reset-help">Enter a new password for ${esc(session.user?.email || "this account")}.</p>
           <label>New password</label><input id="reset-password" type="password" placeholder="New password">
           <label>Confirm new password</label><input id="reset-password-confirm" type="password" placeholder="Confirm password">
-          <div class="reset-actions"><button id="reset-update" class="reset-btn">Update Password</button><a class="reset-btn" href="/user-dashboard">Go to User Dashboard</a></div>` : `
+          <div class="reset-actions"><button id="reset-update" class="reset-btn">Update Password</button><a class="reset-btn" href="/member/dashboard">Go to Member Dashboard</a></div>` : `
           <p class="reset-help">Enter your email and we will request a password reset email through Supabase Auth. If you arrived here from a reset email, wait a moment and refresh if the new password fields do not appear.</p>
           <label>Email</label><input id="reset-email" type="email" placeholder="you@example.com">
           <button id="reset-send" class="reset-btn">Send Password Reset Email</button>`}

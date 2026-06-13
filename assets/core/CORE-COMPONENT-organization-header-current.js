@@ -1,20 +1,21 @@
 // CORE-COMPONENT-organization-header-current.js
-// Internal Version: 2026-06-12-108-D
+// Internal Version: 2026-06-13-110-A
 // Purpose: Single shared organization header engine with controlled header/nav recipe modes. No page should render its own organization header.
 // Usage: window.SyncEtcOrganizationHeader.render(containerOrId, context)
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-12-108-D";
+  const VERSION = "2026-06-13-110-A";
   const PUBLIC_ORDER = ["home", "about", "info", "aircraft", "calendar", "calendar-events", "events", "gallery", "documents", "documents-resources", "apply-now", "apply", "contact"];
-  const USER_ORDER = ["user-dashboard", "dashboard", "my-profile", "profile", "roster", "member-roster", "member-documents", "user-documents", "gallery-submission", "submit-gallery"];
+  const USER_ORDER = ["member-dashboard", "user-dashboard", "dashboard", "my-profile", "profile", "roster", "member-roster", "member-documents", "user-documents", "gallery-submission", "submit-gallery"];
   const ADMIN_ORDER = ["organization-admin", "admin-dashboard", "organization-people", "people", "internal-documents", "board-documents", "admin-documents", "events-admin", "documents-admin", "gallery-admin", "aircraft-admin", "assets"];
 
   const PUBLIC_KEYS = new Set(PUBLIC_ORDER);
   const USER_KEYS = new Set(USER_ORDER);
   const ADMIN_KEYS = new Set(ADMIN_ORDER);
   const PROTECTED_KEY_ROW = {
+    "member-dashboard": "user",
     "user-dashboard": "user",
     "dashboard": "user",
     "my-profile": "user",

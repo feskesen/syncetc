@@ -1,11 +1,11 @@
 // MEMBER-PAGE-dashboard-current.js
-// Internal Version: 2026-06-13-110-D
+// Internal Version: 2026-06-13-111-A
 // Purpose: Member dashboard launch pad. Shows profile action only when needed, quick links, next event, and backend-fetched METAR cards.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-13-110-D";
+  const VERSION = "2026-06-13-111-A";
   const ROOT_IDS = ["syncetc-member-dashboard-root", "syncetc-user-dashboard-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -249,7 +249,7 @@
       { label:"Submit to Gallery", subtitle:"Photos and media links", href:gallery, disabled: !caps.can_submit_gallery && !platformAdmin },
       { label:"Flight Scheduler", subtitle:"Reservations and aircraft schedule", href:"#", disabled:true, placeholder:true },
       { label:"Report Maintenance Squawk", subtitle:"Aircraft maintenance reporting", href:"#", disabled:true, placeholder:true },
-      { label:"Club Forum", subtitle:"Member discussions and mentions", href:"#", disabled:true, placeholder:true },
+      { label:"Message Board", subtitle:"Member discussions, polls, and trip planning", href:"/forum" },
     ];
   }
 

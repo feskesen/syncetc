@@ -1,12 +1,12 @@
 // CORE-COMPONENT-organization-header-current.js
-// Internal Version: 2026-06-13-110-D
+// Internal Version: 2026-06-14-111-H
 // Purpose: Single shared organization header engine with controlled header/nav recipe modes. No page should render its own organization header.
 // Usage: window.SyncEtcOrganizationHeader.render(containerOrId, context)
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-13-110-D";
+  const VERSION = "2026-06-14-111-H";
   const PUBLIC_ORDER = ["home", "about", "info", "aircraft", "calendar", "calendar-events", "events", "gallery", "documents", "documents-resources", "apply-now", "apply", "contact"];
   const USER_ORDER = ["member-dashboard", "user-dashboard", "dashboard", "my-profile", "profile", "roster", "member-roster", "member-documents", "user-documents", "gallery-submission", "submit-gallery"];
   const ADMIN_ORDER = ["organization-admin", "admin-dashboard", "organization-people", "people", "internal-documents", "board-documents", "admin-documents", "events-admin", "documents-admin", "gallery-admin", "aircraft-admin", "assets"];
@@ -235,7 +235,7 @@
 
     const access = obj(context.access || {});
     const authenticated = Boolean(context.authenticated ?? context.isAuthenticated ?? obj(context.auth).authenticated);
-    const isUser = Boolean(access.can_view_user_dashboard || access.canViewUserDashboard || context.userVisible || authenticated);
+    const isUser = Boolean(access.can_view_user_dashboard || access.canViewUserDashboard || context.userVisible);
     const isAdmin = Boolean(access.can_view_organization_admin || access.canViewOrganizationAdmin || context.adminVisible);
     const isSuperAdmin = Boolean(access.is_organization_super_admin || access.isOrganizationSuperAdmin || context.superAdmin);
     const isPlatform = Boolean(access.is_platform_admin || access.isPlatformAdmin || context.platformAdmin);

@@ -1,11 +1,11 @@
 // PUBLIC-COMPONENT-site-shell-current.js
-// Internal Version: 2026-06-13-110-D
+// Internal Version: 2026-06-14-111-H
 // Purpose: Public page wrapper. It never renders its own header; it feeds context to the single organization header engine.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-13-110-D";
+  const VERSION = "2026-06-14-111-H";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -525,6 +525,10 @@
       if (
         errorKey.includes("applicant-access-only") ||
         errorKey.includes("applicant-portal-login-only") ||
+        errorKey.includes("member-dashboard-access") ||
+        errorKey.includes("member-access") ||
+        errorKey.includes("not-have-member") ||
+        errorKey.includes("does-not-have") ||
         errorKey.includes("no-organization") ||
         errorKey.includes("not-linked") ||
         errorKey.includes("no-active") ||
@@ -791,8 +795,21 @@
 
       debugState.latest.accessStatus = "starting get_user_dashboard"; updateDebugPanel();
       const accessStartedAt = performance.now();
-      const result = await withFailureTimeout(callAccess("get_user_dashboard", requestPayload, session.access_token), 12000, "Organization access context");
-      debugState.latest.accessStatus = `done in ${Math.round(performance.now() - accessStartedAt)}ms`; updateDebugPanel();
+      let result = null;
+      try {
+        result = await withFailureTimeout(callAccess("get_user_dashboard", requestPayload, session.access_token), 12000, "Organization access context");
+        debugState.latest.accessStatus = result
+          ? `done in ${Math.round(performance.now() - accessStartedAt)}ms`
+          : "public nav only";
+      } catch (error) {
+        // Public pages must remain public. If private/member navigation cannot be resolved for
+        // this logged-in user and organization, render public navigation plus the logout control
+        // instead of replacing the page header with an access error.
+        debugError("access:public_nav_only", error);
+        debugState.latest.accessStatus = "public nav only after access error";
+        result = null;
+      }
+      updateDebugPanel();
       if (result) {
         writeCachedAccessContext(session, payload, result);
         ({ accessRow, accessRows, platformAdmin } = unpackAccessResult(result, payload));

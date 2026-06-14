@@ -1,11 +1,11 @@
 // MEMBER-PAGE-forum-current.js
-// Internal Version: 2026-06-13-111-F
-// Purpose: Member-only organization message board with category index, topic list/detail routing, replies, polls, trip topics, mentions groundwork, and admin moderation.
+// Internal Version: 2026-06-13-111-G
+// Purpose: Member-only organization message board with category index, topic list/detail routing, replies, polls, trip topics, mentions groundwork, admin moderation, and optimistic button updates.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-13-111-F";
+  const VERSION = "2026-06-13-111-G";
   const ROOT_IDS = ["syncetc-member-forum-root", "syncetc-user-forum-root", "syncetc-forum-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -42,6 +42,7 @@
   let routeCategory = "";
   let routeTopicId = "";
   let routeSearch = "";
+  const pendingActions = new Set();
 
   const $ = (id) => document.getElementById(id);
   const esc = (v) => String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#039;");
@@ -140,6 +141,67 @@
   }
 
   function setMessage(text, kind = "") { message = text || `Version ${VERSION}`; messageKind = kind; render(); }
+
+  function cloneState() {
+    return {
+      selectedTopic: JSON.parse(JSON.stringify(selectedTopic || null)),
+      replies: JSON.parse(JSON.stringify(replies || [])),
+      topics: JSON.parse(JSON.stringify(topics || [])),
+      message,
+      messageKind,
+    };
+  }
+
+  function restoreState(snapshot) {
+    if (!snapshot) return;
+    selectedTopic = snapshot.selectedTopic || null;
+    replies = snapshot.replies || [];
+    topics = snapshot.topics || [];
+    message = snapshot.message || message;
+    messageKind = snapshot.messageKind || messageKind;
+  }
+
+  function actionKey(prefix, id, extra = "") {
+    return `${prefix}:${clean(id)}:${clean(extra)}`;
+  }
+
+  function markPending(key, active) {
+    if (!key) return;
+    if (active) pendingActions.add(key);
+    else pendingActions.delete(key);
+  }
+
+  function patchTopicLocal(topicId, patch) {
+    const id = clean(topicId);
+    if (!id) return;
+    if (selectedTopic && clean(selectedTopic.forum_topic_id) === id) selectedTopic = { ...selectedTopic, ...patch };
+    topics = topics.map((topic) => clean(topic.forum_topic_id) === id ? { ...topic, ...patch } : topic);
+  }
+
+  function patchReplyLocal(replyId, patch) {
+    const id = clean(replyId);
+    if (!id) return;
+    replies = replies.map((reply) => clean(reply.forum_reply_id) === id ? { ...reply, ...patch } : reply);
+  }
+
+  function optimisticReaction(targetType, topicId, replyId = "") {
+    const isReply = clean(targetType) === "reply";
+    const update = (item) => {
+      if (!item) return item;
+      const wasLiked = Boolean(item.viewer_liked);
+      const nextCount = Math.max(0, Number(item.like_count || 0) + (wasLiked ? -1 : 1));
+      return { ...item, viewer_liked: !wasLiked, like_count: nextCount };
+    };
+    if (isReply) {
+      const id = clean(replyId);
+      replies = replies.map((reply) => clean(reply.forum_reply_id) === id ? update(reply) : reply);
+    } else {
+      const id = clean(topicId);
+      if (selectedTopic && clean(selectedTopic.forum_topic_id) === id) selectedTopic = update(selectedTopic);
+      topics = topics.map((topic) => clean(topic.forum_topic_id) === id ? update(topic) : topic);
+    }
+  }
+
 
   async function ensureFreshToken(forceRefresh = false) {
     await ensureSupabase();
@@ -454,9 +516,10 @@
     const replyId = isReply ? clean(item.forum_reply_id) : "";
     const liked = Boolean(item.viewer_liked);
     const count = Number(item.like_count || 0);
-    const label = `${liked ? "♥" : "♡"} ${count}`;
     const title = liked ? "Remove like" : "Like";
-    return `<button class="mf-like ${liked ? "is-liked" : ""}" data-reaction-target="${esc(targetType)}" data-reaction-topic="${esc(topicId)}" data-reaction-reply="${esc(replyId)}" type="button" title="${esc(title)}"><span aria-hidden="true">${liked ? "♥" : "♡"}</span><strong>${esc(count)}</strong><em>${count === 1 ? "like" : "likes"}</em></button>`;
+    const key = actionKey("like", isReply ? replyId : topicId, targetType);
+    const pending = pendingActions.has(key);
+    return `<button class="mf-like ${liked ? "is-liked" : ""} ${pending ? "is-pending" : ""}" data-reaction-target="${esc(targetType)}" data-reaction-topic="${esc(topicId)}" data-reaction-reply="${esc(replyId)}" type="button" title="${esc(title)}" ${pending ? "disabled" : ""}><span aria-hidden="true">${liked ? "♥" : "♡"}</span><strong>${esc(count)}</strong><em>${pending ? "saving" : count === 1 ? "like" : "likes"}</em></button>`;
   }
 
   function renderPoll(topic) {
@@ -523,7 +586,7 @@
     if (!root) return;
     const cfg = styleConfig(selectedAccess());
     root.innerHTML = `<style>
-      .mf-wrap{${cssVars(cfg)}max-width:var(--mf-page-width);margin:24px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:var(--mf-text);box-sizing:border-box}.mf-wrap *{box-sizing:border-box}.mf-card{background:rgba(255,255,255,.95);border:1px solid var(--mf-border);border-radius:var(--mf-radius);box-shadow:var(--mf-shadow);padding:20px;margin:16px 0}.mf-hero{background:linear-gradient(135deg,var(--mf-primary),${rgba(cfg.primary,.76)});color:#fff}.mf-hero h1{margin:8px 0 6px;font-size:38px;line-height:1.05;color:#fff;letter-spacing:-.03em}.mf-hero p{color:rgba(255,255,255,.9);font-weight:850}.mf-eyebrow{display:inline-flex;align-items:center;width:max-content;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);font-size:11px;font-weight:950;letter-spacing:.06em;text-transform:uppercase;padding:6px 10px}.mf-eyebrow.light{background:rgba(255,255,255,.16);color:#fff}.mf-board-head,.mf-section-head,.mf-detail-head,.mf-topic-detail-head,.mf-reply-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}.mf-board-head h2,.mf-section-head h2,.mf-detail-head h2{margin:7px 0 0;color:var(--mf-text);font-size:27px}.mf-search-row{display:grid;grid-template-columns:minmax(220px,1fr) auto auto auto;gap:9px;align-items:center;margin-top:16px}.mf-category-table,.mf-topic-table{display:grid;gap:10px;margin-top:14px}.mf-category-row,.mf-topic-row{width:100%;display:grid;grid-template-columns:minmax(260px,1.4fr) minmax(130px,.35fr) minmax(260px,.9fr);gap:14px;align-items:center;text-align:left;border:1px solid var(--mf-border);border-radius:16px;background:#fff;color:var(--mf-text);padding:15px;cursor:pointer}.mf-topic-row{grid-template-columns:minmax(320px,1.5fr) minmax(130px,.35fr)}.mf-category-row:hover,.mf-topic-row:hover{border-color:var(--mf-primary);box-shadow:0 8px 22px ${rgba(cfg.primary,.10)}}.mf-category-main strong,.mf-topic-title strong{display:block;color:var(--mf-primary);font-size:16px}.mf-category-main span,.mf-topic-title span,.mf-latest span,.mf-help{color:var(--mf-muted);font-size:13px;line-height:1.45;font-weight:750}.mf-category-main em{font-style:normal;display:inline-flex;margin-top:6px;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);font-size:11px;font-weight:950;padding:4px 7px}.mf-counts{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-start}.mf-counts span,.mf-mini,.mf-attention{display:inline-flex;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);padding:6px 9px;font-size:11px;font-weight:950;text-transform:uppercase}.mf-counts b{margin-right:4px}.mf-attention{background:#fee2e2;color:#991b1b}.mf-latest strong{display:block;color:var(--mf-text);font-size:13px}.mf-form-grid,.mf-login-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.mf-wrap label{display:block;margin:10px 0 6px;font-weight:950;color:var(--mf-text)}.mf-wrap input,.mf-wrap select,.mf-wrap textarea{width:100%;min-height:42px;border:1px solid var(--mf-border);border-radius:12px;padding:10px 12px;background:#fff;color:var(--mf-text);font:inherit}.mf-wrap textarea{resize:vertical}.mf-btn{display:inline-flex;align-items:center;justify-content:center;min-height:40px;border-radius:999px;border:1px solid var(--mf-primary);background:var(--mf-primary);color:#fff;font-weight:950;padding:9px 15px;text-decoration:none;cursor:pointer}.mf-btn.secondary{background:#fff;color:var(--mf-primary)}.mf-btn:disabled{opacity:.58;cursor:not-allowed}.mf-text-btn{border:0;background:transparent;color:var(--mf-primary);font-weight:950;text-decoration:underline;padding:0;margin:0 0 10px;cursor:pointer}.mf-empty{border:1px dashed var(--mf-border);border-radius:16px;padding:16px;color:var(--mf-muted);font-weight:850}.mf-empty strong,.mf-empty span{display:block}.mf-topic-body{font-size:15px;line-height:1.55;font-weight:750;background:#f8fafc;border:1px solid #dbe3ef;border-radius:16px;padding:14px}.mf-detail hr{border:0;border-top:1px solid var(--mf-border);margin:18px 0}.mf-reply{border:1px solid var(--mf-border);border-radius:16px;padding:13px;margin:10px 0;background:#fff}.mf-reply.is-hidden{opacity:.65}.mf-reply p{margin:8px 0 0;line-height:1.5}.mf-actions{display:flex;gap:8px;flex-wrap:wrap}.mf-moderation{border-top:1px solid var(--mf-border);padding-top:10px;margin-top:12px}.mf-poll,.mf-trip{border:1px solid var(--mf-border);border-radius:16px;padding:14px;margin:14px 0;background:#fff}.mf-trip span{display:block;color:var(--mf-muted);font-weight:850;margin-top:4px}.mf-poll h3{margin:0 0 10px;color:var(--mf-primary)}.mf-poll-option{position:relative;overflow:hidden;display:block;width:100%;border:1px solid var(--mf-border);border-radius:14px;background:#fff;text-align:left;padding:11px;margin:8px 0;cursor:pointer}.mf-poll-option i{position:absolute;left:0;top:0;bottom:0;background:var(--mf-soft);z-index:0}.mf-poll-option span,.mf-poll-option em{position:relative;z-index:1;display:flex;justify-content:space-between;gap:10px}.mf-poll-option em{font-style:normal;color:var(--mf-muted);font-weight:850}.mf-poll-option.is-selected{border-color:var(--mf-primary)}.mf-extra{border-left:4px solid var(--mf-primary);padding-left:12px}.mf-message{display:inline-flex;margin-top:10px;border-radius:12px;padding:9px 11px;font-size:13px;font-weight:900;background:${messageKind === "ok" ? "#e7f6ec" : messageKind === "warn" ? "#fff7ec" : "rgba(255,255,255,.14)"};color:${messageKind === "ok" ? "#14532d" : messageKind === "warn" ? "#8a4d00" : "inherit"}}.mf-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font-size:12px;max-height:360px;overflow:auto}details summary{cursor:pointer;font-weight:950;color:var(--mf-primary)}.mf-detail{background:linear-gradient(135deg,var(--mf-primary),rgba(15,23,42,.88));color:#fff}.mf-detail h2,.mf-detail p,.mf-detail .mf-help{color:rgba(255,255,255,.88)}.mf-detail .mf-topic-body{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);color:#fff}.mf-detail .mf-moderation{border-color:rgba(255,255,255,.22)}.mf-detail .mf-btn.secondary{background:rgba(255,255,255,.96)}.mf-detail .mf-text-btn{color:#fff}.mf-topic-status{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end}.mf-mini.invert{background:rgba(255,255,255,.18);color:#fff}.mf-like{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--mf-border);background:#fff;color:var(--mf-primary);border-radius:999px;min-height:34px;padding:6px 10px;font-weight:950;cursor:pointer}.mf-like span{font-size:16px;line-height:1}.mf-like em{font-style:normal;font-size:11px;text-transform:uppercase;color:var(--mf-muted);font-weight:950}.mf-like.is-liked{background:var(--mf-primary);color:#fff;border-color:var(--mf-primary)}.mf-like.is-liked em{color:rgba(255,255,255,.82)}.mf-detail .mf-like{border-color:rgba(255,255,255,.28)}.mf-detail .mf-like:not(.is-liked){background:rgba(255,255,255,.96)}.mf-thread{background:rgba(255,255,255,.96)}.mf-replies{display:grid;gap:10px}.mf-reply{margin:10px 0 10px 28px;background:#fff;border-left:5px solid var(--mf-primary)}.mf-reply.is-alt{background:var(--mf-soft)}.mf-reply-head span{display:block;color:var(--mf-muted);font-size:12px;font-weight:850;margin-top:3px}.mf-btn.mini{min-height:34px;padding:6px 10px;font-size:12px}.mf-reply-box{margin-top:18px;border-top:1px solid var(--mf-border);padding-top:14px}.mf-reply-indent{margin-left:28px}.mf-mention-insert{margin-top:2px}.mf-actions .mf-like{margin-right:2px}@media(max-width:980px){.mf-reply,.mf-reply-indent{margin-left:0}.mf-search-row,.mf-category-row,.mf-topic-row,.mf-form-grid,.mf-login-grid{grid-template-columns:1fr}.mf-board-head,.mf-section-head,.mf-detail-head,.mf-topic-detail-head,.mf-reply-head{display:block}.mf-hero h1{font-size:31px}.mf-counts{margin-top:8px}}
+      .mf-wrap{${cssVars(cfg)}max-width:var(--mf-page-width);margin:24px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:var(--mf-text);box-sizing:border-box}.mf-wrap *{box-sizing:border-box}.mf-card{background:rgba(255,255,255,.95);border:1px solid var(--mf-border);border-radius:var(--mf-radius);box-shadow:var(--mf-shadow);padding:20px;margin:16px 0}.mf-hero{background:linear-gradient(135deg,var(--mf-primary),${rgba(cfg.primary,.76)});color:#fff}.mf-hero h1{margin:8px 0 6px;font-size:38px;line-height:1.05;color:#fff;letter-spacing:-.03em}.mf-hero p{color:rgba(255,255,255,.9);font-weight:850}.mf-eyebrow{display:inline-flex;align-items:center;width:max-content;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);font-size:11px;font-weight:950;letter-spacing:.06em;text-transform:uppercase;padding:6px 10px}.mf-eyebrow.light{background:rgba(255,255,255,.16);color:#fff}.mf-board-head,.mf-section-head,.mf-detail-head,.mf-topic-detail-head,.mf-reply-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}.mf-board-head h2,.mf-section-head h2,.mf-detail-head h2{margin:7px 0 0;color:var(--mf-text);font-size:27px}.mf-search-row{display:grid;grid-template-columns:minmax(220px,1fr) auto auto auto;gap:9px;align-items:center;margin-top:16px}.mf-category-table,.mf-topic-table{display:grid;gap:10px;margin-top:14px}.mf-category-row,.mf-topic-row{width:100%;display:grid;grid-template-columns:minmax(260px,1.4fr) minmax(130px,.35fr) minmax(260px,.9fr);gap:14px;align-items:center;text-align:left;border:1px solid var(--mf-border);border-radius:16px;background:#fff;color:var(--mf-text);padding:15px;cursor:pointer}.mf-topic-row{grid-template-columns:minmax(320px,1.5fr) minmax(130px,.35fr)}.mf-category-row:hover,.mf-topic-row:hover{border-color:var(--mf-primary);box-shadow:0 8px 22px ${rgba(cfg.primary,.10)}}.mf-category-main strong,.mf-topic-title strong{display:block;color:var(--mf-primary);font-size:16px}.mf-category-main span,.mf-topic-title span,.mf-latest span,.mf-help{color:var(--mf-muted);font-size:13px;line-height:1.45;font-weight:750}.mf-category-main em{font-style:normal;display:inline-flex;margin-top:6px;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);font-size:11px;font-weight:950;padding:4px 7px}.mf-counts{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-start}.mf-counts span,.mf-mini,.mf-attention{display:inline-flex;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);padding:6px 9px;font-size:11px;font-weight:950;text-transform:uppercase}.mf-counts b{margin-right:4px}.mf-attention{background:#fee2e2;color:#991b1b}.mf-latest strong{display:block;color:var(--mf-text);font-size:13px}.mf-form-grid,.mf-login-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.mf-wrap label{display:block;margin:10px 0 6px;font-weight:950;color:var(--mf-text)}.mf-wrap input,.mf-wrap select,.mf-wrap textarea{width:100%;min-height:42px;border:1px solid var(--mf-border);border-radius:12px;padding:10px 12px;background:#fff;color:var(--mf-text);font:inherit}.mf-wrap textarea{resize:vertical}.mf-btn{display:inline-flex;align-items:center;justify-content:center;min-height:40px;border-radius:999px;border:1px solid var(--mf-primary);background:var(--mf-primary);color:#fff;font-weight:950;padding:9px 15px;text-decoration:none;cursor:pointer}.mf-btn.secondary{background:#fff;color:var(--mf-primary)}.mf-btn:disabled{opacity:.58;cursor:not-allowed}.mf-text-btn{border:0;background:transparent;color:var(--mf-primary);font-weight:950;text-decoration:underline;padding:0;margin:0 0 10px;cursor:pointer}.mf-empty{border:1px dashed var(--mf-border);border-radius:16px;padding:16px;color:var(--mf-muted);font-weight:850}.mf-empty strong,.mf-empty span{display:block}.mf-topic-body{font-size:15px;line-height:1.55;font-weight:750;background:#f8fafc;border:1px solid #dbe3ef;border-radius:16px;padding:14px}.mf-detail hr{border:0;border-top:1px solid var(--mf-border);margin:18px 0}.mf-reply{border:1px solid var(--mf-border);border-radius:16px;padding:13px;margin:10px 0;background:#fff}.mf-reply.is-hidden{opacity:.65}.mf-reply p{margin:8px 0 0;line-height:1.5}.mf-actions{display:flex;gap:8px;flex-wrap:wrap}.mf-moderation{border-top:1px solid var(--mf-border);padding-top:10px;margin-top:12px}.mf-poll,.mf-trip{border:1px solid var(--mf-border);border-radius:16px;padding:14px;margin:14px 0;background:#fff}.mf-trip span{display:block;color:var(--mf-muted);font-weight:850;margin-top:4px}.mf-poll h3{margin:0 0 10px;color:var(--mf-primary)}.mf-poll-option{position:relative;overflow:hidden;display:block;width:100%;border:1px solid var(--mf-border);border-radius:14px;background:#fff;text-align:left;padding:11px;margin:8px 0;cursor:pointer}.mf-poll-option i{position:absolute;left:0;top:0;bottom:0;background:var(--mf-soft);z-index:0}.mf-poll-option span,.mf-poll-option em{position:relative;z-index:1;display:flex;justify-content:space-between;gap:10px}.mf-poll-option em{font-style:normal;color:var(--mf-muted);font-weight:850}.mf-poll-option.is-selected{border-color:var(--mf-primary)}.mf-extra{border-left:4px solid var(--mf-primary);padding-left:12px}.mf-message{display:inline-flex;margin-top:10px;border-radius:12px;padding:9px 11px;font-size:13px;font-weight:900;background:${messageKind === "ok" ? "#e7f6ec" : messageKind === "warn" ? "#fff7ec" : "rgba(255,255,255,.14)"};color:${messageKind === "ok" ? "#14532d" : messageKind === "warn" ? "#8a4d00" : "inherit"}}.mf-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font-size:12px;max-height:360px;overflow:auto}details summary{cursor:pointer;font-weight:950;color:var(--mf-primary)}.mf-detail{background:linear-gradient(135deg,var(--mf-primary),rgba(15,23,42,.88));color:#fff}.mf-detail h2,.mf-detail p,.mf-detail .mf-help{color:rgba(255,255,255,.88)}.mf-detail .mf-topic-body{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);color:#fff}.mf-detail .mf-moderation{border-color:rgba(255,255,255,.22)}.mf-detail .mf-btn.secondary{background:rgba(255,255,255,.96)}.mf-detail .mf-text-btn{color:#fff}.mf-topic-status{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end}.mf-mini.invert{background:rgba(255,255,255,.18);color:#fff}.mf-like{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--mf-border);background:#fff;color:var(--mf-primary);border-radius:999px;min-height:34px;padding:6px 10px;font-weight:950;cursor:pointer}.mf-like span{font-size:16px;line-height:1}.mf-like em{font-style:normal;font-size:11px;text-transform:uppercase;color:var(--mf-muted);font-weight:950}.mf-like.is-liked{background:var(--mf-primary);color:#fff;border-color:var(--mf-primary)}.mf-like.is-pending{opacity:.72;cursor:progress}.mf-btn.is-pending{opacity:.72;cursor:progress}.mf-like.is-liked em{color:rgba(255,255,255,.82)}.mf-detail .mf-like{border-color:rgba(255,255,255,.28)}.mf-detail .mf-like:not(.is-liked){background:rgba(255,255,255,.96)}.mf-thread{background:rgba(255,255,255,.96)}.mf-replies{display:grid;gap:10px}.mf-reply{margin:10px 0 10px 28px;background:#fff;border-left:5px solid var(--mf-primary)}.mf-reply.is-alt{background:var(--mf-soft)}.mf-reply-head span{display:block;color:var(--mf-muted);font-size:12px;font-weight:850;margin-top:3px}.mf-btn.mini{min-height:34px;padding:6px 10px;font-size:12px}.mf-reply-box{margin-top:18px;border-top:1px solid var(--mf-border);padding-top:14px}.mf-reply-indent{margin-left:28px}.mf-mention-insert{margin-top:2px}.mf-actions .mf-like{margin-right:2px}@media(max-width:980px){.mf-reply,.mf-reply-indent{margin-left:0}.mf-search-row,.mf-category-row,.mf-topic-row,.mf-form-grid,.mf-login-grid{grid-template-columns:1fr}.mf-board-head,.mf-section-head,.mf-detail-head,.mf-topic-detail-head,.mf-reply-head{display:block}.mf-hero h1{font-size:31px}.mf-counts{margin-top:8px}}
     </style><div class="mf-wrap">${renderBoard()}<div class="mf-message ${esc(messageKind)}">${esc(message)}</div>${diagnosticsHtml()}</div>`;
     bindEvents();
   }
@@ -562,19 +625,60 @@
   }
 
   async function toggleReaction(targetType, topicId, replyId = "") {
-    const res = await call("member_forum_toggle_reaction", { organization_id: selectedOrgId, forum_topic_id: clean(topicId), forum_reply_id: clean(replyId), target_type: clean(targetType) });
-    applyContext(res);
-    setMessage("Reaction updated.", "ok");
+    const isReply = clean(targetType) === "reply";
+    const id = isReply ? clean(replyId) : clean(topicId);
+    if (!id) return;
+    const key = actionKey("like", id, targetType);
+    if (pendingActions.has(key)) return;
+    const snapshot = cloneState();
+    markPending(key, true);
+    optimisticReaction(targetType, topicId, replyId);
+    message = "Saving reaction…";
+    messageKind = "";
     render();
+    try {
+      const res = await call("member_forum_toggle_reaction", { organization_id: selectedOrgId, forum_topic_id: clean(topicId), forum_reply_id: clean(replyId), target_type: clean(targetType) });
+      applyContext(res);
+      message = "Reaction saved.";
+      messageKind = "ok";
+    } catch (e) {
+      restoreState(snapshot);
+      backend = { ok:false, message:e.message || String(e) };
+      message = e.message || "Reaction could not be saved.";
+      messageKind = "warn";
+    } finally {
+      markPending(key, false);
+      render();
+    }
   }
 
   async function moderateReply(replyId, action) {
     if (!selectedTopic?.forum_topic_id) throw new Error("Choose a topic first.");
-    if (action === "hide" && !window.confirm("Hide this reply from members?")) return;
-    const res = await call("member_forum_moderate_reply", { organization_id: selectedOrgId, forum_topic_id: selectedTopic.forum_topic_id, forum_reply_id: clean(replyId), moderation_action: clean(action) });
-    applyContext(res);
-    setMessage("Reply moderation saved.", "ok");
+    const id = clean(replyId);
+    const nextAction = clean(action);
+    if (nextAction === "hide" && !window.confirm("Hide this reply from members?")) return;
+    const key = actionKey("mod-reply", id, nextAction);
+    if (pendingActions.has(key)) return;
+    const snapshot = cloneState();
+    markPending(key, true);
+    patchReplyLocal(id, { status: nextAction === "restore" ? "active" : "hidden" });
+    message = "Saving reply moderation…";
+    messageKind = "";
     render();
+    try {
+      const res = await call("member_forum_moderate_reply", { organization_id: selectedOrgId, forum_topic_id: selectedTopic.forum_topic_id, forum_reply_id: id, moderation_action: nextAction });
+      applyContext(res);
+      message = "Reply moderation saved.";
+      messageKind = "ok";
+    } catch (e) {
+      restoreState(snapshot);
+      backend = { ok:false, message:e.message || String(e) };
+      message = e.message || "Reply moderation could not be saved.";
+      messageKind = "warn";
+    } finally {
+      markPending(key, false);
+      render();
+    }
   }
 
   function bindEvents() {
@@ -596,11 +700,11 @@
     $("forum-create-topic")?.addEventListener("click", () => runButton("forum-create-topic", "Posting…", createTopic));
     $("forum-create-reply")?.addEventListener("click", () => runButton("forum-create-reply", "Posting…", createReply));
     document.querySelectorAll(".mf-poll-option").forEach((btn) => btn.addEventListener("click", () => runButton("", "", () => votePoll(btn.getAttribute("data-vote-poll") || "", btn.getAttribute("data-vote-option") || ""))));
-    document.querySelectorAll("[data-reaction-target]").forEach((btn) => btn.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); runButton("", "", () => toggleReaction(btn.getAttribute("data-reaction-target") || "topic", btn.getAttribute("data-reaction-topic") || "", btn.getAttribute("data-reaction-reply") || "")); }));
+    document.querySelectorAll("[data-reaction-target]").forEach((btn) => btn.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); toggleReaction(btn.getAttribute("data-reaction-target") || "topic", btn.getAttribute("data-reaction-topic") || "", btn.getAttribute("data-reaction-reply") || ""); }));
     document.querySelectorAll("[data-insert-mention]").forEach((btn) => btn.addEventListener("click", () => insertMention(btn.getAttribute("data-insert-mention") || "", btn.getAttribute("data-mention-target") || "")));
     document.querySelectorAll("[data-mention-author]").forEach((btn) => btn.addEventListener("click", () => insertAuthorMention(btn.getAttribute("data-mention-author") || "Member", btn.getAttribute("data-mention-target") || "forum-reply-body", btn.getAttribute("data-mention-person") || "")));
-    document.querySelectorAll("[data-moderate]").forEach((btn) => btn.addEventListener("click", () => runButton("", "", () => moderateTopic(btn.getAttribute("data-moderate") || ""))));
-    document.querySelectorAll("[data-moderate-reply]").forEach((btn) => btn.addEventListener("click", () => runButton("", "", () => moderateReply(btn.getAttribute("data-moderate-reply") || "", btn.getAttribute("data-moderate-reply-action") || "hide"))));
+    document.querySelectorAll("[data-moderate]").forEach((btn) => btn.addEventListener("click", () => moderateTopic(btn.getAttribute("data-moderate") || "")));
+    document.querySelectorAll("[data-moderate-reply]").forEach((btn) => btn.addEventListener("click", () => moderateReply(btn.getAttribute("data-moderate-reply") || "", btn.getAttribute("data-moderate-reply-action") || "hide")));
   }
 
   async function createTopic() {
@@ -653,11 +757,38 @@
 
   async function moderateTopic(action) {
     if (!selectedTopic?.forum_topic_id) throw new Error("Choose a topic first.");
-    if (action === "hide" && !window.confirm("Hide this topic from members?")) return;
-    const res = await call("member_forum_moderate_topic", { organization_id: selectedOrgId, forum_topic_id: selectedTopic.forum_topic_id, moderation_action: action });
-    applyContext(res);
-    setMessage("Moderation saved.", "ok");
+    const nextAction = clean(action);
+    if (nextAction === "hide" && !window.confirm("Hide this topic from members?")) return;
+    const id = clean(selectedTopic.forum_topic_id);
+    const key = actionKey("mod-topic", id, nextAction);
+    if (pendingActions.has(key)) return;
+    const snapshot = cloneState();
+    markPending(key, true);
+    const patch = {};
+    if (nextAction === "pin") patch.pinned = true;
+    if (nextAction === "unpin") patch.pinned = false;
+    if (nextAction === "lock") patch.locked = true;
+    if (nextAction === "unlock") patch.locked = false;
+    if (nextAction === "hide") patch.status = "hidden";
+    if (nextAction === "restore") patch.status = "active";
+    patchTopicLocal(id, patch);
+    message = "Saving moderation…";
+    messageKind = "";
     render();
+    try {
+      const res = await call("member_forum_moderate_topic", { organization_id: selectedOrgId, forum_topic_id: id, moderation_action: nextAction });
+      applyContext(res);
+      message = "Moderation saved.";
+      messageKind = "ok";
+    } catch (e) {
+      restoreState(snapshot);
+      backend = { ok:false, message:e.message || String(e) };
+      message = e.message || "Moderation could not be saved.";
+      messageKind = "warn";
+    } finally {
+      markPending(key, false);
+      render();
+    }
   }
 
   async function handleOrganizationChange(nextOrgId) {

@@ -1,11 +1,11 @@
 // MEMBER-PAGE-forum-current.js
-// Internal Version: 2026-06-13-111-E
+// Internal Version: 2026-06-13-111-F
 // Purpose: Member-only organization message board with category index, topic list/detail routing, replies, polls, trip topics, mentions groundwork, and admin moderation.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-13-111-E";
+  const VERSION = "2026-06-13-111-F";
   const ROOT_IDS = ["syncetc-member-forum-root", "syncetc-user-forum-root", "syncetc-forum-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -141,12 +141,71 @@
 
   function setMessage(text, kind = "") { message = text || `Version ${VERSION}`; messageKind = kind; render(); }
 
+  async function ensureFreshToken(forceRefresh = false) {
+    await ensureSupabase();
+    try {
+      let session = null;
+      if (forceRefresh) {
+        const refreshed = await supabaseClient.auth.refreshSession();
+        session = refreshed?.data?.session || null;
+      }
+      if (!session) {
+        const current = await supabaseClient.auth.getSession();
+        session = current?.data?.session || null;
+      }
+      const nextToken = clean(session?.access_token || "");
+      if (nextToken) {
+        token = nextToken;
+        email = session?.user?.email || email;
+        authChecked = true;
+        return token;
+      }
+    } catch (error) {
+      diag("auth:refresh-token-error", error?.message || String(error));
+    }
+    return token;
+  }
+
+  function readableBackendError(json, fallback) {
+    const direct = clean(json?.message || json?.error_description || json?.error || json?.hint || json?.code);
+    if (direct && direct !== "[object Object]") return direct;
+    try {
+      const text = JSON.stringify(json || {});
+      if (text && text !== "{}") return text.slice(0, 800);
+    } catch {}
+    return fallback || "The message board action failed.";
+  }
+
   async function call(action, payload = {}) {
+    await ensureFreshToken(false);
     if (!token) throw new Error("Log in first.");
-    const res = await fetch(EDGE_URL, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ action, ...payload }) });
-    const json = await res.json().catch(() => ({}));
+    const doFetch = async () => {
+      return await fetch(EDGE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action, ...payload })
+      });
+    };
+    let res = await doFetch();
+    let json = await res.json().catch(() => ({}));
     backend = json;
-    if (!res.ok || json.ok === false) throw new Error(json.message || json.error || `Action failed: ${action}`);
+
+    const looksLikeJwtProblem = res.status === 401 || json?.error === "invalid_auth" || /jwt|token|auth/i.test(clean(json?.message || json?.error));
+    if (looksLikeJwtProblem) {
+      diag("auth:retry-after-jwt-error", readableBackendError(json, "auth failed"));
+      await ensureFreshToken(true);
+      if (token) {
+        res = await doFetch();
+        json = await res.json().catch(() => ({}));
+        backend = json;
+      }
+    }
+
+    if (!res.ok || json.ok === false) {
+      const msg = readableBackendError(json, `Action failed: ${action}`);
+      if (/jwt|token|auth/i.test(msg)) throw new Error("Your login session could not be verified. Please refresh this page or log in again.");
+      throw new Error(msg);
+    }
     return json;
   }
 
@@ -326,23 +385,6 @@
     return clean(topic.category?.label || "Topic");
   }
 
-  function likeCount(item) {
-    return Number(item?.like_count ?? item?.reaction_count ?? 0);
-  }
-
-  function renderLikeButton(target, item, extraClass = "") {
-    const id = clean(target === "reply" ? item?.forum_reply_id : item?.forum_topic_id);
-    if (!id) return "";
-    const liked = Boolean(item?.viewer_liked || item?.viewer_reacted);
-    const count = likeCount(item);
-    return `<button class="mf-like ${liked ? "is-liked" : ""} ${esc(extraClass)}" data-like-target="${esc(target)}" data-like-id="${esc(id)}" type="button" aria-pressed="${liked ? "true" : "false"}" title="${liked ? "Unlike" : "Like"}"><span class="mf-like-icon" aria-hidden="true">${liked ? "♥" : "♡"}</span><span>${esc(count)}</span></button>`;
-  }
-
-  function renderLikeStat(item) {
-    const count = likeCount(item);
-    return count ? `<span><b>${esc(count)}</b> like${count === 1 ? "" : "s"}</span>` : "";
-  }
-
   function renderLogin() {
     return `<div class="mf-card"><h2>Log in</h2><p class="mf-help">Use your organization login to open the member message board.</p><div class="mf-login-grid"><input id="forum-email" type="email" placeholder="Email" autocomplete="username"><input id="forum-password" type="password" placeholder="Password" autocomplete="current-password"><button id="forum-login" class="mf-btn" type="button">Log in</button></div></div>`;
   }
@@ -352,47 +394,15 @@
     return `<section class="mf-card mf-nav-card"><div class="mf-board-head"><div><span class="mf-eyebrow">Message board</span><h2>${esc(selectedOrgName())} Discussions</h2></div>${unreadMentionCount ? `<span class="mf-attention">${unreadMentionCount} mention${unreadMentionCount === 1 ? "" : "s"}</span>` : ""}</div><form id="forum-search-form" class="mf-search-row"><input id="forum-search" type="search" placeholder="Search discussions" value="${esc(routeSearch)}"><button id="forum-search-button" class="mf-btn secondary" type="submit">Search</button>${routeSearch ? `<button id="forum-clear-search" class="mf-btn secondary" type="button">Clear</button>` : ""}${!onHome ? `<button class="mf-btn secondary" data-forum-home="1" type="button">All discussion areas</button>` : ""}</form></section>`;
   }
 
-  function renderMentionSelect(id, textareaId) {
+  function renderMentionSelect(id, targetTextareaId) {
     if (!members.length) return "";
-    return `<label>Mentions<select id="${id}" data-mention-target="${esc(textareaId || "")}" multiple size="4">${members.map((m) => `<option value="${esc(m.person_id)}" data-name="${esc(m.display_name)}">${esc(m.display_name)}${m.email ? ` — ${esc(m.email)}` : ""}</option>`).join("")}</select><span class="mf-help">Optional. Choosing a member inserts their @name into the message and creates an in-site mention alert.</span></label>`;
+    return `<label>Mentions<select id="${id}" multiple size="4">${members.map((m) => `<option value="${esc(m.person_id)}" data-name="${esc(m.display_name)}">${esc(m.display_name)}${m.email ? ` — ${esc(m.email)}` : ""}</option>`).join("")}</select><span class="mf-help">Optional. Select a member, then insert the @ mention into your message. The mentioned member receives an in-site mention alert.</span></label><button class="mf-btn secondary mf-mention-insert" data-insert-mention="${esc(id)}" data-mention-target="${esc(targetTextareaId)}" type="button">Insert @ mention</button>`;
   }
 
   function selectedMentionIds(id) {
     const el = $(id);
     if (!el) return [];
     return Array.from(el.selectedOptions || []).map((o) => o.value).filter(Boolean);
-  }
-
-  function insertMentionText(selectId) {
-    const el = $(selectId);
-    const targetId = el?.getAttribute("data-mention-target") || "";
-    const target = targetId ? $(targetId) : null;
-    if (!el || !target) return;
-    const selected = Array.from(el.selectedOptions || []);
-    let value = target.value || "";
-    for (const option of selected) {
-      const name = clean(option.getAttribute("data-name") || option.textContent || "").replace(/\s+—.*$/, "");
-      if (!name) continue;
-      const tokenText = `@${name}`;
-      if (!value.toLowerCase().includes(tokenText.toLowerCase())) value = `${value}${value && !value.endsWith(" ") && !value.endsWith("\n") ? " " : ""}${tokenText} `;
-    }
-    target.value = value;
-    setDirty(true);
-    try { target.focus(); target.setSelectionRange(target.value.length, target.value.length); } catch {}
-  }
-
-  function insertManualMention(name, personId = "") {
-    const target = $("forum-reply-body") || $("forum-new-body");
-    const n = clean(name);
-    if (!target || !n) return;
-    const tokenText = `@${n}`;
-    const current = target.value || "";
-    if (!current.toLowerCase().includes(tokenText.toLowerCase())) target.value = `${current}${current && !current.endsWith(" ") && !current.endsWith("\n") ? " " : ""}${tokenText} `;
-    const select = $("forum-reply-mentions") || $("forum-new-mentions");
-    const pid = clean(personId);
-    if (select && pid) Array.from(select.options || []).forEach((option) => { if (String(option.value) === pid) option.selected = true; });
-    setDirty(true);
-    try { target.focus(); target.setSelectionRange(target.value.length, target.value.length); } catch {}
   }
 
   function canPostInCategory(cat) {
@@ -422,7 +432,7 @@
   function renderTopicRows(list, emptyText = "No topics yet.") {
     const sorted = sortedTopics(list);
     if (!sorted.length) return `<div class="mf-empty"><strong>${esc(emptyText)}</strong><span>Start the first discussion when you are ready.</span></div>`;
-    return `<div class="mf-topic-table">${sorted.map((topic) => `<button class="mf-topic-row" data-topic="${esc(topic.forum_topic_id)}" type="button"><div class="mf-topic-title"><strong>${topic.pinned ? "📌 " : ""}${esc(topic.title)}</strong><span>${esc(topicBadge(topic))} · ${esc(topic.created_by_name || "Member")} · ${esc(fmt(topic.last_activity_at || topic.created_at))}${topic.locked ? " · locked" : ""}</span></div><div class="mf-counts"><span><b>${esc(topic.reply_count || 0)}</b> replies</span>${renderLikeStat(topic)}${topic.mention_count ? `<span><b>${esc(topic.mention_count)}</b> mentions</span>` : ""}</div></button>`).join("")}</div>`;
+    return `<div class="mf-topic-table">${sorted.map((topic) => `<button class="mf-topic-row" data-topic="${esc(topic.forum_topic_id)}"><div class="mf-topic-title"><strong>${topic.pinned ? "📌 " : ""}${esc(topic.title)}</strong><span>${esc(topicBadge(topic))} · ${esc(topic.created_by_name || "Member")} · ${esc(fmt(topic.last_activity_at || topic.created_at))}${topic.locked ? " · locked" : ""}</span></div><div class="mf-counts"><span><b>${esc(topic.reply_count || 0)}</b> replies</span><span><b>${esc(topic.like_count || 0)}</b> likes</span>${topic.mention_count ? `<span><b>${esc(topic.mention_count)}</b> mentions</span>` : ""}</div></button>`).join("")}</div>`;
   }
 
   function renderCategoryView() {
@@ -436,6 +446,17 @@
   function renderSearchResults() {
     const list = visibleTopicsFor(null);
     return `<section class="mf-card"><div class="mf-detail-head"><div><span class="mf-eyebrow">Search</span><h2>Search results</h2><p class="mf-help">Showing topics matching “${esc(routeSearch)}”.</p></div><span class="mf-mini">${esc(list.length)} results</span></div>${renderTopicRows(list, "No topics matched your search.")}</section>`;
+  }
+
+  function renderReactionButton(targetType, item) {
+    const isReply = targetType === "reply";
+    const topicId = isReply ? clean(item.forum_topic_id || selectedTopic?.forum_topic_id) : clean(item.forum_topic_id);
+    const replyId = isReply ? clean(item.forum_reply_id) : "";
+    const liked = Boolean(item.viewer_liked);
+    const count = Number(item.like_count || 0);
+    const label = `${liked ? "♥" : "♡"} ${count}`;
+    const title = liked ? "Remove like" : "Like";
+    return `<button class="mf-like ${liked ? "is-liked" : ""}" data-reaction-target="${esc(targetType)}" data-reaction-topic="${esc(topicId)}" data-reaction-reply="${esc(replyId)}" type="button" title="${esc(title)}"><span aria-hidden="true">${liked ? "♥" : "♡"}</span><strong>${esc(count)}</strong><em>${count === 1 ? "like" : "likes"}</em></button>`;
   }
 
   function renderPoll(topic) {
@@ -455,12 +476,13 @@
 
   function renderReplyModeration(reply) {
     if (!canModerate || !reply?.forum_reply_id) return "";
-    return `<div class="mf-actions mf-reply-actions"><button class="mf-btn secondary" data-moderate-reply="${reply.status === "hidden" ? "restore" : "hide"}" data-reply-id="${esc(reply.forum_reply_id)}" type="button">${reply.status === "hidden" ? "Restore reply" : "Hide reply"}</button></div>`;
+    const action = reply.status === "hidden" ? "restore" : "hide";
+    return `<button class="mf-btn secondary mini" data-moderate-reply="${esc(reply.forum_reply_id)}" data-moderate-reply-action="${esc(action)}" type="button">${action === "restore" ? "Restore" : "Hide"}</button>`;
   }
 
   function renderReplies() {
-    if (!replies.length) return `<div class="mf-empty mf-reply-empty"><strong>No replies yet.</strong><span>Be the first to respond.</span></div>`;
-    return replies.map((reply, index) => `<article id="reply-${esc(reply.forum_reply_id)}" class="mf-reply ${index % 2 ? "is-alt" : ""} ${reply.status !== "active" ? "is-hidden" : ""}"><div class="mf-reply-head"><div><strong>${esc(reply.created_by_name || "Member")}</strong><span>${esc(fmt(reply.created_at))}</span></div><div class="mf-actions">${renderLikeButton("reply", reply)}<button class="mf-text-btn mf-mention-one" data-mention-name="${esc(reply.created_by_name || "Member")}" data-mention-person-id="${esc(reply.created_by_person_id || "")}" type="button">Mention</button></div></div><p>${esc(reply.body).replace(/\n/g,"<br>")}</p>${reply.status !== "active" ? `<em>${esc(reply.status)}</em>` : ""}${renderReplyModeration(reply)}</article>`).join("");
+    if (!replies.length) return `<div class="mf-empty mf-reply-indent"><strong>No replies yet.</strong><span>Be the first to respond.</span></div>`;
+    return replies.map((reply, index) => `<article id="reply-${esc(reply.forum_reply_id)}" class="mf-reply ${index % 2 ? "is-alt" : ""} ${reply.status !== "active" ? "is-hidden" : ""}"><div class="mf-reply-head"><div><strong>${esc(reply.created_by_name || "Member")}</strong><span>${esc(fmt(reply.created_at))}</span></div><div class="mf-actions">${renderReactionButton("reply", reply)}<button class="mf-btn secondary mini" data-mention-author="${esc(reply.created_by_name || "Member")}" data-mention-person="${esc(reply.created_by_person_id || "")}" data-mention-target="forum-reply-body" type="button">Mention</button>${renderReplyModeration(reply)}</div></div><p>${esc(reply.body).replace(/\n/g,"<br>")}</p>${reply.status !== "active" ? `<em>${esc(reply.status)}</em>` : ""}</article>`).join("");
   }
 
   function renderModeration(topic) {
@@ -472,7 +494,7 @@
     const topic = selectedTopic;
     if (!topic?.forum_topic_id) return `<section class="mf-card"><h2>Topic not found</h2><p class="mf-help">Choose a topic from the message board.</p></section>`;
     const category = topic.category || categoryByAny(topic.forum_category_id) || null;
-    return `<section class="mf-card mf-detail"><div class="mf-topic-detail-head"><div><button class="mf-text-btn" id="forum-back-category" type="button">← ${category ? esc(category.label) : "Topics"}</button><span class="mf-eyebrow">${esc(topicBadge(topic))}</span><h2>${esc(topic.title)}</h2><p class="mf-help">Posted by ${esc(topic.created_by_name || "Member")} · ${esc(fmt(topic.created_at))}${topic.locked ? " · Locked" : ""}</p></div><div class="mf-actions mf-topic-status">${topic.pinned ? `<span class="mf-mini">Pinned</span>` : ""}${renderLikeButton("topic", topic)}</div></div><article class="mf-topic-main"><div class="mf-topic-main-head"><strong>Main topic</strong><button class="mf-text-btn mf-mention-one" data-mention-name="${esc(topic.created_by_name || "Member")}" data-mention-person-id="${esc(topic.created_by_person_id || "")}" type="button">Mention ${esc(topic.created_by_name || "Member")}</button></div><p>${esc(topic.body).replace(/\n/g,"<br>")}</p></article>${renderTrip(topic)}${renderPoll(topic)}${renderModeration(topic)}<hr><div class="mf-section-head"><div><span class="mf-eyebrow">Replies</span><h3>${esc(replies.length)} repl${replies.length === 1 ? "y" : "ies"}</h3></div></div><div class="mf-replies">${renderReplies()}</div>${topic.locked && !canModerate ? `<p class="mf-help">This topic is locked.</p>` : `<section class="mf-reply-box"><label>Add a reply<textarea id="forum-reply-body" rows="5" placeholder="Write one reply to the main topic. Use @mentions to call someone’s attention."></textarea></label>${renderMentionSelect("forum-reply-mentions", "forum-reply-body")}<button id="forum-create-reply" class="mf-btn" type="button">Post reply</button></section>`}</section>`;
+    return `<section class="mf-card mf-detail"><div class="mf-topic-detail-head"><div><button class="mf-text-btn" id="forum-back-category" type="button">← ${category ? esc(category.label) : "Topics"}</button><span class="mf-eyebrow light">${esc(topicBadge(topic))}</span><h2>${esc(topic.title)}</h2><p>Posted by ${esc(topic.created_by_name || "Member")} · ${esc(fmt(topic.created_at))}${topic.locked ? " · Locked" : ""}</p></div><div class="mf-topic-status">${topic.pinned ? `<span class="mf-mini invert">Pinned</span>` : ""}${renderReactionButton("topic", topic)}</div></div><div class="mf-topic-body">${esc(topic.body).replace(/\n/g,"<br>")}</div>${renderTrip(topic)}${renderPoll(topic)}${renderModeration(topic)}</section><section class="mf-card mf-thread"><div class="mf-section-head"><div><span class="mf-eyebrow">Replies</span><h3>${esc(topic.reply_count || 0)} replies</h3><p class="mf-help">Replies are shown in order. Use @ mentions when you want to get a specific member’s attention.</p></div></div><div class="mf-replies">${renderReplies()}</div>${topic.locked && !canModerate ? `<p class="mf-help">This topic is locked.</p>` : `<div class="mf-reply-box"><label>Add reply<textarea id="forum-reply-body" rows="5" placeholder="Write a reply…"></textarea></label>${renderMentionSelect("forum-reply-mentions", "forum-reply-body")}<button id="forum-create-reply" class="mf-btn" type="button">Post reply</button></div>`}</section>`;
   }
 
   function renderMainContent() {
@@ -501,7 +523,7 @@
     if (!root) return;
     const cfg = styleConfig(selectedAccess());
     root.innerHTML = `<style>
-      .mf-wrap{${cssVars(cfg)}max-width:var(--mf-page-width);margin:24px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:var(--mf-text);box-sizing:border-box}.mf-wrap *{box-sizing:border-box}.mf-card{background:rgba(255,255,255,.95);border:1px solid var(--mf-border);border-radius:var(--mf-radius);box-shadow:var(--mf-shadow);padding:20px;margin:16px 0}.mf-hero{background:linear-gradient(135deg,var(--mf-primary),${rgba(cfg.primary,.76)});color:#fff}.mf-hero h1{margin:8px 0 6px;font-size:38px;line-height:1.05;color:#fff;letter-spacing:-.03em}.mf-hero p{color:rgba(255,255,255,.9);font-weight:850}.mf-eyebrow{display:inline-flex;align-items:center;width:max-content;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);font-size:11px;font-weight:950;letter-spacing:.06em;text-transform:uppercase;padding:6px 10px}.mf-eyebrow.light{background:rgba(255,255,255,.16);color:#fff}.mf-board-head,.mf-section-head,.mf-detail-head,.mf-topic-detail-head,.mf-reply-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}.mf-board-head h2,.mf-section-head h2,.mf-detail-head h2{margin:7px 0 0;color:var(--mf-text);font-size:27px}.mf-search-row{display:grid;grid-template-columns:minmax(220px,1fr) auto auto auto;gap:9px;align-items:center;margin-top:16px}.mf-category-table,.mf-topic-table{display:grid;gap:10px;margin-top:14px}.mf-category-row,.mf-topic-row{width:100%;display:grid;grid-template-columns:minmax(260px,1.4fr) minmax(130px,.35fr) minmax(260px,.9fr);gap:14px;align-items:center;text-align:left;border:1px solid var(--mf-border);border-radius:16px;background:#fff;color:var(--mf-text);padding:15px;cursor:pointer}.mf-topic-row{grid-template-columns:minmax(320px,1.5fr) minmax(130px,.35fr)}.mf-category-row:hover,.mf-topic-row:hover{border-color:var(--mf-primary);box-shadow:0 8px 22px ${rgba(cfg.primary,.10)}}.mf-category-main strong,.mf-topic-title strong{display:block;color:var(--mf-primary);font-size:16px}.mf-category-main span,.mf-topic-title span,.mf-latest span,.mf-help{color:var(--mf-muted);font-size:13px;line-height:1.45;font-weight:750}.mf-category-main em{font-style:normal;display:inline-flex;margin-top:6px;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);font-size:11px;font-weight:950;padding:4px 7px}.mf-counts{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-start}.mf-counts span,.mf-mini,.mf-attention{display:inline-flex;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);padding:6px 9px;font-size:11px;font-weight:950;text-transform:uppercase}.mf-counts b{margin-right:4px}.mf-attention{background:#fee2e2;color:#991b1b}.mf-latest strong{display:block;color:var(--mf-text);font-size:13px}.mf-form-grid,.mf-login-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.mf-wrap label{display:block;margin:10px 0 6px;font-weight:950;color:var(--mf-text)}.mf-wrap input,.mf-wrap select,.mf-wrap textarea{width:100%;min-height:42px;border:1px solid var(--mf-border);border-radius:12px;padding:10px 12px;background:#fff;color:var(--mf-text);font:inherit}.mf-wrap textarea{resize:vertical}.mf-btn{display:inline-flex;align-items:center;justify-content:center;min-height:40px;border-radius:999px;border:1px solid var(--mf-primary);background:var(--mf-primary);color:#fff;font-weight:950;padding:9px 15px;text-decoration:none;cursor:pointer}.mf-btn.secondary{background:#fff;color:var(--mf-primary)}.mf-btn:disabled{opacity:.58;cursor:not-allowed}.mf-text-btn{border:0;background:transparent;color:var(--mf-primary);font-weight:950;text-decoration:underline;padding:0;margin:0 0 10px;cursor:pointer}.mf-empty{border:1px dashed var(--mf-border);border-radius:16px;padding:16px;color:var(--mf-muted);font-weight:850}.mf-empty strong,.mf-empty span{display:block}.mf-topic-main{border:1px solid ${rgba(cfg.primary,.24)};border-radius:20px;background:linear-gradient(135deg,var(--mf-primary),${rgba(cfg.primary,.80)});color:#fff;padding:18px;margin:16px 0;box-shadow:0 10px 28px ${rgba(cfg.primary,.18)}}.mf-topic-main p{font-size:16px;line-height:1.58;font-weight:760;margin:10px 0 0}.mf-topic-main .mf-text-btn{color:#fff}.mf-topic-main-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.mf-detail hr{border:0;border-top:1px solid var(--mf-border);margin:20px 0}.mf-replies{display:grid;gap:12px}.mf-reply{border:1px solid var(--mf-border);border-left:5px solid var(--mf-primary);border-radius:18px;padding:14px 14px 14px 18px;margin:0 0 0 18px;background:#fff}.mf-reply.is-alt{background:${rgba(cfg.primary,.045)}}.mf-reply.is-hidden{opacity:.65}.mf-reply p{margin:10px 0 0;line-height:1.55;font-weight:740}.mf-reply-head span{display:block;color:var(--mf-muted);font-size:12px;font-weight:800}.mf-reply-box{border:1px solid var(--mf-border);border-radius:18px;background:${rgba(cfg.primary,.04)};padding:14px;margin:18px 0 0}.mf-reply-empty{margin-left:18px}.mf-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.mf-topic-status{justify-content:flex-end}.mf-like{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--mf-border);border-radius:999px;background:#fff;color:var(--mf-primary);font-weight:950;padding:6px 10px;cursor:pointer;min-height:34px}.mf-like.is-liked{background:var(--mf-primary);color:#fff;border-color:var(--mf-primary)}.mf-like-icon{font-size:18px;line-height:1}.mf-reply-actions{margin-top:10px}.mf-moderation{border-top:1px solid var(--mf-border);padding-top:10px;margin-top:12px}.mf-poll,.mf-trip{border:1px solid var(--mf-border);border-radius:16px;padding:14px;margin:14px 0;background:#fff}.mf-trip span{display:block;color:var(--mf-muted);font-weight:850;margin-top:4px}.mf-poll h3{margin:0 0 10px;color:var(--mf-primary)}.mf-poll-option{position:relative;overflow:hidden;display:block;width:100%;border:1px solid var(--mf-border);border-radius:14px;background:#fff;text-align:left;padding:11px;margin:8px 0;cursor:pointer}.mf-poll-option i{position:absolute;left:0;top:0;bottom:0;background:var(--mf-soft);z-index:0}.mf-poll-option span,.mf-poll-option em{position:relative;z-index:1;display:flex;justify-content:space-between;gap:10px}.mf-poll-option em{font-style:normal;color:var(--mf-muted);font-weight:850}.mf-poll-option.is-selected{border-color:var(--mf-primary)}.mf-extra{border-left:4px solid var(--mf-primary);padding-left:12px}.mf-message{display:inline-flex;margin-top:10px;border-radius:12px;padding:9px 11px;font-size:13px;font-weight:900;background:${messageKind === "ok" ? "#e7f6ec" : messageKind === "warn" ? "#fff7ec" : "rgba(255,255,255,.14)"};color:${messageKind === "ok" ? "#14532d" : messageKind === "warn" ? "#8a4d00" : "inherit"}}.mf-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font-size:12px;max-height:360px;overflow:auto}details summary{cursor:pointer;font-weight:950;color:var(--mf-primary)}@media(max-width:980px){.mf-search-row,.mf-category-row,.mf-topic-row,.mf-form-grid,.mf-login-grid{grid-template-columns:1fr}.mf-board-head,.mf-section-head,.mf-detail-head,.mf-topic-detail-head,.mf-reply-head{display:block}.mf-hero h1{font-size:31px}.mf-counts{margin-top:8px}}
+      .mf-wrap{${cssVars(cfg)}max-width:var(--mf-page-width);margin:24px auto 56px;padding:0 18px;font-family:Arial,Helvetica,sans-serif;color:var(--mf-text);box-sizing:border-box}.mf-wrap *{box-sizing:border-box}.mf-card{background:rgba(255,255,255,.95);border:1px solid var(--mf-border);border-radius:var(--mf-radius);box-shadow:var(--mf-shadow);padding:20px;margin:16px 0}.mf-hero{background:linear-gradient(135deg,var(--mf-primary),${rgba(cfg.primary,.76)});color:#fff}.mf-hero h1{margin:8px 0 6px;font-size:38px;line-height:1.05;color:#fff;letter-spacing:-.03em}.mf-hero p{color:rgba(255,255,255,.9);font-weight:850}.mf-eyebrow{display:inline-flex;align-items:center;width:max-content;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);font-size:11px;font-weight:950;letter-spacing:.06em;text-transform:uppercase;padding:6px 10px}.mf-eyebrow.light{background:rgba(255,255,255,.16);color:#fff}.mf-board-head,.mf-section-head,.mf-detail-head,.mf-topic-detail-head,.mf-reply-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}.mf-board-head h2,.mf-section-head h2,.mf-detail-head h2{margin:7px 0 0;color:var(--mf-text);font-size:27px}.mf-search-row{display:grid;grid-template-columns:minmax(220px,1fr) auto auto auto;gap:9px;align-items:center;margin-top:16px}.mf-category-table,.mf-topic-table{display:grid;gap:10px;margin-top:14px}.mf-category-row,.mf-topic-row{width:100%;display:grid;grid-template-columns:minmax(260px,1.4fr) minmax(130px,.35fr) minmax(260px,.9fr);gap:14px;align-items:center;text-align:left;border:1px solid var(--mf-border);border-radius:16px;background:#fff;color:var(--mf-text);padding:15px;cursor:pointer}.mf-topic-row{grid-template-columns:minmax(320px,1.5fr) minmax(130px,.35fr)}.mf-category-row:hover,.mf-topic-row:hover{border-color:var(--mf-primary);box-shadow:0 8px 22px ${rgba(cfg.primary,.10)}}.mf-category-main strong,.mf-topic-title strong{display:block;color:var(--mf-primary);font-size:16px}.mf-category-main span,.mf-topic-title span,.mf-latest span,.mf-help{color:var(--mf-muted);font-size:13px;line-height:1.45;font-weight:750}.mf-category-main em{font-style:normal;display:inline-flex;margin-top:6px;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);font-size:11px;font-weight:950;padding:4px 7px}.mf-counts{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-start}.mf-counts span,.mf-mini,.mf-attention{display:inline-flex;border-radius:999px;background:var(--mf-soft);color:var(--mf-primary);padding:6px 9px;font-size:11px;font-weight:950;text-transform:uppercase}.mf-counts b{margin-right:4px}.mf-attention{background:#fee2e2;color:#991b1b}.mf-latest strong{display:block;color:var(--mf-text);font-size:13px}.mf-form-grid,.mf-login-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.mf-wrap label{display:block;margin:10px 0 6px;font-weight:950;color:var(--mf-text)}.mf-wrap input,.mf-wrap select,.mf-wrap textarea{width:100%;min-height:42px;border:1px solid var(--mf-border);border-radius:12px;padding:10px 12px;background:#fff;color:var(--mf-text);font:inherit}.mf-wrap textarea{resize:vertical}.mf-btn{display:inline-flex;align-items:center;justify-content:center;min-height:40px;border-radius:999px;border:1px solid var(--mf-primary);background:var(--mf-primary);color:#fff;font-weight:950;padding:9px 15px;text-decoration:none;cursor:pointer}.mf-btn.secondary{background:#fff;color:var(--mf-primary)}.mf-btn:disabled{opacity:.58;cursor:not-allowed}.mf-text-btn{border:0;background:transparent;color:var(--mf-primary);font-weight:950;text-decoration:underline;padding:0;margin:0 0 10px;cursor:pointer}.mf-empty{border:1px dashed var(--mf-border);border-radius:16px;padding:16px;color:var(--mf-muted);font-weight:850}.mf-empty strong,.mf-empty span{display:block}.mf-topic-body{font-size:15px;line-height:1.55;font-weight:750;background:#f8fafc;border:1px solid #dbe3ef;border-radius:16px;padding:14px}.mf-detail hr{border:0;border-top:1px solid var(--mf-border);margin:18px 0}.mf-reply{border:1px solid var(--mf-border);border-radius:16px;padding:13px;margin:10px 0;background:#fff}.mf-reply.is-hidden{opacity:.65}.mf-reply p{margin:8px 0 0;line-height:1.5}.mf-actions{display:flex;gap:8px;flex-wrap:wrap}.mf-moderation{border-top:1px solid var(--mf-border);padding-top:10px;margin-top:12px}.mf-poll,.mf-trip{border:1px solid var(--mf-border);border-radius:16px;padding:14px;margin:14px 0;background:#fff}.mf-trip span{display:block;color:var(--mf-muted);font-weight:850;margin-top:4px}.mf-poll h3{margin:0 0 10px;color:var(--mf-primary)}.mf-poll-option{position:relative;overflow:hidden;display:block;width:100%;border:1px solid var(--mf-border);border-radius:14px;background:#fff;text-align:left;padding:11px;margin:8px 0;cursor:pointer}.mf-poll-option i{position:absolute;left:0;top:0;bottom:0;background:var(--mf-soft);z-index:0}.mf-poll-option span,.mf-poll-option em{position:relative;z-index:1;display:flex;justify-content:space-between;gap:10px}.mf-poll-option em{font-style:normal;color:var(--mf-muted);font-weight:850}.mf-poll-option.is-selected{border-color:var(--mf-primary)}.mf-extra{border-left:4px solid var(--mf-primary);padding-left:12px}.mf-message{display:inline-flex;margin-top:10px;border-radius:12px;padding:9px 11px;font-size:13px;font-weight:900;background:${messageKind === "ok" ? "#e7f6ec" : messageKind === "warn" ? "#fff7ec" : "rgba(255,255,255,.14)"};color:${messageKind === "ok" ? "#14532d" : messageKind === "warn" ? "#8a4d00" : "inherit"}}.mf-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:14px;padding:14px;font-size:12px;max-height:360px;overflow:auto}details summary{cursor:pointer;font-weight:950;color:var(--mf-primary)}.mf-detail{background:linear-gradient(135deg,var(--mf-primary),rgba(15,23,42,.88));color:#fff}.mf-detail h2,.mf-detail p,.mf-detail .mf-help{color:rgba(255,255,255,.88)}.mf-detail .mf-topic-body{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);color:#fff}.mf-detail .mf-moderation{border-color:rgba(255,255,255,.22)}.mf-detail .mf-btn.secondary{background:rgba(255,255,255,.96)}.mf-detail .mf-text-btn{color:#fff}.mf-topic-status{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end}.mf-mini.invert{background:rgba(255,255,255,.18);color:#fff}.mf-like{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--mf-border);background:#fff;color:var(--mf-primary);border-radius:999px;min-height:34px;padding:6px 10px;font-weight:950;cursor:pointer}.mf-like span{font-size:16px;line-height:1}.mf-like em{font-style:normal;font-size:11px;text-transform:uppercase;color:var(--mf-muted);font-weight:950}.mf-like.is-liked{background:var(--mf-primary);color:#fff;border-color:var(--mf-primary)}.mf-like.is-liked em{color:rgba(255,255,255,.82)}.mf-detail .mf-like{border-color:rgba(255,255,255,.28)}.mf-detail .mf-like:not(.is-liked){background:rgba(255,255,255,.96)}.mf-thread{background:rgba(255,255,255,.96)}.mf-replies{display:grid;gap:10px}.mf-reply{margin:10px 0 10px 28px;background:#fff;border-left:5px solid var(--mf-primary)}.mf-reply.is-alt{background:var(--mf-soft)}.mf-reply-head span{display:block;color:var(--mf-muted);font-size:12px;font-weight:850;margin-top:3px}.mf-btn.mini{min-height:34px;padding:6px 10px;font-size:12px}.mf-reply-box{margin-top:18px;border-top:1px solid var(--mf-border);padding-top:14px}.mf-reply-indent{margin-left:28px}.mf-mention-insert{margin-top:2px}.mf-actions .mf-like{margin-right:2px}@media(max-width:980px){.mf-reply,.mf-reply-indent{margin-left:0}.mf-search-row,.mf-category-row,.mf-topic-row,.mf-form-grid,.mf-login-grid{grid-template-columns:1fr}.mf-board-head,.mf-section-head,.mf-detail-head,.mf-topic-detail-head,.mf-reply-head{display:block}.mf-hero h1{font-size:31px}.mf-counts{margin-top:8px}}
     </style><div class="mf-wrap">${renderBoard()}<div class="mf-message ${esc(messageKind)}">${esc(message)}</div>${diagnosticsHtml()}</div>`;
     bindEvents();
   }
@@ -514,6 +536,47 @@
     navigate({ topic: clean(topicId), category: "", q: "" }, true).catch((e) => setMessage(e.message || String(e), "warn"));
   }
 
+  function insertMention(selectId, targetId) {
+    const select = $(selectId);
+    const target = $(targetId);
+    if (!select || !target) return;
+    const selected = Array.from(select.selectedOptions || []);
+    if (!selected.length) { setMessage("Choose a member to mention first.", "warn"); return; }
+    const mentions = selected.map((option) => `@${clean(option.getAttribute("data-name") || option.textContent || "Member")}`).join(" ");
+    const prefix = target.value && !target.value.endsWith(" ") && !target.value.endsWith("\n") ? " " : "";
+    target.value = `${target.value || ""}${prefix}${mentions} `;
+    target.focus();
+    setDirty(true);
+  }
+
+  function insertAuthorMention(name, targetId, personId = "") {
+    const target = $(targetId);
+    const mention = `@${clean(name || "Member")}`;
+    if (!target) return;
+    const select = $(targetId === "forum-reply-body" ? "forum-reply-mentions" : "forum-new-mentions");
+    if (select && personId) Array.from(select.options || []).forEach((option) => { if (String(option.value) === String(personId)) option.selected = true; });
+    const prefix = target.value && !target.value.endsWith(" ") && !target.value.endsWith("\n") ? " " : "";
+    target.value = `${target.value || ""}${prefix}${mention} `;
+    target.focus();
+    setDirty(true);
+  }
+
+  async function toggleReaction(targetType, topicId, replyId = "") {
+    const res = await call("member_forum_toggle_reaction", { organization_id: selectedOrgId, forum_topic_id: clean(topicId), forum_reply_id: clean(replyId), target_type: clean(targetType) });
+    applyContext(res);
+    setMessage("Reaction updated.", "ok");
+    render();
+  }
+
+  async function moderateReply(replyId, action) {
+    if (!selectedTopic?.forum_topic_id) throw new Error("Choose a topic first.");
+    if (action === "hide" && !window.confirm("Hide this reply from members?")) return;
+    const res = await call("member_forum_moderate_reply", { organization_id: selectedOrgId, forum_topic_id: selectedTopic.forum_topic_id, forum_reply_id: clean(replyId), moderation_action: clean(action) });
+    applyContext(res);
+    setMessage("Reply moderation saved.", "ok");
+    render();
+  }
+
   function bindEvents() {
     $("forum-login")?.addEventListener("click", () => runButton("forum-login", "Logging in…", login));
     $("forum-toggle-create")?.addEventListener("click", () => { if (createFormOpen && !confirmDirty()) return; createFormOpen = !createFormOpen; if (!createFormOpen) setDirty(false); render(); });
@@ -522,19 +585,22 @@
     $("forum-clear-search")?.addEventListener("click", () => { navigate({ q: "" }).catch((err) => setMessage(err.message || String(err), "warn")); });
     document.querySelectorAll("[data-forum-home]").forEach((btn) => btn.addEventListener("click", () => { navigate({ q: "", topic: "", category: "" }).catch((err) => setMessage(err.message || String(err), "warn")); }));
     $("forum-back-categories")?.addEventListener("click", () => { navigate({ q: "", topic: "", category: "" }).catch((err) => setMessage(err.message || String(err), "warn")); });
-    $("forum-back-category")?.addEventListener("click", () => { const cat = selectedTopic?.category || categoryByAny(selectedTopic?.forum_category_id) || null; navigate({ q: "", topic: "", category: clean(cat?.category_key || cat?.forum_category_id) }).catch((err) => setMessage(err.message || String(err), "warn")); });
+    $("forum-back-category")?.addEventListener("click", () => {
+      const cat = selectedTopic?.category || categoryByAny(selectedTopic?.forum_category_id || routeCategory);
+      navigate({ q: "", topic: "", category: clean(cat?.category_key || cat?.forum_category_id || routeCategory) }).catch((err) => setMessage(err.message || String(err), "warn"));
+    });
     document.querySelectorAll("[data-category]").forEach((btn) => btn.addEventListener("click", () => goCategory(btn.getAttribute("data-category") || "")));
     document.querySelectorAll("[data-topic]").forEach((btn) => btn.addEventListener("click", () => goTopic(btn.getAttribute("data-topic") || "")));
     $("forum-new-type")?.addEventListener("change", (e) => { createTopicType = e.target.value || "discussion"; render(); });
     ["forum-new-title","forum-new-body","forum-new-poll-options","forum-reply-body","forum-trip-destination","forum-trip-date"].forEach((id) => $(id)?.addEventListener("input", () => setDirty(true)));
-    ["forum-new-mentions","forum-reply-mentions"].forEach((id) => $(id)?.addEventListener("change", () => insertMentionText(id)));
-    document.querySelectorAll(".mf-mention-one").forEach((btn) => btn.addEventListener("click", () => insertManualMention(btn.getAttribute("data-mention-name") || "", btn.getAttribute("data-mention-person-id") || "")));
     $("forum-create-topic")?.addEventListener("click", () => runButton("forum-create-topic", "Posting…", createTopic));
     $("forum-create-reply")?.addEventListener("click", () => runButton("forum-create-reply", "Posting…", createReply));
-    document.querySelectorAll(".mf-like").forEach((btn) => btn.addEventListener("click", (event) => { event.stopPropagation(); runButton("", "", () => toggleReaction(btn.getAttribute("data-like-target") || "", btn.getAttribute("data-like-id") || "")); }));
     document.querySelectorAll(".mf-poll-option").forEach((btn) => btn.addEventListener("click", () => runButton("", "", () => votePoll(btn.getAttribute("data-vote-poll") || "", btn.getAttribute("data-vote-option") || ""))));
+    document.querySelectorAll("[data-reaction-target]").forEach((btn) => btn.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); runButton("", "", () => toggleReaction(btn.getAttribute("data-reaction-target") || "topic", btn.getAttribute("data-reaction-topic") || "", btn.getAttribute("data-reaction-reply") || "")); }));
+    document.querySelectorAll("[data-insert-mention]").forEach((btn) => btn.addEventListener("click", () => insertMention(btn.getAttribute("data-insert-mention") || "", btn.getAttribute("data-mention-target") || "")));
+    document.querySelectorAll("[data-mention-author]").forEach((btn) => btn.addEventListener("click", () => insertAuthorMention(btn.getAttribute("data-mention-author") || "Member", btn.getAttribute("data-mention-target") || "forum-reply-body", btn.getAttribute("data-mention-person") || "")));
     document.querySelectorAll("[data-moderate]").forEach((btn) => btn.addEventListener("click", () => runButton("", "", () => moderateTopic(btn.getAttribute("data-moderate") || ""))));
-    document.querySelectorAll("[data-moderate-reply]").forEach((btn) => btn.addEventListener("click", () => runButton("", "", () => moderateReply(btn.getAttribute("data-reply-id") || "", btn.getAttribute("data-moderate-reply") || ""))));
+    document.querySelectorAll("[data-moderate-reply]").forEach((btn) => btn.addEventListener("click", () => runButton("", "", () => moderateReply(btn.getAttribute("data-moderate-reply") || "", btn.getAttribute("data-moderate-reply-action") || "hide"))));
   }
 
   async function createTopic() {
@@ -585,32 +651,12 @@
     render();
   }
 
-  async function toggleReaction(target, id) {
-    if (!id) throw new Error("Choose a topic or reply first.");
-    const payload = { organization_id: selectedOrgId, reaction_type: "like" };
-    if (target === "reply") payload.forum_reply_id = id;
-    else payload.forum_topic_id = id;
-    const res = await call("member_forum_toggle_reaction", payload);
-    applyContext(res);
-    setMessage(res.reaction_active ? "Liked." : "Like removed.", "ok");
-    render();
-  }
-
   async function moderateTopic(action) {
     if (!selectedTopic?.forum_topic_id) throw new Error("Choose a topic first.");
     if (action === "hide" && !window.confirm("Hide this topic from members?")) return;
     const res = await call("member_forum_moderate_topic", { organization_id: selectedOrgId, forum_topic_id: selectedTopic.forum_topic_id, moderation_action: action });
     applyContext(res);
     setMessage("Moderation saved.", "ok");
-    render();
-  }
-
-  async function moderateReply(replyId, action) {
-    if (!replyId) throw new Error("Choose a reply first.");
-    if (action === "hide" && !window.confirm("Hide this reply from members?")) return;
-    const res = await call("member_forum_moderate_reply", { organization_id: selectedOrgId, forum_reply_id: replyId, moderation_action: action });
-    applyContext(res);
-    setMessage("Reply moderation saved.", "ok");
     render();
   }
 

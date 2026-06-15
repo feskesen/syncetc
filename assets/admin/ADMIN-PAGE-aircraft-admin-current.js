@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-15-115-A
+// Internal Version: 2026-06-15-115-B
 // Purpose: Customer/organization-side Aircraft Admin foundation. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-15-115-A";
+  const VERSION = "2026-06-15-115-B";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -50,6 +50,7 @@
     locationSearchText: "",
     assetTypeSearch: "",
     assetTypeSearchText: "",
+    assetTypeStatusFilter: "active",
     statusFilter: "all",
     activeTab: "identity",
     dirty: false,
@@ -325,7 +326,7 @@
   function selectedAssetType() { return state.assetTypes.find(t => clean(t.asset_type_id) === state.selectedAssetTypeId) || null; }
 
   function emptyAssetTypeDraft() {
-    return { asset_type_id: "", asset_type_key: "", label: "", plural_label: "", category_key: "aircraft", description: "", notes: "", status: "active", sort_order: "100" };
+    return { asset_type_id: "", asset_type_key: "", label: "", plural_label: "", category_key: "other", description: "", notes: "", status: "active", sort_order: "100" };
   }
 
   function draftFromAssetType(t) {
@@ -342,10 +343,20 @@
     };
   }
 
+  function assetTypeStatus(t) {
+    const status = clean(t && t.status) || (t && t.archived_at ? "archived" : "active");
+    if (t && t.archived_at) return "archived";
+    return ["active", "inactive", "archived"].includes(status) ? status : "active";
+  }
+
   function sortedAssetTypes(list = state.assetTypes) {
+    const rank = { active: 0, inactive: 1, archived: 2 };
     return arr(list).slice().sort((a, b) => {
-      const ao = Number(a.sort_order ?? 100);
-      const bo = Number(b.sort_order ?? 100);
+      const as = assetTypeStatus(a);
+      const bs = assetTypeStatus(b);
+      if ((rank[as] ?? 9) !== (rank[bs] ?? 9)) return (rank[as] ?? 9) - (rank[bs] ?? 9);
+      const ao = Number(a.sort_order ?? (as === "archived" ? 999 : 100));
+      const bo = Number(b.sort_order ?? (bs === "archived" ? 999 : 100));
       if (Number.isFinite(ao) && Number.isFinite(bo) && ao !== bo) return ao - bo;
       if (Number.isFinite(ao) && !Number.isFinite(bo)) return -1;
       if (!Number.isFinite(ao) && Number.isFinite(bo)) return 1;
@@ -355,14 +366,25 @@
 
   function assetTypeRowsForCurrentSearch() {
     const query = lower(state.assetTypeSearch);
+    const filter = clean(state.assetTypeStatusFilter || "active");
     return sortedAssetTypes().filter(t => {
+      const status = assetTypeStatus(t);
+      if (filter !== "all" && status !== filter) return false;
       if (!query) return true;
-      const haystack = [t.label, t.plural_label, t.category_key || t.category, t.description, t.status].join(" ").toLowerCase();
+      const haystack = [t.label, t.plural_label, t.description, t.notes, status].join(" ").toLowerCase();
       return haystack.includes(query);
     });
   }
 
-  function renumberAssetTypes(list) { return arr(list).map((t, index) => ({ ...t, sort_order: (index + 1) * 10 })); }
+  function renumberAssetTypes(list) {
+    let activeIndex = 0;
+    return arr(list).map(t => {
+      const status = assetTypeStatus(t);
+      if (status === "archived") return { ...t, sort_order: 999 };
+      activeIndex += 1;
+      return { ...t, sort_order: activeIndex * 10 };
+    });
+  }
   function assetTypePayloadFromRecord(t) { return { ...draftFromAssetType(t), organization_id: state.orgId }; }
 
   function setAssetTypeOrderStatus(message, kind = "") {
@@ -684,13 +706,14 @@
     try {
       const d = state.assetTypeDraft || emptyAssetTypeDraft();
       if (!clean(d.label)) throw new Error("Enter an asset type name.");
-      if (!clean(d.category_key)) throw new Error("Choose a category.");
       state.saving = true; clearError(); setStatus("Saving asset type..."); renderActionState();
       const result = await callAccess("organization_save_asset_type", collectAssetTypePayload());
       state.assetTypes = arr(result.asset_types || result.assetTypes);
       const saved = obj(result.asset_type);
       state.selectedAssetTypeId = clean(saved.asset_type_id || state.selectedAssetTypeId);
       state.assetTypeDraft = draftFromAssetType(saved);
+      const savedStatus = assetTypeStatus(saved);
+      if (state.assetTypeStatusFilter !== "all") state.assetTypeStatusFilter = savedStatus;
       setAssetTypeDirty(false);
       setStatus("Asset type saved.", "ok");
       render();
@@ -710,6 +733,7 @@
       state.selectedAssetTypeId = clean(saved.asset_type_id || state.assetTypes[0]?.asset_type_id || "");
       const refreshed = selectedAssetType();
       state.assetTypeDraft = refreshed ? draftFromAssetType(refreshed) : emptyAssetTypeDraft();
+      if (state.assetTypeStatusFilter !== "all") state.assetTypeStatusFilter = restore ? "active" : "archived";
       setAssetTypeDirty(false);
       setStatus(restore ? "Asset type restored." : "Asset type archived.", "ok");
       render();
@@ -717,7 +741,7 @@
     finally { state.saving = false; renderActionState(); }
   }
 
-  function newAssetType() { if (!confirmDiscard("You have unsaved asset type changes. Continue?")) return; state.selectedAssetTypeId = ""; state.assetTypeDraft = emptyAssetTypeDraft(); setAssetTypeDirty(false); render(); }
+  function newAssetType() { if (!confirmDiscard("You have unsaved asset type changes. Continue?")) return; state.assetTypeStatusFilter = "active"; state.selectedAssetTypeId = ""; state.assetTypeDraft = emptyAssetTypeDraft(); setAssetTypeDirty(false); render(); }
   function clearAssetType() { newAssetType(); }
 
   async function saveAircraft() {
@@ -986,50 +1010,51 @@
     const d = state.assetTypeDraft || emptyAssetTypeDraft();
     const rows = assetTypeRowsForCurrentSearch();
     const archived = clean(selectedAssetType()?.status) === "archived" || !!selectedAssetType()?.archived_at;
-    const categoryOptions = [
-      ["aircraft", "Aircraft"],
-      ["vehicle", "Vehicle"],
-      ["simulator", "Simulator"],
-      ["vessel", "Vessel"],
-      ["equipment", "Equipment"],
-      ["other", "Other"]
-    ];
+    const statusFilters = [["active", "Active"], ["inactive", "Inactive"], ["archived", "Archived"], ["all", "All"]];
+    const statusLabel = (value) => ({ active: "Active", inactive: "Inactive", archived: "Archived" }[assetTypeStatus(value)] || "Active");
     return `
       <section class="aircraft-card aircraft-location-card aircraft-asset-type-card">
         <div class="aircraft-section-head compact">
-          <div><h2>Asset Types</h2><p>Manage simple asset classifications. Operational settings such as rates, meters, maintenance, and reservations belong on assets or later setup pages.</p></div>
+          <div><h2>Asset Types</h2><p>Manage simple asset classifications. Rates, meters, maintenance, reservations, and billing belong on assets or later setup pages.</p></div>
           <button class="aircraft-button secondary" id="aircraft-new-asset-type">New Asset Type</button>
         </div>
         <div class="aircraft-module-divider"></div>
         <div class="aircraft-location-layout">
           <div class="aircraft-location-list-wrap">
+            <div class="aircraft-filter-row asset-type-filter-row">
+              <select id="aircraft-asset-type-status-filter" aria-label="Filter asset types by status">
+                ${statusFilters.map(([value, label]) => `<option value="${value}" ${state.assetTypeStatusFilter === value ? "selected" : ""}>${label}</option>`).join("")}
+              </select>
+            </div>
             <div class="aircraft-list-tools"><input id="aircraft-asset-type-search" value="${attr(state.assetTypeSearchText)}" placeholder="Search asset types"></div>
             <div class="aircraft-order-tools">
-              <span class="aircraft-order-hint">Drag or use arrows to sort.</span>
+              <span class="aircraft-order-hint">Drag or use arrows to sort. Archived types stay at the bottom.</span>
               <span data-asset-type-order-status class="aircraft-order-status ${state.assetTypeOrderStatusKind}" style="display:${state.assetTypeOrderStatus ? "inline-flex" : "none"}">${esc(state.assetTypeOrderStatus)}</span>
             </div>
             <div class="aircraft-location-list">
               ${rows.length ? rows.map((t, index) => {
                 const selected = clean(t.asset_type_id) === state.selectedAssetTypeId;
                 const id = attr(t.asset_type_id);
-                return `<div class="aircraft-location-row ${selected ? "selected" : ""} ${state.assetTypeOrderSaving ? "saving" : ""}" draggable="${state.assetTypeOrderSaving ? "false" : "true"}" data-asset-type-row data-asset-type-id="${id}">
+                const status = assetTypeStatus(t);
+                const canMove = status !== "archived" && !state.assetTypeOrderSaving;
+                return `<div class="aircraft-location-row aircraft-asset-type-row ${selected ? "selected" : ""} ${state.assetTypeOrderSaving ? "saving" : ""} ${status === "archived" ? "archived" : ""} ${status === "inactive" ? "inactive" : ""}" draggable="${canMove ? "true" : "false"}" data-asset-type-row data-asset-type-id="${id}">
                   <button class="aircraft-location-main" type="button" data-asset-type-select="${id}">
                     <span class="aircraft-drag-handle" aria-hidden="true">☰</span>
-                    <span class="aircraft-location-copy"><strong>${esc(t.label || t.asset_type_key || "Asset Type")}</strong><span>${esc([t.plural_label, t.category_key || t.category, t.status].filter(Boolean).join(" · "))}</span></span>
+                    <span class="aircraft-location-copy"><strong>${esc(t.label || t.asset_type_key || "Asset Type")}</strong><span>${esc(t.plural_label || "")}</span></span>
+                    <span class="aircraft-list-badge ${status}">${esc(statusLabel(t))}</span>
                   </button>
                   <span class="aircraft-order-buttons">
-                    <button type="button" class="aircraft-order-button" data-asset-type-move="${id}" data-direction="up" ${index === 0 || state.assetTypeOrderSaving ? "disabled" : ""} aria-label="Move asset type up">▲</button>
-                    <button type="button" class="aircraft-order-button" data-asset-type-move="${id}" data-direction="down" ${index === rows.length - 1 || state.assetTypeOrderSaving ? "disabled" : ""} aria-label="Move asset type down">▼</button>
+                    <button type="button" class="aircraft-order-button" data-asset-type-move="${id}" data-direction="up" ${index === 0 || !canMove ? "disabled" : ""} aria-label="Move asset type up">▲</button>
+                    <button type="button" class="aircraft-order-button" data-asset-type-move="${id}" data-direction="down" ${index === rows.length - 1 || !canMove ? "disabled" : ""} aria-label="Move asset type down">▼</button>
                   </span>
                 </div>`;
-              }).join("") : `<div class="aircraft-empty">No asset types match that search.</div>`}
+              }).join("") : `<div class="aircraft-empty">No asset types match the current filters.</div>`}
             </div>
           </div>
           <div class="aircraft-location-form">
             <div class="aircraft-form-grid compact">
               <label class="aircraft-field"><span>Name *</span><input data-asset-type-key="label" value="${attr(d.label)}" placeholder="Aircraft"></label>
               <label class="aircraft-field"><span>Plural label</span><input data-asset-type-key="plural_label" value="${attr(d.plural_label)}" placeholder="Aircraft"></label>
-              <label class="aircraft-field"><span>Category *</span><select data-asset-type-key="category_key">${categoryOptions.map(([value,label]) => `<option value="${value}" ${d.category_key === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
               <label class="aircraft-field"><span>Status</span><select data-asset-type-key="status"><option value="active" ${d.status === "active" ? "selected" : ""}>Active</option><option value="inactive" ${d.status === "inactive" ? "selected" : ""}>Inactive</option><option value="archived" ${d.status === "archived" ? "selected" : ""}>Archived</option></select></label>
               <label class="aircraft-field full"><span>Description</span><textarea data-asset-type-key="description" placeholder="Short explanation for admins.">${esc(d.description)}</textarea></label>
               <label class="aircraft-field full"><span>Notes</span><textarea data-asset-type-key="notes" placeholder="Optional internal notes.">${esc(d.notes)}</textarea></label>
@@ -1141,7 +1166,7 @@
         .aircraft-pill{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.03em;background:color-mix(in srgb,var(--air-primary) 12%,#fff);color:var(--air-primary);}.aircraft-pill.ok{background:#eaf7ef;color:#196f3b;}.aircraft-pill.warn{background:#fff5d8;color:var(--air-warning);}.aircraft-pill.danger{background:#ffecec;color:var(--air-danger);}.aircraft-pill.neutral{background:#eef3f8;color:#30435c;}
         .aircraft-filter-row{display:grid;grid-template-columns:1fr 145px auto;gap:8px;margin:12px 0;align-items:center;}.aircraft-filter-row input,.aircraft-filter-row select,.aircraft-field input,.aircraft-field select,.aircraft-field textarea{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#172033;font-size:13px;}.aircraft-field textarea{min-height:82px;resize:vertical;font-family:Arial,Helvetica,sans-serif;}.aircraft-check{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:800;color:#334155;}
         .aircraft-list{display:flex;flex-direction:column;gap:8px;}.aircraft-row,.aircraft-location-row{width:100%;border:1px solid #d7e0ea;background:#fff;border-radius:13px;padding:11px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:4px;}.aircraft-row.selected,.aircraft-location-row.selected{border-color:var(--air-primary);box-shadow:inset 4px 0 0 var(--air-primary);background:color-mix(in srgb,var(--air-secondary) 38%,#fff);}.aircraft-row-title{font-weight:900;font-size:15px;}.aircraft-row-sub,.aircraft-row-meta,.aircraft-location-row span{color:var(--air-muted);font-size:12px;}.aircraft-row-meta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;}
-        .aircraft-location-row{padding:0;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch;overflow:hidden;cursor:grab;}.aircraft-location-row.dragging{opacity:.55;}.aircraft-location-row.drag-over{outline:2px dashed var(--air-primary);outline-offset:2px;}.aircraft-location-row.saving{opacity:.75;cursor:wait;}.aircraft-location-main{border:0;background:transparent;text-align:left;padding:11px;display:flex;gap:9px;align-items:flex-start;cursor:pointer;min-width:0;color:inherit;}.aircraft-drag-handle{font-size:13px;line-height:1;color:var(--air-muted);padding-top:2px;}.aircraft-location-copy{display:flex;flex-direction:column;gap:4px;min-width:0;}.aircraft-location-copy strong{color:#172033;font-size:14px;}.aircraft-order-buttons{display:flex;flex-direction:column;border-left:1px solid #e2e8f0;}.aircraft-order-button{border:0;border-bottom:1px solid #e2e8f0;background:#f8fafc;color:var(--air-primary);font-weight:900;min-width:34px;min-height:28px;cursor:pointer;}.aircraft-order-button:last-child{border-bottom:0;}.aircraft-order-button:disabled{opacity:.35;cursor:not-allowed;}.aircraft-order-tools{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:-2px 0 8px;font-size:12px;color:var(--air-muted);}.aircraft-order-status{display:inline-flex;border-radius:999px;padding:5px 8px;background:#eef3f8;color:#334155;font-weight:900;}.aircraft-order-status.ok{background:#eaf7ef;color:#196f3b;}.aircraft-order-status.error{background:#ffecec;color:var(--air-danger);}.aircraft-order-hint{white-space:nowrap;}
+        .aircraft-location-row{padding:0;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch;overflow:hidden;cursor:grab;}.aircraft-location-row.dragging{opacity:.55;}.aircraft-location-row.drag-over{outline:2px dashed var(--air-primary);outline-offset:2px;}.aircraft-location-row.saving{opacity:.75;cursor:wait;}.aircraft-location-main{border:0;background:transparent;text-align:left;padding:11px;display:flex;gap:9px;align-items:flex-start;cursor:pointer;min-width:0;color:inherit;}.aircraft-drag-handle{font-size:13px;line-height:1;color:var(--air-muted);padding-top:2px;}.aircraft-location-copy{display:flex;flex-direction:column;gap:4px;min-width:0;}.aircraft-location-copy strong{color:#172033;font-size:14px;}.aircraft-order-buttons{display:flex;flex-direction:column;border-left:1px solid #e2e8f0;}.aircraft-order-button{border:0;border-bottom:1px solid #e2e8f0;background:#f8fafc;color:var(--air-primary);font-weight:900;min-width:34px;min-height:28px;cursor:pointer;}.aircraft-order-button:last-child{border-bottom:0;}.aircraft-order-button:disabled{opacity:.35;cursor:not-allowed;}.aircraft-order-tools{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:-2px 0 8px;font-size:12px;color:var(--air-muted);}.aircraft-order-status{display:inline-flex;border-radius:999px;padding:5px 8px;background:#eef3f8;color:#334155;font-weight:900;}.aircraft-order-status.ok{background:#eaf7ef;color:#196f3b;}.aircraft-order-status.error{background:#ffecec;color:var(--air-danger);}.aircraft-order-hint{white-space:nowrap;}.asset-type-filter-row{margin:0 0 8px;}.asset-type-filter-row select{width:100%;}.aircraft-asset-type-row.archived{background:#f1f5f9;opacity:.72;}.aircraft-asset-type-row.inactive{background:#fafaf8;}.aircraft-asset-type-row.archived .aircraft-location-copy strong,.aircraft-asset-type-row.archived .aircraft-location-copy span{color:#64748b;}.aircraft-list-badge{margin-left:auto;align-self:flex-start;border-radius:999px;padding:4px 7px;font-size:10px;font-weight:900;letter-spacing:.04em;text-transform:uppercase;background:#eaf7ef;color:#196f3b;white-space:nowrap;}.aircraft-list-badge.inactive{background:#fff7ed;color:#9a3412;}.aircraft-list-badge.archived{background:#e2e8f0;color:#475569;}.aircraft-order-button:disabled{opacity:.35;cursor:not-allowed;}.aircraft-order-status{display:inline-flex;border-radius:999px;padding:5px 8px;background:#eef3f8;color:#334155;font-weight:900;}.aircraft-order-status.ok{background:#eaf7ef;color:#196f3b;}.aircraft-order-status.error{background:#ffecec;color:var(--air-danger);}.aircraft-order-hint{white-space:nowrap;}
         .aircraft-tabs{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0;}.aircraft-tabs button{border:1px solid #cbd5e1;background:#fff;color:#26344d;border-radius:999px;padding:8px 11px;font-weight:900;cursor:pointer;}.aircraft-tabs button.active{background:var(--air-primary);color:#fff;border-color:var(--air-primary);}
         .aircraft-form-grid{display:grid;grid-template-columns:repeat(2,minmax(min(260px,100%),1fr));gap:10px 12px;}.aircraft-form-grid.compact{gap:8px 12px;}.aircraft-field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px;min-width:0;} .aircraft-field input,.aircraft-field select,.aircraft-field textarea{min-width:0;}.aircraft-field span{font-size:12px;font-weight:900;color:#334155;text-transform:uppercase;letter-spacing:.03em;}.aircraft-field.full{grid-column:1/-1;}.aircraft-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 4px;}.aircraft-note{background:color-mix(in srgb,var(--air-secondary) 55%,#fff);border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);border-radius:12px;padding:12px;margin-bottom:12px;color:#334155;font-size:13px;line-height:1.45;}
         .aircraft-location-layout{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:12px;min-width:0;width:100%;overflow:hidden;}.aircraft-location-list-wrap{min-width:0;}.aircraft-list-tools{margin-bottom:8px;}.aircraft-list-tools input{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#172033;font-size:13px;}.aircraft-location-list{display:flex;flex-direction:column;gap:8px;}.aircraft-location-form{min-width:0;overflow:hidden;}.aircraft-status{padding:12px;border-radius:12px;border:1px solid #d6e0ec;background:#eef3f8;color:#26344d;margin-bottom:14px;}.aircraft-status.ok{background:#eaf7ef;color:#196f3b}.aircraft-status.error{background:#ffecec;color:var(--air-danger);border-color:#ffc6c6;}.aircraft-empty{border:1px dashed #cbd5e1;border-radius:12px;padding:14px;color:var(--air-muted);background:#f8fafc;}.aircraft-debug pre{background:#101827;color:#e7edf6;border-radius:12px;padding:12px;overflow:auto;font-size:12px;}
@@ -1189,6 +1214,19 @@
     field("aircraft-save-asset-type")?.addEventListener("click", saveAssetType);
     field("aircraft-clear-asset-type")?.addEventListener("click", clearAssetType);
     field("aircraft-archive-asset-type")?.addEventListener("click", () => archiveAssetType(clean(selectedAssetType()?.status) === "archived" || !!selectedAssetType()?.archived_at));
+    field("aircraft-asset-type-status-filter")?.addEventListener("change", e => {
+      const previous = state.assetTypeStatusFilter;
+      const nextFilter = e.target.value;
+      if (!confirmDiscard("Changing the asset type filter will discard unsaved asset type changes. Continue?")) { e.target.value = previous; return; }
+      state.assetTypeStatusFilter = nextFilter;
+      const rows = assetTypeRowsForCurrentSearch();
+      if (!rows.some(t => clean(t.asset_type_id) === state.selectedAssetTypeId)) {
+        state.selectedAssetTypeId = rows[0] ? clean(rows[0].asset_type_id) : "";
+        state.assetTypeDraft = selectedAssetType() ? draftFromAssetType(selectedAssetType()) : emptyAssetTypeDraft();
+        setAssetTypeDirty(false);
+      }
+      render();
+    });
     field("aircraft-asset-type-search")?.addEventListener("input", e => {
       const input = e.target;
       state.assetTypeSearchText = input.value;

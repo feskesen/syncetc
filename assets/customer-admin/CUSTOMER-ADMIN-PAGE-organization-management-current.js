@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-organization-management-current.js
-// Internal Version: 2026-06-14-114-F
+// Internal Version: 2026-06-14-114-G
 // Purpose: Customer/organization-side Organization Management console runtime. Immutable admin workbench shell with left navigation and right-panel module loading.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-14-114-F";
+  const VERSION = "2026-06-14-114-G";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -509,7 +509,17 @@
     document.querySelectorAll("[data-nav-group]").forEach(btn => btn.addEventListener("click", () => {
       const group = clean(btn.getAttribute("data-nav-group"));
       if (!group || group === "Home") return;
-      state.openGroup = group === openGroupName() ? "" : group;
+      const currentlyOpen = group === openGroupName();
+      if (!currentlyOpen) {
+        state.openGroup = group;
+        render();
+        return;
+      }
+      if (activeGroupName() === group && state.activeModule !== "overview") {
+        setActiveModule("overview");
+        return;
+      }
+      state.openGroup = "";
       render();
     }));
     document.querySelectorAll("[data-module]").forEach(btn => btn.addEventListener("click", () => setActiveModule(clean(btn.getAttribute("data-module")))));

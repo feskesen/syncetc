@@ -1,11 +1,11 @@
 // ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-14-113-A
+// Internal Version: 2026-06-14-113-B
 // Purpose: Legacy-compatible loader for customer/organization-side Aircraft Admin foundation. Uses core-access-action, not platform-only admin backend.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-14-113-A";
+  const VERSION = "2026-06-14-113-B";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -98,10 +98,28 @@
   function markLocationDirty() { setLocationDirty(true); }
   function confirmDiscard(message = DIRTY_MESSAGE) { return !(state.dirty || state.locationDirty) || window.confirm(message); }
 
+  function waitForSupabaseLibrary(timeoutMs = 8000) {
+    const started = Date.now();
+    return new Promise((resolve, reject) => {
+      const check = () => {
+        if (window.supabase && typeof window.supabase.createClient === "function") return resolve();
+        if (Date.now() - started > timeoutMs) return reject(new Error("Supabase JS did not load."));
+        setTimeout(check, 50);
+      };
+      check();
+    });
+  }
+
   function loadScript(src) {
     return new Promise((resolve, reject) => {
       const existing = document.querySelector(`script[src="${src}"]`);
-      if (existing) return resolve();
+      if (existing) {
+        existing.addEventListener("load", resolve, { once: true });
+        existing.addEventListener("error", () => reject(new Error(`Failed to load script: ${src}`)), { once: true });
+        // If another shell has already loaded the library, resolve immediately; otherwise let waitForSupabaseLibrary handle readiness.
+        if (window.supabase && typeof window.supabase.createClient === "function") return resolve();
+        return resolve();
+      }
       const script = document.createElement("script");
       script.src = src;
       script.async = true;
@@ -112,10 +130,14 @@
   }
 
   async function initSupabase() {
-    await loadScript(SUPABASE_JS_URL);
-    if (!window.supabase || !window.supabase.createClient) throw new Error("Supabase JS did not load.");
-    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
-    window.syncetcSupabase = supabaseClient;
+    if (window.syncetcSupabase && window.syncetcSupabase.auth && typeof window.syncetcSupabase.auth.getSession === "function") {
+      supabaseClient = window.syncetcSupabase;
+    } else {
+      await loadScript(SUPABASE_JS_URL);
+      await waitForSupabaseLibrary();
+      supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+      window.syncetcSupabase = supabaseClient;
+    }
     const { data } = await supabaseClient.auth.getSession();
     if (!data?.session?.access_token) throw new Error("Log in before using Aircraft Admin.");
     state.token = data.session.access_token;

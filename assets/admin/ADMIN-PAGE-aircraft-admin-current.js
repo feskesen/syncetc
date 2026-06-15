@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-15-115-C
+// Internal Version: 2026-06-15-115-D
 // Purpose: Customer/organization-side Aircraft Admin foundation. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-15-115-C";
+  const VERSION = "2026-06-15-115-D";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -50,7 +50,8 @@
     locationSearchText: "",
     assetTypeSearch: "",
     assetTypeSearchText: "",
-    assetTypeStatusFilter: "active",
+    assetTypeStatusFilter: "all",
+    locationStatusFilter: "all",
     statusFilter: "all",
     activeTab: "identity",
     dirty: false,
@@ -366,7 +367,7 @@
 
   function assetTypeRowsForCurrentSearch() {
     const query = lower(state.assetTypeSearch);
-    const filter = clean(state.assetTypeStatusFilter || "active");
+    const filter = clean(state.assetTypeStatusFilter || "all");
     return sortedAssetTypes().filter(t => {
       const status = assetTypeStatus(t);
       if (filter !== "all" && status !== filter) return false;
@@ -523,9 +524,12 @@
 
   function locationRowsForCurrentSearch() {
     const query = lower(state.locationSearch);
+    const filter = clean(state.locationStatusFilter || "all");
     return sortedLocations().filter(l => {
+      const status = locationStatus(l);
+      if (filter !== "all" && status !== filter) return false;
       if (!query) return true;
-      const haystack = [l.display_name, l.airport_identifier, l.location_type, l.city || obj(l.address_json).city, l.state_region || obj(l.address_json).state_region || obj(l.address_json).state, l.postal_code || obj(l.address_json).postal_code].join(" ").toLowerCase();
+      const haystack = [l.display_name, l.airport_identifier, l.location_type, l.city || obj(l.address_json).city, l.state_region || obj(l.address_json).state_region || obj(l.address_json).state, l.postal_code || obj(l.address_json).postal_code, status].join(" ").toLowerCase();
       return haystack.includes(query);
     });
   }
@@ -730,8 +734,7 @@
       const saved = obj(result.asset_type);
       state.selectedAssetTypeId = clean(saved.asset_type_id || state.selectedAssetTypeId);
       state.assetTypeDraft = draftFromAssetType(saved);
-      const savedStatus = assetTypeStatus(saved);
-      if (state.assetTypeStatusFilter !== "all") state.assetTypeStatusFilter = savedStatus;
+      state.assetTypeStatusFilter = "all";
       setAssetTypeDirty(false);
       setStatus("Asset type saved.", "ok");
       render();
@@ -751,7 +754,7 @@
       state.selectedAssetTypeId = clean(saved.asset_type_id || state.assetTypes[0]?.asset_type_id || "");
       const refreshed = selectedAssetType();
       state.assetTypeDraft = refreshed ? draftFromAssetType(refreshed) : emptyAssetTypeDraft();
-      if (state.assetTypeStatusFilter !== "all") state.assetTypeStatusFilter = restore ? "active" : "archived";
+      state.assetTypeStatusFilter = "all";
       setAssetTypeDirty(false);
       setStatus(restore ? "Asset type restored." : "Asset type archived.", "ok");
       render();
@@ -759,7 +762,7 @@
     finally { state.saving = false; renderActionState(); }
   }
 
-  function newAssetType() { if (!confirmDiscard("You have unsaved asset type changes. Continue?")) return; state.assetTypeStatusFilter = "active"; state.selectedAssetTypeId = ""; state.assetTypeDraft = emptyAssetTypeDraft(); setAssetTypeDirty(false); render(); }
+  function newAssetType() { if (!confirmDiscard("You have unsaved asset type changes. Continue?")) return; state.assetTypeStatusFilter = "all"; state.selectedAssetTypeId = ""; state.assetTypeDraft = emptyAssetTypeDraft(); setAssetTypeDirty(false); render(); }
   function clearAssetType() { newAssetType(); }
 
   async function saveAircraft() {
@@ -813,6 +816,7 @@
       const saved = obj(result.location);
       state.selectedLocationId = clean(saved.organization_location_id || state.selectedLocationId);
       state.locationDraft = draftFromLocation(saved);
+      state.locationStatusFilter = "all";
       setLocationDirty(false);
       setStatus("Location saved.", "ok");
       render();
@@ -1028,7 +1032,7 @@
     const d = state.assetTypeDraft || emptyAssetTypeDraft();
     const rows = assetTypeRowsForCurrentSearch();
     const archived = clean(selectedAssetType()?.status) === "archived" || !!selectedAssetType()?.archived_at;
-    const statusFilters = [["active", "Active"], ["inactive", "Inactive"], ["archived", "Archived"], ["all", "All"]];
+    const statusFilters = [["all", "All"], ["active", "Active"], ["inactive", "Inactive"], ["archived", "Archived"]];
     const statusLabel = (value) => ({ active: "Active", inactive: "Inactive", archived: "Archived" }[assetTypeStatus(value)] || "Active");
     return `
       <section class="aircraft-card aircraft-location-card aircraft-asset-type-card">
@@ -1107,6 +1111,7 @@
       ["other", "Other"]
     ];
     const statusLabel = (value) => ({ active: "Active", inactive: "Inactive", archived: "Archived" }[locationStatus(value)] || "Active");
+    const statusFilters = [["all", "All"], ["active", "Active"], ["inactive", "Inactive"], ["archived", "Archived"]];
     return `
       <section class="aircraft-card aircraft-location-card">
         <div class="aircraft-section-head compact">
@@ -1116,6 +1121,11 @@
         <div class="aircraft-module-divider"></div>
         <div class="aircraft-location-layout">
           <div class="aircraft-location-list-wrap">
+            <div class="aircraft-filter-row asset-type-filter-row">
+              <select id="aircraft-location-status-filter" aria-label="Filter spaces and locations by status">
+                ${statusFilters.map(([value, label]) => `<option value="${value}" ${state.locationStatusFilter === value ? "selected" : ""}>${label}</option>`).join("")}
+              </select>
+            </div>
             <div class="aircraft-list-tools"><input id="aircraft-location-search" value="${attr(state.locationSearchText)}" placeholder="Search locations"></div>
             <div class="aircraft-order-tools">
               <span class="aircraft-order-hint">Drag or use arrows to sort.</span>
@@ -1142,7 +1152,7 @@
                     <button type="button" class="aircraft-order-button" data-location-move="${id}" data-direction="down" ${index === locationRows.length - 1 || !canMove ? "disabled" : ""} aria-label="Move location down">▼</button>
                   </span>
                 </div>`;
-              }).join("") : `<div class="aircraft-empty">No locations match that search.</div>`}
+              }).join("") : `<div class="aircraft-empty">No locations match the current filters.</div>`}
             </div>
           </div>
           <div class="aircraft-location-form">
@@ -1215,6 +1225,7 @@
     renderStatus();
     renderActionState();
     setLocationOrderStatus(state.locationOrderStatus, state.locationOrderStatusKind);
+    setAssetTypeOrderStatus(state.assetTypeOrderStatus, state.assetTypeOrderStatusKind);
     restoreLocationSearchFocus();
     restoreAssetTypeSearchFocus();
   }
@@ -1317,6 +1328,19 @@
     });
     field("aircraft-new-location")?.addEventListener("click", newLocation);
     field("aircraft-save-location")?.addEventListener("click", saveLocation);
+    field("aircraft-location-status-filter")?.addEventListener("change", e => {
+      const previous = state.locationStatusFilter;
+      const nextFilter = e.target.value;
+      if (!confirmDiscard("Changing the location filter will discard unsaved location changes. Continue?")) { e.target.value = previous; return; }
+      state.locationStatusFilter = nextFilter;
+      const rows = locationRowsForCurrentSearch();
+      if (!rows.some(l => clean(l.organization_location_id) === state.selectedLocationId)) {
+        state.selectedLocationId = rows[0] ? clean(rows[0].organization_location_id) : "";
+        state.locationDraft = selectedLocation() ? draftFromLocation(selectedLocation()) : emptyLocationDraft();
+        setLocationDirty(false);
+      }
+      render();
+    });
     field("aircraft-location-search")?.addEventListener("input", e => {
       const input = e.target;
       state.locationSearchText = input.value;

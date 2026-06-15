@@ -1,11 +1,11 @@
 // ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-14-114-H
+// Internal Version: 2026-06-14-114-I
 // Purpose: Platform/support-compatible Aircraft Admin wrapper using the same customer-side module. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-14-114-H";
+  const VERSION = "2026-06-14-114-I";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -19,6 +19,7 @@
   let mountOptions = {};
   let autoStarted = false;
   let locationSearchTimer = null;
+
 
   const state = {
     debug: new URLSearchParams(location.search).get("syncetc_debug") === "1",
@@ -51,6 +52,10 @@
     draft: null,
     locationDraft: null,
     locationSearchRestore: null,
+    locationOrderSaving: false,
+    locationOrderStatus: "",
+    locationOrderStatusKind: "",
+    draggingLocationId: "",
     lastResult: null,
     steps: []
   };
@@ -275,6 +280,129 @@
 
   function selectedAircraft() { return state.aircraft.find(a => clean(a.operational_asset_id) === state.selectedAircraftId) || null; }
   function selectedLocation() { return state.locations.find(l => clean(l.organization_location_id) === state.selectedLocationId) || null; }
+
+  function sortedLocations(list = state.locations) {
+    return arr(list).slice().sort((a, b) => {
+      const ao = Number(a.sort_order ?? 100);
+      const bo = Number(b.sort_order ?? 100);
+      if (Number.isFinite(ao) && Number.isFinite(bo) && ao !== bo) return ao - bo;
+      if (Number.isFinite(ao) && !Number.isFinite(bo)) return -1;
+      if (!Number.isFinite(ao) && Number.isFinite(bo)) return 1;
+      return clean(a.display_name || a.airport_identifier).localeCompare(clean(b.display_name || b.airport_identifier));
+    });
+  }
+
+  function locationPayloadFromRecord(location) {
+    const d = draftFromLocation(location);
+    return {
+      ...d,
+      organization_id: state.orgId,
+      address_json: {
+        address_line_1: d.address_line_1,
+        address_line_2: d.address_line_2,
+        city: d.city,
+        state_region: d.state_region,
+        postal_code: d.postal_code,
+        country: d.country
+      }
+    };
+  }
+
+  function setLocationOrderStatus(message, kind = "") {
+    state.locationOrderStatus = message || "";
+    state.locationOrderStatusKind = kind || "";
+    document.querySelectorAll("[data-location-order-status]").forEach(el => {
+      el.className = `aircraft-order-status ${state.locationOrderStatusKind || ""}`;
+      el.textContent = state.locationOrderStatus;
+      el.style.display = state.locationOrderStatus ? "inline-flex" : "none";
+    });
+  }
+
+  function renumberLocations(list) {
+    return arr(list).map((location, index) => ({ ...location, sort_order: (index + 1) * 10 }));
+  }
+
+  function locationRowsForCurrentSearch() {
+    const query = lower(state.locationSearch);
+    return sortedLocations().filter(l => {
+      if (!query) return true;
+      const haystack = [l.display_name, l.airport_identifier, l.location_type, l.city || obj(l.address_json).city, l.state_region || obj(l.address_json).state_region || obj(l.address_json).state, l.postal_code || obj(l.address_json).postal_code].join(" ").toLowerCase();
+      return haystack.includes(query);
+    });
+  }
+
+  function moveLocationInList(sourceId, targetId, afterTarget = false) {
+    const list = sortedLocations();
+    const sourceIndex = list.findIndex(l => clean(l.organization_location_id) === clean(sourceId));
+    if (sourceIndex < 0) return null;
+    const [source] = list.splice(sourceIndex, 1);
+    const targetIndex = list.findIndex(l => clean(l.organization_location_id) === clean(targetId));
+    if (targetIndex < 0) return null;
+    list.splice(afterTarget ? targetIndex + 1 : targetIndex, 0, source);
+    return renumberLocations(list);
+  }
+
+  function moveLocationByStep(locationId, direction) {
+    const visible = locationRowsForCurrentSearch();
+    const index = visible.findIndex(l => clean(l.organization_location_id) === clean(locationId));
+    if (index < 0) return null;
+    if (direction === "up" && index > 0) return moveLocationInList(locationId, visible[index - 1].organization_location_id, false);
+    if (direction === "down" && index < visible.length - 1) return moveLocationInList(locationId, visible[index + 1].organization_location_id, true);
+    return null;
+  }
+
+  function canReorderLocations() {
+    if (state.saving || state.locationOrderSaving) return false;
+    if (state.dirty || state.locationDirty) {
+      setStatus("Save or discard changes before reordering locations.", "error");
+      return false;
+    }
+    return true;
+  }
+
+  async function persistLocationOrder(nextLocations) {
+    if (!nextLocations || !nextLocations.length || !canReorderLocations()) return;
+    const previousLocations = state.locations.map(l => ({ ...l }));
+    const previousDraft = state.locationDraft ? { ...state.locationDraft } : null;
+    const previousSelectedId = state.selectedLocationId;
+    const previousById = new Map(previousLocations.map(l => [clean(l.organization_location_id), l]));
+    const changed = nextLocations.filter(l => {
+      const prev = previousById.get(clean(l.organization_location_id));
+      return prev && Number(prev.sort_order ?? 100) !== Number(l.sort_order ?? 100);
+    });
+    if (!changed.length) return;
+
+    state.locations = nextLocations;
+    const selected = selectedLocation();
+    if (selected) state.locationDraft = draftFromLocation(selected);
+    state.locationOrderSaving = true;
+    setLocationOrderStatus("Saving order...", "");
+    render();
+
+    try {
+      let result = null;
+      for (const location of changed) {
+        result = await callAccess("organization_save_aircraft_location", locationPayloadFromRecord(location));
+      }
+      if (result) {
+        state.locations = arr(result.locations);
+        state.aircraft = arr(result.aircraft);
+      }
+      if (previousSelectedId) state.selectedLocationId = previousSelectedId;
+      const refreshed = selectedLocation();
+      if (refreshed) state.locationDraft = draftFromLocation(refreshed);
+      state.locationOrderSaving = false;
+      setLocationOrderStatus("Order saved.", "ok");
+      render();
+    } catch (error) {
+      state.locations = previousLocations;
+      state.selectedLocationId = previousSelectedId;
+      state.locationDraft = previousDraft;
+      state.locationOrderSaving = false;
+      setLocationOrderStatus(error instanceof Error ? `Order could not be saved: ${error.message}` : "Order could not be saved.", "error");
+      render();
+    }
+  }
 
   function emptyAircraftDraft() {
     return {
@@ -646,12 +774,8 @@
 
   function renderLocations() {
     const d = state.locationDraft || emptyLocationDraft();
-    const query = lower(state.locationSearch);
-    const locationRows = state.locations.filter(l => {
-      if (!query) return true;
-      const haystack = [l.display_name, l.airport_identifier, l.location_type, l.city || obj(l.address_json).city, l.state_region || obj(l.address_json).state_region || obj(l.address_json).state, l.postal_code || obj(l.address_json).postal_code].join(" ").toLowerCase();
-      return haystack.includes(query);
-    });
+    const locationRows = locationRowsForCurrentSearch();
+    const activeSearch = !!clean(state.locationSearch);
     const typeOptions = [
       ["airport", "Airport"],
       ["hangar", "Hangar"],
@@ -671,8 +795,26 @@
         <div class="aircraft-location-layout">
           <div class="aircraft-location-list-wrap">
             <div class="aircraft-list-tools"><input id="aircraft-location-search" value="${attr(state.locationSearchText)}" placeholder="Search locations"></div>
+            <div class="aircraft-order-tools">
+              <span class="aircraft-order-hint">Drag or use arrows to sort.</span>
+              <span data-location-order-status class="aircraft-order-status ${state.locationOrderStatusKind}" style="display:${state.locationOrderStatus ? "inline-flex" : "none"}">${esc(state.locationOrderStatus)}</span>
+            </div>
             <div class="aircraft-location-list">
-              ${locationRows.length ? locationRows.map(l => `<button class="aircraft-location-row ${clean(l.organization_location_id) === state.selectedLocationId ? "selected" : ""}" data-location-id="${attr(l.organization_location_id)}"><strong>${esc(l.display_name || l.airport_identifier || "Location")}</strong><span>${esc([l.airport_identifier, l.location_type, l.city || obj(l.address_json).city, l.state_region || obj(l.address_json).state_region || obj(l.address_json).state].filter(Boolean).join(" · "))}</span></button>`).join("") : `<div class="aircraft-empty">No locations match that search.</div>`}
+              ${locationRows.length ? locationRows.map((l, index) => {
+                const selected = clean(l.organization_location_id) === state.selectedLocationId;
+                const id = attr(l.organization_location_id);
+                const disabled = state.locationOrderSaving ? "disabled" : "";
+                return `<div class="aircraft-location-row ${selected ? "selected" : ""} ${state.locationOrderSaving ? "saving" : ""}" draggable="${state.locationOrderSaving ? "false" : "true"}" data-location-row data-location-id="${id}">
+                  <button class="aircraft-location-main" type="button" data-location-select="${id}">
+                    <span class="aircraft-drag-handle" aria-hidden="true">☰</span>
+                    <span class="aircraft-location-copy"><strong>${esc(l.display_name || l.airport_identifier || "Location")}</strong><span>${esc([l.airport_identifier, l.location_type, l.city || obj(l.address_json).city, l.state_region || obj(l.address_json).state_region || obj(l.address_json).state].filter(Boolean).join(" · "))}</span></span>
+                  </button>
+                  <span class="aircraft-order-buttons">
+                    <button type="button" class="aircraft-order-button" data-location-move="${id}" data-direction="up" ${index === 0 || state.locationOrderSaving ? "disabled" : ""} aria-label="Move location up">▲</button>
+                    <button type="button" class="aircraft-order-button" data-location-move="${id}" data-direction="down" ${index === locationRows.length - 1 || state.locationOrderSaving ? "disabled" : ""} aria-label="Move location down">▼</button>
+                  </span>
+                </div>`;
+              }).join("") : `<div class="aircraft-empty">No locations match that search.</div>`}
             </div>
           </div>
           <div class="aircraft-location-form">
@@ -687,7 +829,6 @@
               <label class="aircraft-field"><span>State / region</span><input data-location-key="state_region" value="${attr(d.state_region)}"></label>
               <label class="aircraft-field"><span>Postal code</span><input data-location-key="postal_code" value="${attr(d.postal_code)}"></label>
               <label class="aircraft-field"><span>Country</span><input data-location-key="country" value="${attr(d.country)}" placeholder="US"></label>
-              <label class="aircraft-field"><span>Sort order</span><input data-location-key="sort_order" type="number" value="${attr(d.sort_order)}"></label>
               <label class="aircraft-field"><span>Status</span><select data-location-key="status"><option value="active" ${d.status === "active" ? "selected" : ""}>Active</option><option value="inactive" ${d.status === "inactive" ? "selected" : ""}>Inactive</option><option value="archived" ${d.status === "archived" ? "selected" : ""}>Archived</option></select></label>
             </div>
             <label class="aircraft-field full"><span>Notes</span><textarea data-location-key="notes" placeholder="Optional operating notes, directions, access instructions, or internal location notes.">${esc(d.notes)}</textarea></label>
@@ -725,6 +866,7 @@
         .aircraft-pill{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.03em;background:color-mix(in srgb,var(--air-primary) 12%,#fff);color:var(--air-primary);}.aircraft-pill.ok{background:#eaf7ef;color:#196f3b;}.aircraft-pill.warn{background:#fff5d8;color:var(--air-warning);}.aircraft-pill.danger{background:#ffecec;color:var(--air-danger);}.aircraft-pill.neutral{background:#eef3f8;color:#30435c;}
         .aircraft-filter-row{display:grid;grid-template-columns:1fr 145px auto;gap:8px;margin:12px 0;align-items:center;}.aircraft-filter-row input,.aircraft-filter-row select,.aircraft-field input,.aircraft-field select,.aircraft-field textarea{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#172033;font-size:13px;}.aircraft-field textarea{min-height:82px;resize:vertical;font-family:Arial,Helvetica,sans-serif;}.aircraft-check{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:800;color:#334155;}
         .aircraft-list{display:flex;flex-direction:column;gap:8px;}.aircraft-row,.aircraft-location-row{width:100%;border:1px solid #d7e0ea;background:#fff;border-radius:13px;padding:11px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:4px;}.aircraft-row.selected,.aircraft-location-row.selected{border-color:var(--air-primary);box-shadow:inset 4px 0 0 var(--air-primary);background:color-mix(in srgb,var(--air-secondary) 38%,#fff);}.aircraft-row-title{font-weight:900;font-size:15px;}.aircraft-row-sub,.aircraft-row-meta,.aircraft-location-row span{color:var(--air-muted);font-size:12px;}.aircraft-row-meta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;}
+        .aircraft-location-row{padding:0;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch;overflow:hidden;cursor:grab;}.aircraft-location-row.dragging{opacity:.55;}.aircraft-location-row.drag-over{outline:2px dashed var(--air-primary);outline-offset:2px;}.aircraft-location-row.saving{opacity:.75;cursor:wait;}.aircraft-location-main{border:0;background:transparent;text-align:left;padding:11px;display:flex;gap:9px;align-items:flex-start;cursor:pointer;min-width:0;color:inherit;}.aircraft-drag-handle{font-size:13px;line-height:1;color:var(--air-muted);padding-top:2px;}.aircraft-location-copy{display:flex;flex-direction:column;gap:4px;min-width:0;}.aircraft-location-copy strong{color:#172033;font-size:14px;}.aircraft-order-buttons{display:flex;flex-direction:column;border-left:1px solid #e2e8f0;}.aircraft-order-button{border:0;border-bottom:1px solid #e2e8f0;background:#f8fafc;color:var(--air-primary);font-weight:900;min-width:34px;min-height:28px;cursor:pointer;}.aircraft-order-button:last-child{border-bottom:0;}.aircraft-order-button:disabled{opacity:.35;cursor:not-allowed;}.aircraft-order-tools{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:-2px 0 8px;font-size:12px;color:var(--air-muted);}.aircraft-order-status{display:inline-flex;border-radius:999px;padding:5px 8px;background:#eef3f8;color:#334155;font-weight:900;}.aircraft-order-status.ok{background:#eaf7ef;color:#196f3b;}.aircraft-order-status.error{background:#ffecec;color:var(--air-danger);}.aircraft-order-hint{white-space:nowrap;}
         .aircraft-tabs{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0;}.aircraft-tabs button{border:1px solid #cbd5e1;background:#fff;color:#26344d;border-radius:999px;padding:8px 11px;font-weight:900;cursor:pointer;}.aircraft-tabs button.active{background:var(--air-primary);color:#fff;border-color:var(--air-primary);}
         .aircraft-form-grid{display:grid;grid-template-columns:repeat(2,minmax(min(260px,100%),1fr));gap:10px 12px;}.aircraft-form-grid.compact{gap:8px 12px;}.aircraft-field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px;min-width:0;} .aircraft-field input,.aircraft-field select,.aircraft-field textarea{min-width:0;}.aircraft-field span{font-size:12px;font-weight:900;color:#334155;text-transform:uppercase;letter-spacing:.03em;}.aircraft-field.full{grid-column:1/-1;}.aircraft-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 4px;}.aircraft-note{background:color-mix(in srgb,var(--air-secondary) 55%,#fff);border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);border-radius:12px;padding:12px;margin-bottom:12px;color:#334155;font-size:13px;line-height:1.45;}
         .aircraft-location-layout{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:12px;min-width:0;width:100%;overflow:hidden;}.aircraft-location-list-wrap{min-width:0;}.aircraft-list-tools{margin-bottom:8px;}.aircraft-list-tools input{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#172033;font-size:13px;}.aircraft-location-list{display:flex;flex-direction:column;gap:8px;}.aircraft-location-form{min-width:0;overflow:hidden;}.aircraft-status{padding:12px;border-radius:12px;border:1px solid #d6e0ec;background:#eef3f8;color:#26344d;margin-bottom:14px;}.aircraft-status.ok{background:#eaf7ef;color:#196f3b}.aircraft-status.error{background:#ffecec;color:var(--air-danger);border-color:#ffc6c6;}.aircraft-empty{border:1px dashed #cbd5e1;border-radius:12px;padding:14px;color:var(--air-muted);background:#f8fafc;}.aircraft-debug pre{background:#101827;color:#e7edf6;border-radius:12px;padding:12px;overflow:auto;font-size:12px;}
@@ -744,6 +886,7 @@
     bindEvents();
     renderStatus();
     renderActionState();
+    setLocationOrderStatus(state.locationOrderStatus, state.locationOrderStatusKind);
     restoreLocationSearchFocus();
   }
 
@@ -781,7 +924,53 @@
         render();
       }, 350);
     });
-    document.querySelectorAll("[data-location-id]").forEach(btn => btn.addEventListener("click", () => { if (!confirmDiscard("You have unsaved location changes. Continue?")) return; state.selectedLocationId = btn.dataset.locationId; state.locationDraft = draftFromLocation(selectedLocation()); setLocationDirty(false); render(); }));
+    document.querySelectorAll("[data-location-select]").forEach(btn => btn.addEventListener("click", () => {
+      if (!confirmDiscard("You have unsaved location changes. Continue?")) return;
+      state.selectedLocationId = btn.dataset.locationSelect;
+      state.locationDraft = draftFromLocation(selectedLocation());
+      setLocationDirty(false);
+      render();
+    }));
+    document.querySelectorAll("[data-location-move]").forEach(btn => btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const next = moveLocationByStep(btn.dataset.locationMove, btn.dataset.direction);
+      if (next) persistLocationOrder(next);
+    }));
+    document.querySelectorAll("[data-location-row]").forEach(row => {
+      row.addEventListener("dragstart", (event) => {
+        if (!canReorderLocations()) { event.preventDefault(); return; }
+        state.draggingLocationId = row.dataset.locationId;
+        row.classList.add("dragging");
+        try {
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", state.draggingLocationId);
+        } catch {}
+      });
+      row.addEventListener("dragend", () => {
+        state.draggingLocationId = "";
+        row.classList.remove("dragging", "drag-over");
+        document.querySelectorAll(".aircraft-location-row.drag-over").forEach(el => el.classList.remove("drag-over"));
+      });
+      row.addEventListener("dragover", (event) => {
+        if (!state.draggingLocationId || state.draggingLocationId === row.dataset.locationId) return;
+        event.preventDefault();
+        row.classList.add("drag-over");
+        try { event.dataTransfer.dropEffect = "move"; } catch {}
+      });
+      row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+      row.addEventListener("drop", (event) => {
+        event.preventDefault();
+        row.classList.remove("drag-over");
+        const sourceId = clean((event.dataTransfer && event.dataTransfer.getData("text/plain")) || state.draggingLocationId);
+        const targetId = clean(row.dataset.locationId);
+        if (!sourceId || !targetId || sourceId === targetId) return;
+        const rect = row.getBoundingClientRect();
+        const afterTarget = event.clientY > rect.top + rect.height / 2;
+        const next = moveLocationInList(sourceId, targetId, afterTarget);
+        if (next) persistLocationOrder(next);
+      });
+    });
     document.querySelectorAll("[data-location-key]").forEach(el => {
       const key = el.dataset.locationKey;
       const handler = () => setLocationDraft(key, el.value);

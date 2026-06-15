@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-organization-management-current.js
-// Internal Version: 2026-06-14-114-G
+// Internal Version: 2026-06-14-114-H
 // Purpose: Customer/organization-side Organization Management console runtime. Immutable admin workbench shell with left navigation and right-panel module loading.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-14-114-G";
+  const VERSION = "2026-06-14-114-H";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -334,10 +334,9 @@
           <div class="omg-topbar-title">
             <div>
               <span class="omg-kicker">Organization Management</span>
-              <h1>${esc(orgName)}</h1>
             </div>
           </div>
-          <div class="omg-topbar-actions">${renderOrgSelect()}<span class="omg-version">${esc(VERSION)}</span></div>
+          <div class="omg-topbar-actions">${renderOrgSelect()}</div>
         </section>
         <section class="omg-console">
           <aside class="omg-leftnav" aria-label="Organization management modules">${renderLeftNav()}</aside>

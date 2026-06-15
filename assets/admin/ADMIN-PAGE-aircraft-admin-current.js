@@ -1,11 +1,11 @@
 // ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-14-114-F
+// Internal Version: 2026-06-14-114-H
 // Purpose: Platform/support-compatible Aircraft Admin wrapper using the same customer-side module. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-14-114-F";
+  const VERSION = "2026-06-14-114-H";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -463,16 +463,27 @@
   }
 
   function renderStatus() {
-    const el = field("aircraft-status");
-    if (!el) return;
     const cls = state.statusKind === "error" ? "error" : state.statusKind === "ok" ? "ok" : "";
-    el.className = `aircraft-status ${cls}`;
-    el.textContent = state.status || "";
-    el.style.display = state.status ? "block" : "none";
+    const legacy = field("aircraft-status");
+    if (legacy) legacy.style.display = "none";
+    document.querySelectorAll("[data-inline-status]").forEach(el => {
+      el.className = `aircraft-inline-status ${cls}`;
+      el.textContent = state.status || "";
+      el.style.display = state.status ? "inline-flex" : "none";
+    });
   }
 
   function renderActionState() {
     document.querySelectorAll("[data-save-button]").forEach(btn => { btn.disabled = state.saving; btn.textContent = state.saving ? "Saving..." : btn.dataset.label || "Save"; });
+  }
+
+  function dirtyBadgeHtml() {
+    return `<span id="aircraft-dirty-badge" class="aircraft-pill ${state.dirty || state.locationDirty ? "warn" : "ok"}">${state.dirty || state.locationDirty ? "Unsaved changes" : "Saved"}</span>`;
+  }
+
+  function inlineStatusHtml() {
+    const cls = state.statusKind === "error" ? "error" : state.statusKind === "ok" ? "ok" : "";
+    return `<span data-inline-status class="aircraft-inline-status ${cls}" style="display:${state.status ? "inline-flex" : "none"}">${esc(state.status || "")}</span>`;
   }
 
   function renderOrgSelector() {
@@ -531,10 +542,13 @@
             <h2>${d.operational_asset_id ? esc(d.tail_number || d.display_name || "Edit Aircraft") : "New Aircraft"}</h2>
             <p>Generated slug/SKU: <strong>${esc(d.asset_key || "generated on save")}</strong></p>
           </div>
-          <div class="aircraft-actions">
-            <button class="aircraft-button secondary" id="aircraft-clear">Clear</button>
-            ${d.operational_asset_id ? `<button class="aircraft-button ${archived ? "secondary" : "danger"}" id="aircraft-archive">${archived ? "Restore" : "Archive"}</button>` : ""}
-            <button class="aircraft-button" data-save-button data-label="Save Aircraft" id="aircraft-save">Save Aircraft</button>
+          <div class="aircraft-actions aircraft-save-row">
+            <div class="aircraft-bottom-state">${dirtyBadgeHtml()}${inlineStatusHtml()}</div>
+            <div class="aircraft-action-buttons">
+              <button class="aircraft-button secondary" id="aircraft-clear">Clear</button>
+              ${d.operational_asset_id ? `<button class="aircraft-button ${archived ? "secondary" : "danger"}" id="aircraft-archive">${archived ? "Restore" : "Archive"}</button>` : ""}
+              <button class="aircraft-button" data-save-button data-label="Save Aircraft" id="aircraft-save">Save Aircraft</button>
+            </div>
           </div>
         </div>
         ${renderTabs()}
@@ -677,7 +691,10 @@
               <label class="aircraft-field"><span>Status</span><select data-location-key="status"><option value="active" ${d.status === "active" ? "selected" : ""}>Active</option><option value="inactive" ${d.status === "inactive" ? "selected" : ""}>Inactive</option><option value="archived" ${d.status === "archived" ? "selected" : ""}>Archived</option></select></label>
             </div>
             <label class="aircraft-field full"><span>Notes</span><textarea data-location-key="notes" placeholder="Optional operating notes, directions, access instructions, or internal location notes.">${esc(d.notes)}</textarea></label>
-            <div class="aircraft-actions"><button class="aircraft-button" data-save-button data-label="Save Location" id="aircraft-save-location">Save Location</button></div>
+            <div class="aircraft-actions aircraft-save-row">
+              <div class="aircraft-bottom-state">${dirtyBadgeHtml()}${inlineStatusHtml()}</div>
+              <div class="aircraft-action-buttons"><button class="aircraft-button" data-save-button data-label="Save Location" id="aircraft-save-location">Save Location</button></div>
+            </div>
           </div>
         </div>
       </section>`;
@@ -699,11 +716,11 @@
         ${ROOT_SELECTOR} *{box-sizing:border-box;}
         .aircraft-wrap{max-width:1280px;margin:0 auto;padding:18px;min-width:0;}
         .aircraft-wrap.embedded{max-width:none;margin:0;padding:0;min-width:0;width:100%;overflow:hidden;}
-        .aircraft-inline-state{display:flex;justify-content:flex-end;margin-bottom:8px;}
+        .aircraft-inline-state{display:none;}
         .aircraft-hero{background:linear-gradient(135deg,var(--air-primary),color-mix(in srgb,var(--air-primary) 82%,#000));color:#fff;border-radius:18px;padding:22px;margin-bottom:14px;}
         .aircraft-hero h1{margin:0 0 6px;font-size:34px;letter-spacing:-.03em;}.aircraft-hero p{margin:0;opacity:.9;line-height:1.45;}.aircraft-topline{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:14px;}
         .aircraft-card{background:var(--air-surface);border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);border-radius:12px;box-shadow:0 8px 24px rgba(10,30,55,.06);padding:14px;margin-bottom:12px;min-width:0;}
-        .aircraft-grid{display:grid;grid-template-columns:minmax(260px,340px) minmax(0,1fr);gap:12px;align-items:start;min-width:0;}.aircraft-grid.aircraft-only{grid-template-columns:minmax(260px,340px) minmax(0,1fr);}.aircraft-section-head,.aircraft-editor-head,.aircraft-actions{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;}.aircraft-section-head.compact{padding-bottom:8px;}.aircraft-section-head h2,.aircraft-editor-head h2{margin:0;font-size:21px;}.aircraft-section-head p,.aircraft-editor-head p{margin:3px 0 0;color:var(--air-muted);font-size:13px;line-height:1.35;}.aircraft-module-divider{height:1px;background:#e6edf5;margin:0 0 12px;}
+        .aircraft-grid{display:grid;grid-template-columns:minmax(260px,340px) minmax(0,1fr);gap:12px;align-items:start;min-width:0;}.aircraft-grid.aircraft-only{grid-template-columns:minmax(260px,340px) minmax(0,1fr);}.aircraft-section-head,.aircraft-editor-head,.aircraft-actions{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;}.aircraft-save-row{border-top:1px solid #e6edf5;margin-top:8px;padding-top:10px;}.aircraft-bottom-state{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;}.aircraft-action-buttons{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}.aircraft-inline-status{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900;background:#eef3f8;color:#30435c;}.aircraft-inline-status.ok{background:#eaf7ef;color:#196f3b;}.aircraft-inline-status.error{background:#ffecec;color:var(--air-danger);}.aircraft-section-head.compact{padding-bottom:8px;}.aircraft-section-head h2,.aircraft-editor-head h2{margin:0;font-size:21px;}.aircraft-section-head p,.aircraft-editor-head p{margin:3px 0 0;color:var(--air-muted);font-size:13px;line-height:1.35;}.aircraft-module-divider{height:1px;background:#e6edf5;margin:0 0 12px;}
         .aircraft-button{border:1px solid var(--air-primary);background:var(--air-primary);color:#fff;border-radius:999px;padding:9px 13px;font-weight:800;cursor:pointer;font-size:13px;}.aircraft-button.secondary{background:#fff;color:var(--air-primary);}.aircraft-button.danger{background:#fff;color:var(--air-danger);border-color:var(--air-danger);}.aircraft-button:disabled{opacity:.55;cursor:wait;}
         .aircraft-pill{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.03em;background:color-mix(in srgb,var(--air-primary) 12%,#fff);color:var(--air-primary);}.aircraft-pill.ok{background:#eaf7ef;color:#196f3b;}.aircraft-pill.warn{background:#fff5d8;color:var(--air-warning);}.aircraft-pill.danger{background:#ffecec;color:var(--air-danger);}.aircraft-pill.neutral{background:#eef3f8;color:#30435c;}
         .aircraft-filter-row{display:grid;grid-template-columns:1fr 145px auto;gap:8px;margin:12px 0;align-items:center;}.aircraft-filter-row input,.aircraft-filter-row select,.aircraft-field input,.aircraft-field select,.aircraft-field textarea{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#172033;font-size:13px;}.aircraft-field textarea{min-height:82px;resize:vertical;font-family:Arial,Helvetica,sans-serif;}.aircraft-check{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:800;color:#334155;}
@@ -714,12 +731,11 @@
         @media(max-width:1180px){.aircraft-grid,.aircraft-grid.aircraft-only,.aircraft-location-layout{grid-template-columns:1fr;}.aircraft-filter-row,.aircraft-form-grid,.aircraft-check-grid{grid-template-columns:1fr;}.aircraft-wrap{padding:12px;}}
       </style>
       <main class="aircraft-wrap ${mountOptions.embedded ? "embedded" : ""}">
-        ${mountOptions.embedded ? `
-          <div class="aircraft-inline-state"><span id="aircraft-dirty-badge" class="aircraft-pill ${state.dirty || state.locationDirty ? "warn" : "ok"}">${state.dirty || state.locationDirty ? "Unsaved changes" : "Saved"}</span></div>` : `
+        ${mountOptions.embedded ? `` : `
           <section class="aircraft-hero">
             <h1>Aircraft Admin</h1>
             <p>Manage ${esc(orgName)} aircraft, locations, dispatch status, rates, usage, and setup fields. Squawks, reminders, scheduling and billing are separate modules.</p>
-            <div class="aircraft-topline">${renderOrgSelector()}<span id="aircraft-dirty-badge" class="aircraft-pill ${state.dirty || state.locationDirty ? "warn" : "ok"}">${state.dirty || state.locationDirty ? "Unsaved changes" : "Saved"}</span></div>
+            ${renderOrgSelector() ? `<div class="aircraft-topline">${renderOrgSelector()}</div>` : ""}
           </section>`}
         <div id="aircraft-status" class="aircraft-status" style="display:none"></div>
         ${isLocationsOnly() ? renderLocations() : isAircraftOnly() ? `<div class="aircraft-grid aircraft-only">${renderList()}${renderEditor()}</div>` : `${renderLocations()}<div class="aircraft-grid">${renderList()}${renderEditor()}</div>`}

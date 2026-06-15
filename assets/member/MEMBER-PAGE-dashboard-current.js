@@ -1,11 +1,11 @@
 // MEMBER-PAGE-dashboard-current.js
-// Internal Version: 2026-06-13-111-A
+// Internal Version: 2026-06-14-112-A
 // Purpose: Member dashboard launch pad. Shows profile action only when needed, quick links, next event, and backend-fetched METAR cards.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-13-111-A";
+  const VERSION = "2026-06-14-112-A";
   const ROOT_IDS = ["syncetc-member-dashboard-root", "syncetc-user-dashboard-root"];
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
@@ -230,12 +230,26 @@
   function linkCard(label, subtitle, href, options = {}) {
     const disabled = options.disabled || !href || href === "#";
     const tag = disabled ? "span" : "a";
-    const attrs = disabled ? "" : `href="${esc(href)}"`;
+    const attrs = disabled ? "" : `href="${esc(href)}"${options.open_in_new_tab ? ' target="_blank" rel="noopener"' : ""}`;
     const suffix = options.placeholder ? ` <em>(placeholder)</em>` : "";
     return `<${tag} ${attrs} class="md-link-card ${disabled ? "is-disabled" : ""}"><strong>${esc(label)}${suffix}</strong><span>${esc(subtitle || "")}</span></${tag}>`;
   }
 
   function quickLinks(row) {
+    const configured = arr(dashboard?.quick_links)
+      .map((link) => obj(link))
+      .filter((link) => key(link.status || "active") === "active")
+      .sort((a, b) => Number(a.sort_order || 100) - Number(b.sort_order || 100));
+    if (configured.length) {
+      return configured.map((link) => ({
+        label: clean(link.label || link.key || "Link"),
+        subtitle: clean(link.description || link.subtitle || ""),
+        href: clean(link.href || link.url || "#"),
+        disabled: Boolean(link.disabled) || Boolean(link.placeholder) || !clean(link.href || link.url) || clean(link.href || link.url) === "#",
+        placeholder: Boolean(link.placeholder),
+        open_in_new_tab: Boolean(link.open_in_new_tab),
+      }));
+    }
     const caps = obj(row?.capabilities);
     const myProfile = pagePath(portalPage(row, ["my-profile", "profile"]), "/my-profile");
     const docs = pagePath(portalPage(row, ["member-documents", "documents"]), "/member-documents");
@@ -317,15 +331,19 @@
     const displayName = clean(profileSummary.first_name || profileSummary.display_name || obj(dashboard?.profile).first_name || obj(dashboard?.profile).display_name || email.split("@")[0] || "member");
     const orgName = clean(row.organization_name || "your organization");
     const links = quickLinks(row);
+    const dashSettings = obj(dashboard?.organization_settings?.dashboard_settings_json || dashboard?.dashboard_settings_json);
+    const showProfileCard = dashSettings.show_profile_update_card !== false;
+    const showNextEvent = dashSettings.show_next_event !== false;
+    const showWeather = dashSettings.show_weather !== false;
 
     return `
       <section class="md-card md-hero"><span class="md-eyebrow light">Member dashboard</span><h1>Welcome back, ${esc(displayName)}</h1><p>Your quick launch pad for ${esc(orgName)}.</p></section>
-      ${renderProfileAction(profileSummary)}
+      ${showProfileCard ? renderProfileAction(profileSummary) : ""}
       <div class="md-grid top-grid">
         <section class="md-card"><span class="md-eyebrow">Member tools</span><h2>Quick links</h2><div class="md-link-grid">${links.map((l) => linkCard(l.label, l.subtitle, l.href, l)).join("")}</div></section>
-        ${renderNextEvent(obj(dashboard?.next_event))}
+        ${showNextEvent ? renderNextEvent(obj(dashboard?.next_event)) : ""}
       </div>
-      ${renderWeather()}
+      ${showWeather ? renderWeather() : ""}
     `;
   }
 

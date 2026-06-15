@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-15-115-B
+// Internal Version: 2026-06-15-115-C
 // Purpose: Customer/organization-side Aircraft Admin foundation. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-15-115-B";
+  const VERSION = "2026-06-15-115-C";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -463,10 +463,20 @@
     }
   }
 
+  function locationStatus(l) {
+    const status = clean(l && l.status) || (l && l.archived_at ? "archived" : "active");
+    if (l && l.archived_at) return "archived";
+    return ["active", "inactive", "archived"].includes(status) ? status : "active";
+  }
+
   function sortedLocations(list = state.locations) {
+    const rank = { active: 0, inactive: 1, archived: 2 };
     return arr(list).slice().sort((a, b) => {
-      const ao = Number(a.sort_order ?? 100);
-      const bo = Number(b.sort_order ?? 100);
+      const as = locationStatus(a);
+      const bs = locationStatus(b);
+      if ((rank[as] ?? 9) !== (rank[bs] ?? 9)) return (rank[as] ?? 9) - (rank[bs] ?? 9);
+      const ao = Number(a.sort_order ?? (as === "archived" ? 999 : 100));
+      const bo = Number(b.sort_order ?? (bs === "archived" ? 999 : 100));
       if (Number.isFinite(ao) && Number.isFinite(bo) && ao !== bo) return ao - bo;
       if (Number.isFinite(ao) && !Number.isFinite(bo)) return -1;
       if (!Number.isFinite(ao) && Number.isFinite(bo)) return 1;
@@ -478,6 +488,7 @@
     const d = draftFromLocation(location);
     return {
       ...d,
+      sort_order: locationStatus(d) === "archived" ? "999" : d.sort_order,
       organization_id: state.orgId,
       address_json: {
         address_line_1: d.address_line_1,
@@ -501,7 +512,13 @@
   }
 
   function renumberLocations(list) {
-    return arr(list).map((location, index) => ({ ...location, sort_order: (index + 1) * 10 }));
+    let activeIndex = 0;
+    return arr(list).map(location => {
+      const status = locationStatus(location);
+      if (status === "archived") return { ...location, sort_order: 999 };
+      activeIndex += 1;
+      return { ...location, sort_order: activeIndex * 10 };
+    });
   }
 
   function locationRowsForCurrentSearch() {
@@ -685,6 +702,7 @@
     const d = state.locationDraft || emptyLocationDraft();
     return {
       ...d,
+      sort_order: locationStatus(d) === "archived" ? "999" : d.sort_order,
       organization_id: state.orgId,
       address_json: {
         address_line_1: d.address_line_1,
@@ -1040,8 +1058,11 @@
                 return `<div class="aircraft-location-row aircraft-asset-type-row ${selected ? "selected" : ""} ${state.assetTypeOrderSaving ? "saving" : ""} ${status === "archived" ? "archived" : ""} ${status === "inactive" ? "inactive" : ""}" draggable="${canMove ? "true" : "false"}" data-asset-type-row data-asset-type-id="${id}">
                   <button class="aircraft-location-main" type="button" data-asset-type-select="${id}">
                     <span class="aircraft-drag-handle" aria-hidden="true">☰</span>
-                    <span class="aircraft-location-copy"><strong>${esc(t.label || t.asset_type_key || "Asset Type")}</strong><span>${esc(t.plural_label || "")}</span></span>
-                    <span class="aircraft-list-badge ${status}">${esc(statusLabel(t))}</span>
+                    <span class="aircraft-location-copy">
+                      <strong>${esc(t.label || t.asset_type_key || "Asset Type")}</strong>
+                      <span class="aircraft-location-meta">${esc(t.plural_label || "")}</span>
+                      <span class="aircraft-list-badge ${status}">${esc(statusLabel(t))}</span>
+                    </span>
                   </button>
                   <span class="aircraft-order-buttons">
                     <button type="button" class="aircraft-order-button" data-asset-type-move="${id}" data-direction="up" ${index === 0 || !canMove ? "disabled" : ""} aria-label="Move asset type up">▲</button>
@@ -1085,6 +1106,7 @@
       ["storage", "Storage"],
       ["other", "Other"]
     ];
+    const statusLabel = (value) => ({ active: "Active", inactive: "Inactive", archived: "Archived" }[locationStatus(value)] || "Active");
     return `
       <section class="aircraft-card aircraft-location-card">
         <div class="aircraft-section-head compact">
@@ -1103,15 +1125,21 @@
               ${locationRows.length ? locationRows.map((l, index) => {
                 const selected = clean(l.organization_location_id) === state.selectedLocationId;
                 const id = attr(l.organization_location_id);
-                const disabled = state.locationOrderSaving ? "disabled" : "";
-                return `<div class="aircraft-location-row ${selected ? "selected" : ""} ${state.locationOrderSaving ? "saving" : ""}" draggable="${state.locationOrderSaving ? "false" : "true"}" data-location-row data-location-id="${id}">
+                const status = locationStatus(l);
+                const canMove = status !== "archived" && !state.locationOrderSaving;
+                const meta = [l.airport_identifier, l.location_type, l.city || obj(l.address_json).city, l.state_region || obj(l.address_json).state_region || obj(l.address_json).state].filter(Boolean).join(" · ");
+                return `<div class="aircraft-location-row ${selected ? "selected" : ""} ${state.locationOrderSaving ? "saving" : ""} ${status === "archived" ? "archived" : ""} ${status === "inactive" ? "inactive" : ""}" draggable="${canMove ? "true" : "false"}" data-location-row data-location-id="${id}">
                   <button class="aircraft-location-main" type="button" data-location-select="${id}">
                     <span class="aircraft-drag-handle" aria-hidden="true">☰</span>
-                    <span class="aircraft-location-copy"><strong>${esc(l.display_name || l.airport_identifier || "Location")}</strong><span>${esc([l.airport_identifier, l.location_type, l.city || obj(l.address_json).city, l.state_region || obj(l.address_json).state_region || obj(l.address_json).state].filter(Boolean).join(" · "))}</span></span>
+                    <span class="aircraft-location-copy">
+                      <strong>${esc(l.display_name || l.airport_identifier || "Location")}</strong>
+                      <span class="aircraft-location-meta">${esc(meta)}</span>
+                      ${status !== "active" ? `<span class="aircraft-list-badge ${status}">${esc(statusLabel(l))}</span>` : ""}
+                    </span>
                   </button>
                   <span class="aircraft-order-buttons">
-                    <button type="button" class="aircraft-order-button" data-location-move="${id}" data-direction="up" ${index === 0 || state.locationOrderSaving ? "disabled" : ""} aria-label="Move location up">▲</button>
-                    <button type="button" class="aircraft-order-button" data-location-move="${id}" data-direction="down" ${index === locationRows.length - 1 || state.locationOrderSaving ? "disabled" : ""} aria-label="Move location down">▼</button>
+                    <button type="button" class="aircraft-order-button" data-location-move="${id}" data-direction="up" ${index === 0 || !canMove ? "disabled" : ""} aria-label="Move location up">▲</button>
+                    <button type="button" class="aircraft-order-button" data-location-move="${id}" data-direction="down" ${index === locationRows.length - 1 || !canMove ? "disabled" : ""} aria-label="Move location down">▼</button>
                   </span>
                 </div>`;
               }).join("") : `<div class="aircraft-empty">No locations match that search.</div>`}
@@ -1166,7 +1194,7 @@
         .aircraft-pill{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.03em;background:color-mix(in srgb,var(--air-primary) 12%,#fff);color:var(--air-primary);}.aircraft-pill.ok{background:#eaf7ef;color:#196f3b;}.aircraft-pill.warn{background:#fff5d8;color:var(--air-warning);}.aircraft-pill.danger{background:#ffecec;color:var(--air-danger);}.aircraft-pill.neutral{background:#eef3f8;color:#30435c;}
         .aircraft-filter-row{display:grid;grid-template-columns:1fr 145px auto;gap:8px;margin:12px 0;align-items:center;}.aircraft-filter-row input,.aircraft-filter-row select,.aircraft-field input,.aircraft-field select,.aircraft-field textarea{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#172033;font-size:13px;}.aircraft-field textarea{min-height:82px;resize:vertical;font-family:Arial,Helvetica,sans-serif;}.aircraft-check{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:800;color:#334155;}
         .aircraft-list{display:flex;flex-direction:column;gap:8px;}.aircraft-row,.aircraft-location-row{width:100%;border:1px solid #d7e0ea;background:#fff;border-radius:13px;padding:11px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:4px;}.aircraft-row.selected,.aircraft-location-row.selected{border-color:var(--air-primary);box-shadow:inset 4px 0 0 var(--air-primary);background:color-mix(in srgb,var(--air-secondary) 38%,#fff);}.aircraft-row-title{font-weight:900;font-size:15px;}.aircraft-row-sub,.aircraft-row-meta,.aircraft-location-row span{color:var(--air-muted);font-size:12px;}.aircraft-row-meta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;}
-        .aircraft-location-row{padding:0;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch;overflow:hidden;cursor:grab;}.aircraft-location-row.dragging{opacity:.55;}.aircraft-location-row.drag-over{outline:2px dashed var(--air-primary);outline-offset:2px;}.aircraft-location-row.saving{opacity:.75;cursor:wait;}.aircraft-location-main{border:0;background:transparent;text-align:left;padding:11px;display:flex;gap:9px;align-items:flex-start;cursor:pointer;min-width:0;color:inherit;}.aircraft-drag-handle{font-size:13px;line-height:1;color:var(--air-muted);padding-top:2px;}.aircraft-location-copy{display:flex;flex-direction:column;gap:4px;min-width:0;}.aircraft-location-copy strong{color:#172033;font-size:14px;}.aircraft-order-buttons{display:flex;flex-direction:column;border-left:1px solid #e2e8f0;}.aircraft-order-button{border:0;border-bottom:1px solid #e2e8f0;background:#f8fafc;color:var(--air-primary);font-weight:900;min-width:34px;min-height:28px;cursor:pointer;}.aircraft-order-button:last-child{border-bottom:0;}.aircraft-order-button:disabled{opacity:.35;cursor:not-allowed;}.aircraft-order-tools{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:-2px 0 8px;font-size:12px;color:var(--air-muted);}.aircraft-order-status{display:inline-flex;border-radius:999px;padding:5px 8px;background:#eef3f8;color:#334155;font-weight:900;}.aircraft-order-status.ok{background:#eaf7ef;color:#196f3b;}.aircraft-order-status.error{background:#ffecec;color:var(--air-danger);}.aircraft-order-hint{white-space:nowrap;}.asset-type-filter-row{margin:0 0 8px;}.asset-type-filter-row select{width:100%;}.aircraft-asset-type-row.archived{background:#f1f5f9;opacity:.72;}.aircraft-asset-type-row.inactive{background:#fafaf8;}.aircraft-asset-type-row.archived .aircraft-location-copy strong,.aircraft-asset-type-row.archived .aircraft-location-copy span{color:#64748b;}.aircraft-list-badge{margin-left:auto;align-self:flex-start;border-radius:999px;padding:4px 7px;font-size:10px;font-weight:900;letter-spacing:.04em;text-transform:uppercase;background:#eaf7ef;color:#196f3b;white-space:nowrap;}.aircraft-list-badge.inactive{background:#fff7ed;color:#9a3412;}.aircraft-list-badge.archived{background:#e2e8f0;color:#475569;}.aircraft-order-button:disabled{opacity:.35;cursor:not-allowed;}.aircraft-order-status{display:inline-flex;border-radius:999px;padding:5px 8px;background:#eef3f8;color:#334155;font-weight:900;}.aircraft-order-status.ok{background:#eaf7ef;color:#196f3b;}.aircraft-order-status.error{background:#ffecec;color:var(--air-danger);}.aircraft-order-hint{white-space:nowrap;}
+        .aircraft-location-row{padding:0;display:grid;grid-template-columns:minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab;}.aircraft-location-row.dragging{opacity:.55;}.aircraft-location-row.drag-over{outline:2px dashed var(--air-primary);outline-offset:2px;}.aircraft-location-row.saving{opacity:.75;cursor:wait;}.aircraft-location-row.archived{background:#f1f5f9;opacity:.76;}.aircraft-location-row.inactive{background:#fafaf8;}.aircraft-location-row.archived .aircraft-location-copy strong,.aircraft-location-row.archived .aircraft-location-copy span{color:#64748b;}.aircraft-location-main{border:0;background:transparent;text-align:left;padding:11px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:9px;align-items:flex-start;cursor:pointer;min-width:0;color:inherit;}.aircraft-drag-handle{font-size:13px;line-height:1;color:var(--air-muted);padding-top:3px;}.aircraft-location-copy{display:flex;flex-direction:column;gap:4px;min-width:0;overflow:hidden;}.aircraft-location-copy strong{color:#172033;font-size:14px;white-space:normal;overflow-wrap:anywhere;line-height:1.25;}.aircraft-location-meta{color:var(--air-muted);font-size:12px;white-space:normal;overflow-wrap:anywhere;line-height:1.3;}.aircraft-order-buttons{display:flex;flex-direction:column;border-left:1px solid #e2e8f0;min-width:34px;}.aircraft-order-button{border:0;border-bottom:1px solid #e2e8f0;background:#f8fafc;color:var(--air-primary);font-weight:900;width:34px;min-height:28px;cursor:pointer;}.aircraft-order-button:last-child{border-bottom:0;}.aircraft-order-button:disabled{opacity:.35;cursor:not-allowed;}.aircraft-order-tools{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin:-2px 0 8px;font-size:12px;color:var(--air-muted);flex-wrap:wrap;}.aircraft-order-status{display:inline-flex;border-radius:999px;padding:5px 8px;background:#eef3f8;color:#334155;font-weight:900;}.aircraft-order-status.ok{background:#eaf7ef;color:#196f3b;}.aircraft-order-status.error{background:#ffecec;color:var(--air-danger);}.aircraft-order-hint{white-space:normal;line-height:1.25;min-width:0;}.asset-type-filter-row{margin:0 0 8px;}.asset-type-filter-row select{width:100%;}.aircraft-list-badge{align-self:flex-start;border-radius:999px;padding:4px 7px;font-size:10px;font-weight:900;letter-spacing:.04em;text-transform:uppercase;background:#eaf7ef;color:#196f3b;white-space:nowrap;max-width:100%;}.aircraft-list-badge.inactive{background:#fff7ed;color:#9a3412;}.aircraft-list-badge.archived{background:#e2e8f0;color:#475569;}
         .aircraft-tabs{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0;}.aircraft-tabs button{border:1px solid #cbd5e1;background:#fff;color:#26344d;border-radius:999px;padding:8px 11px;font-weight:900;cursor:pointer;}.aircraft-tabs button.active{background:var(--air-primary);color:#fff;border-color:var(--air-primary);}
         .aircraft-form-grid{display:grid;grid-template-columns:repeat(2,minmax(min(260px,100%),1fr));gap:10px 12px;}.aircraft-form-grid.compact{gap:8px 12px;}.aircraft-field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px;min-width:0;} .aircraft-field input,.aircraft-field select,.aircraft-field textarea{min-width:0;}.aircraft-field span{font-size:12px;font-weight:900;color:#334155;text-transform:uppercase;letter-spacing:.03em;}.aircraft-field.full{grid-column:1/-1;}.aircraft-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 4px;}.aircraft-note{background:color-mix(in srgb,var(--air-secondary) 55%,#fff);border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);border-radius:12px;padding:12px;margin-bottom:12px;color:#334155;font-size:13px;line-height:1.45;}
         .aircraft-location-layout{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:12px;min-width:0;width:100%;overflow:hidden;}.aircraft-location-list-wrap{min-width:0;}.aircraft-list-tools{margin-bottom:8px;}.aircraft-list-tools input{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#172033;font-size:13px;}.aircraft-location-list{display:flex;flex-direction:column;gap:8px;}.aircraft-location-form{min-width:0;overflow:hidden;}.aircraft-status{padding:12px;border-radius:12px;border:1px solid #d6e0ec;background:#eef3f8;color:#26344d;margin-bottom:14px;}.aircraft-status.ok{background:#eaf7ef;color:#196f3b}.aircraft-status.error{background:#ffecec;color:var(--air-danger);border-color:#ffc6c6;}.aircraft-empty{border:1px dashed #cbd5e1;border-radius:12px;padding:14px;color:var(--air-muted);background:#f8fafc;}.aircraft-debug pre{background:#101827;color:#e7edf6;border-radius:12px;padding:12px;overflow:auto;font-size:12px;}

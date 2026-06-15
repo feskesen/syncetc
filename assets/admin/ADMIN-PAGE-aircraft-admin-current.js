@@ -1,11 +1,11 @@
 // ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-14-114-B
-// Purpose: Legacy-compatible loader for customer/organization-side Aircraft Admin foundation. Uses core-access-action, not platform-only admin backend.
+// Internal Version: 2026-06-14-114-C
+// Purpose: Platform/support-compatible Aircraft Admin wrapper using the same customer-side module. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-14-114-B";
+  const VERSION = "2026-06-14-114-C";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -105,6 +105,28 @@
   function markDirty() { setDirty(true); }
   function markLocationDirty() { setLocationDirty(true); }
   function confirmDiscard(message = DIRTY_MESSAGE) { return !(state.dirty || state.locationDirty) || window.confirm(message); }
+  function isDirty() { return !!(state.dirty || state.locationDirty); }
+  function setActiveView(view) {
+    const v = clean(view);
+    mountOptions.initialView = v || mountOptions.initialView || "identity";
+    const tabMap = { locations: "operations", spaces: "operations", "spaces-locations": "operations", assets: "identity", aircraft: "identity", "assets-aircraft": "identity", rates: "rates", usage: "rates", maintenance: "maintenance" };
+    if (tabMap[v]) state.activeTab = tabMap[v];
+    else if (["identity", "classification", "operations", "rates", "media", "maintenance"].includes(v)) state.activeTab = v;
+  }
+
+  function activeModuleView() {
+    return clean(mountOptions.initialView || mountOptions.activeView || mountOptions.aircraftView || "");
+  }
+
+  function isLocationsOnly() {
+    const v = activeModuleView();
+    return mountOptions.embedded && ["locations", "spaces", "spaces-locations", "locations-only"].includes(v);
+  }
+
+  function isAircraftOnly() {
+    const v = activeModuleView();
+    return mountOptions.embedded && !isLocationsOnly() && ["identity", "classification", "operations", "rates", "usage", "media", "maintenance", "assets", "aircraft", "assets-aircraft", "aircraft-only"].includes(v || "identity");
+  }
 
   function waitForSupabaseLibrary(timeoutMs = 8000) {
     const started = Date.now();
@@ -272,7 +294,7 @@
   }
 
   function emptyLocationDraft() {
-    return { organization_location_id: "", location_key: "", location_type: "airport", airport_identifier: "", display_name: "", time_zone: "America/New_York", street: "", city: "", state: "", postal_code: "", notes: "", sort_order: "100", status: "active" };
+    return { organization_location_id: "", location_key: "", location_type: "airport", airport_identifier: "", display_name: "", time_zone: "", address_line_1: "", address_line_2: "", city: "", state_region: "", postal_code: "", country: "", notes: "", sort_order: "100", status: "active" };
   }
 
   function draftFromLocation(l) {
@@ -283,11 +305,13 @@
       location_type: clean(l.location_type || "airport"),
       airport_identifier: clean(l.airport_identifier),
       display_name: clean(l.display_name),
-      time_zone: clean(l.time_zone || "America/New_York"),
-      street: clean(address.street || address.address_1),
-      city: clean(address.city),
-      state: clean(address.state),
-      postal_code: clean(address.postal_code || address.zip),
+      time_zone: clean(l.time_zone || ""),
+      address_line_1: clean(l.address_line_1 || address.address_line_1 || address.street || address.address_1),
+      address_line_2: clean(l.address_line_2 || address.address_line_2 || address.address_2),
+      city: clean(l.city || address.city),
+      state_region: clean(l.state_region || address.state_region || address.state),
+      postal_code: clean(l.postal_code || address.postal_code || address.zip),
+      country: clean(l.country || address.country),
       notes: clean(l.notes),
       sort_order: numberOrBlank(l.sort_order || 100),
       status: clean(l.status || "active")
@@ -327,7 +351,18 @@
 
   function collectLocationPayload() {
     const d = state.locationDraft || emptyLocationDraft();
-    return { ...d, organization_id: state.orgId, address_json: { street: d.street, city: d.city, state: d.state, postal_code: d.postal_code } };
+    return {
+      ...d,
+      organization_id: state.orgId,
+      address_json: {
+        address_line_1: d.address_line_1,
+        address_line_2: d.address_line_2,
+        city: d.city,
+        state_region: d.state_region,
+        postal_code: d.postal_code,
+        country: d.country
+      }
+    };
   }
 
   async function saveAircraft() {
@@ -368,7 +403,10 @@
 
   async function saveLocation() {
     try {
-      state.saving = true; clearError(); setStatus("Saving base/location..."); renderActionState();
+      const d = state.locationDraft || emptyLocationDraft();
+      if (!clean(d.display_name)) throw new Error("Enter a display name for this location.");
+      if (!clean(d.location_type)) throw new Error("Choose a location type.");
+      state.saving = true; clearError(); setStatus("Saving location..."); renderActionState();
       const result = await callAccess("organization_save_aircraft_location", collectLocationPayload());
       state.locations = arr(result.locations);
       state.aircraft = arr(result.aircraft);
@@ -376,7 +414,7 @@
       state.selectedLocationId = clean(saved.organization_location_id || state.selectedLocationId);
       state.locationDraft = draftFromLocation(saved);
       setLocationDirty(false);
-      setStatus("Base/location saved.", "ok");
+      setStatus("Location saved.", "ok");
       render();
     } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
     finally { state.saving = false; renderActionState(); }
@@ -574,29 +612,42 @@
 
   function renderLocations() {
     const d = state.locationDraft || emptyLocationDraft();
+    const typeOptions = [
+      ["airport", "Airport"],
+      ["hangar", "Hangar"],
+      ["meeting-room", "Meeting room"],
+      ["office", "Office"],
+      ["dock", "Dock"],
+      ["storage", "Storage"],
+      ["other", "Other"]
+    ];
     return `
       <section class="aircraft-card aircraft-location-card">
         <div class="aircraft-section-head">
-          <div><h2>Bases & Locations</h2><p>Shared locations for aircraft bases, future scheduling, events, and weather defaults.</p></div>
-          <button class="aircraft-button secondary" id="aircraft-new-location">New Base</button>
+          <div><h2>Spaces & Locations</h2><p>Manage shared locations such as airports, hangars, meeting rooms, offices, docks, storage, or other operating locations.</p></div>
+          <button class="aircraft-button secondary" id="aircraft-new-location">New Location</button>
         </div>
         <div class="aircraft-location-layout">
           <div class="aircraft-location-list">
-            ${state.locations.length ? state.locations.map(l => `<button class="aircraft-location-row ${clean(l.organization_location_id) === state.selectedLocationId ? "selected" : ""}" data-location-id="${attr(l.organization_location_id)}"><strong>${esc(l.airport_identifier || l.display_name)}</strong><span>${esc(l.display_name)} · ${esc(l.time_zone || "")}</span></button>`).join("") : `<div class="aircraft-empty">No bases yet.</div>`}
+            ${state.locations.length ? state.locations.map(l => `<button class="aircraft-location-row ${clean(l.organization_location_id) === state.selectedLocationId ? "selected" : ""}" data-location-id="${attr(l.organization_location_id)}"><strong>${esc(l.display_name || l.airport_identifier || "Location")}</strong><span>${esc([l.airport_identifier, l.location_type, l.city || obj(l.address_json).city, l.state_region || obj(l.address_json).state_region || obj(l.address_json).state].filter(Boolean).join(" · "))}</span></button>`).join("") : `<div class="aircraft-empty">No locations yet.</div>`}
           </div>
           <div class="aircraft-location-form">
             <div class="aircraft-form-grid">
-              <label class="aircraft-field"><span>Airport/base identifier</span><input data-location-key="airport_identifier" value="${attr(d.airport_identifier)}" placeholder="KFFA"></label>
-              <label class="aircraft-field"><span>Display name</span><input data-location-key="display_name" value="${attr(d.display_name)}" placeholder="First Flight Airport"></label>
-              <label class="aircraft-field"><span>Location type</span><select data-location-key="location_type"><option value="airport" ${d.location_type === "airport" ? "selected" : ""}>Airport</option><option value="hangar" ${d.location_type === "hangar" ? "selected" : ""}>Hangar</option><option value="base" ${d.location_type === "base" ? "selected" : ""}>Base</option><option value="other" ${d.location_type === "other" ? "selected" : ""}>Other</option></select></label>
+              <label class="aircraft-field"><span>Display name *</span><input data-location-key="display_name" value="${attr(d.display_name)}" placeholder="First Flight Airport"></label>
+              <label class="aircraft-field"><span>Location type *</span><select data-location-key="location_type">${typeOptions.map(([value,label]) => `<option value="${value}" ${d.location_type === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+              <label class="aircraft-field"><span>Airport / location identifier</span><input data-location-key="airport_identifier" value="${attr(d.airport_identifier)}" placeholder="KFFA, Hangar A, Room 2"></label>
               <label class="aircraft-field"><span>Time zone</span><input data-location-key="time_zone" value="${attr(d.time_zone)}" placeholder="America/New_York"></label>
+              <label class="aircraft-field full"><span>Address line 1</span><input data-location-key="address_line_1" value="${attr(d.address_line_1)}" placeholder="Street address or facility address"></label>
+              <label class="aircraft-field full"><span>Address line 2</span><input data-location-key="address_line_2" value="${attr(d.address_line_2)}" placeholder="Hangar, suite, unit, gate, or room"></label>
               <label class="aircraft-field"><span>City</span><input data-location-key="city" value="${attr(d.city)}"></label>
-              <label class="aircraft-field"><span>State</span><input data-location-key="state" value="${attr(d.state)}"></label>
+              <label class="aircraft-field"><span>State / region</span><input data-location-key="state_region" value="${attr(d.state_region)}"></label>
+              <label class="aircraft-field"><span>Postal code</span><input data-location-key="postal_code" value="${attr(d.postal_code)}"></label>
+              <label class="aircraft-field"><span>Country</span><input data-location-key="country" value="${attr(d.country)}" placeholder="US"></label>
               <label class="aircraft-field"><span>Sort order</span><input data-location-key="sort_order" type="number" value="${attr(d.sort_order)}"></label>
               <label class="aircraft-field"><span>Status</span><select data-location-key="status"><option value="active" ${d.status === "active" ? "selected" : ""}>Active</option><option value="inactive" ${d.status === "inactive" ? "selected" : ""}>Inactive</option><option value="archived" ${d.status === "archived" ? "selected" : ""}>Archived</option></select></label>
             </div>
-            <label class="aircraft-field full"><span>Notes</span><textarea data-location-key="notes">${esc(d.notes)}</textarea></label>
-            <div class="aircraft-actions"><button class="aircraft-button" data-save-button data-label="Save Base" id="aircraft-save-location">Save Base</button></div>
+            <label class="aircraft-field full"><span>Notes</span><textarea data-location-key="notes" placeholder="Optional operating notes, directions, access instructions, or internal location notes.">${esc(d.notes)}</textarea></label>
+            <div class="aircraft-actions"><button class="aircraft-button" data-save-button data-label="Save Location" id="aircraft-save-location">Save Location</button></div>
           </div>
         </div>
       </section>`;
@@ -618,38 +669,30 @@
         ${ROOT_SELECTOR} *{box-sizing:border-box;}
         .aircraft-wrap{max-width:1280px;margin:0 auto;padding:18px;}
         .aircraft-wrap.embedded{max-width:none;margin:0;padding:0;}
-        .aircraft-embedded-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);background:#fff;border-radius:16px;padding:14px 16px;margin-bottom:14px;box-shadow:0 8px 24px rgba(10,30,55,.05);}
-        .aircraft-embedded-head h2{margin:0 0 4px;font-size:24px;color:#172033;}.aircraft-embedded-head p{margin:0;color:var(--air-muted);font-size:13px;}
+        .aircraft-inline-state{display:flex;justify-content:flex-end;margin-bottom:8px;}
         .aircraft-hero{background:linear-gradient(135deg,var(--air-primary),color-mix(in srgb,var(--air-primary) 82%,#000));color:#fff;border-radius:18px;padding:22px;margin-bottom:14px;}
         .aircraft-hero h1{margin:0 0 6px;font-size:34px;letter-spacing:-.03em;}.aircraft-hero p{margin:0;opacity:.9;line-height:1.45;}.aircraft-topline{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:14px;}
         .aircraft-card{background:var(--air-surface);border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);border-radius:16px;box-shadow:0 8px 24px rgba(10,30,55,.06);padding:16px;margin-bottom:14px;}
-        .aircraft-grid{display:grid;grid-template-columns:370px minmax(0,1fr);gap:14px;align-items:start;}.aircraft-section-head,.aircraft-editor-head,.aircraft-actions{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;}.aircraft-section-head h2,.aircraft-editor-head h2{margin:0;font-size:21px;}.aircraft-section-head p,.aircraft-editor-head p{margin:3px 0 0;color:var(--air-muted);font-size:13px;}
+        .aircraft-grid{display:grid;grid-template-columns:370px minmax(0,1fr);gap:14px;align-items:start;}.aircraft-grid.aircraft-only{grid-template-columns:360px minmax(720px,1fr);}.aircraft-section-head,.aircraft-editor-head,.aircraft-actions{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;}.aircraft-section-head h2,.aircraft-editor-head h2{margin:0;font-size:21px;}.aircraft-section-head p,.aircraft-editor-head p{margin:3px 0 0;color:var(--air-muted);font-size:13px;}
         .aircraft-button{border:1px solid var(--air-primary);background:var(--air-primary);color:#fff;border-radius:999px;padding:9px 13px;font-weight:800;cursor:pointer;font-size:13px;}.aircraft-button.secondary{background:#fff;color:var(--air-primary);}.aircraft-button.danger{background:#fff;color:var(--air-danger);border-color:var(--air-danger);}.aircraft-button:disabled{opacity:.55;cursor:wait;}
         .aircraft-pill{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.03em;background:color-mix(in srgb,var(--air-primary) 12%,#fff);color:var(--air-primary);}.aircraft-pill.ok{background:#eaf7ef;color:#196f3b;}.aircraft-pill.warn{background:#fff5d8;color:var(--air-warning);}.aircraft-pill.danger{background:#ffecec;color:var(--air-danger);}.aircraft-pill.neutral{background:#eef3f8;color:#30435c;}
         .aircraft-filter-row{display:grid;grid-template-columns:1fr 145px auto;gap:8px;margin:12px 0;align-items:center;}.aircraft-filter-row input,.aircraft-filter-row select,.aircraft-field input,.aircraft-field select,.aircraft-field textarea{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#172033;font-size:13px;}.aircraft-field textarea{min-height:82px;resize:vertical;font-family:Arial,Helvetica,sans-serif;}.aircraft-check{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:800;color:#334155;}
         .aircraft-list{display:flex;flex-direction:column;gap:8px;}.aircraft-row,.aircraft-location-row{width:100%;border:1px solid #d7e0ea;background:#fff;border-radius:13px;padding:11px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:4px;}.aircraft-row.selected,.aircraft-location-row.selected{border-color:var(--air-primary);box-shadow:inset 4px 0 0 var(--air-primary);background:color-mix(in srgb,var(--air-secondary) 38%,#fff);}.aircraft-row-title{font-weight:900;font-size:15px;}.aircraft-row-sub,.aircraft-row-meta,.aircraft-location-row span{color:var(--air-muted);font-size:12px;}.aircraft-row-meta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;}
         .aircraft-tabs{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0;}.aircraft-tabs button{border:1px solid #cbd5e1;background:#fff;color:#26344d;border-radius:999px;padding:8px 11px;font-weight:900;cursor:pointer;}.aircraft-tabs button.active{background:var(--air-primary);color:#fff;border-color:var(--air-primary);}
         .aircraft-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}.aircraft-field{display:flex;flex-direction:column;gap:5px;margin-bottom:12px;}.aircraft-field span{font-size:12px;font-weight:900;color:#334155;text-transform:uppercase;letter-spacing:.03em;}.aircraft-field.full{grid-column:1/-1;}.aircraft-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 4px;}.aircraft-note{background:color-mix(in srgb,var(--air-secondary) 55%,#fff);border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);border-radius:12px;padding:12px;margin-bottom:12px;color:#334155;font-size:13px;line-height:1.45;}
-        .aircraft-location-layout{display:grid;grid-template-columns:300px minmax(0,1fr);gap:14px;}.aircraft-location-list{display:flex;flex-direction:column;gap:8px;}.aircraft-status{padding:12px;border-radius:12px;border:1px solid #d6e0ec;background:#eef3f8;color:#26344d;margin-bottom:14px;}.aircraft-status.ok{background:#eaf7ef;color:#196f3b}.aircraft-status.error{background:#ffecec;color:var(--air-danger);border-color:#ffc6c6;}.aircraft-empty{border:1px dashed #cbd5e1;border-radius:12px;padding:14px;color:var(--air-muted);background:#f8fafc;}.aircraft-debug pre{background:#101827;color:#e7edf6;border-radius:12px;padding:12px;overflow:auto;font-size:12px;}
+        .aircraft-location-layout{display:grid;grid-template-columns:310px minmax(760px,1fr);gap:14px;}.aircraft-location-list{display:flex;flex-direction:column;gap:8px;}.aircraft-status{padding:12px;border-radius:12px;border:1px solid #d6e0ec;background:#eef3f8;color:#26344d;margin-bottom:14px;}.aircraft-status.ok{background:#eaf7ef;color:#196f3b}.aircraft-status.error{background:#ffecec;color:var(--air-danger);border-color:#ffc6c6;}.aircraft-empty{border:1px dashed #cbd5e1;border-radius:12px;padding:14px;color:var(--air-muted);background:#f8fafc;}.aircraft-debug pre{background:#101827;color:#e7edf6;border-radius:12px;padding:12px;overflow:auto;font-size:12px;}
         @media(max-width:980px){.aircraft-grid,.aircraft-location-layout{grid-template-columns:1fr;}.aircraft-filter-row,.aircraft-form-grid,.aircraft-check-grid{grid-template-columns:1fr;}.aircraft-wrap{padding:12px;}}
       </style>
       <main class="aircraft-wrap ${mountOptions.embedded ? "embedded" : ""}">
         ${mountOptions.embedded ? `
-          <section class="aircraft-embedded-head">
-            <div>
-              <h2>Aircraft / Asset Admin</h2>
-              <p>Manage bases, aircraft records, status, rates and usage placeholders for ${esc(orgName)}.</p>
-            </div>
-            <span id="aircraft-dirty-badge" class="aircraft-pill ${state.dirty || state.locationDirty ? "warn" : "ok"}">${state.dirty || state.locationDirty ? "Unsaved changes" : "Saved"}</span>
-          </section>` : `
+          <div class="aircraft-inline-state"><span id="aircraft-dirty-badge" class="aircraft-pill ${state.dirty || state.locationDirty ? "warn" : "ok"}">${state.dirty || state.locationDirty ? "Unsaved changes" : "Saved"}</span></div>` : `
           <section class="aircraft-hero">
             <h1>Aircraft Admin</h1>
-            <p>Manage ${esc(orgName)} aircraft, bases, dispatch status, rates and usage placeholders. Squawks, reminders, scheduling and billing will build on this foundation later.</p>
+            <p>Manage ${esc(orgName)} aircraft, locations, dispatch status, rates, usage, and setup fields. Squawks, reminders, scheduling and billing are separate modules.</p>
             <div class="aircraft-topline">${renderOrgSelector()}<span id="aircraft-dirty-badge" class="aircraft-pill ${state.dirty || state.locationDirty ? "warn" : "ok"}">${state.dirty || state.locationDirty ? "Unsaved changes" : "Saved"}</span></div>
           </section>`}
         <div id="aircraft-status" class="aircraft-status" style="display:none"></div>
-        ${renderLocations()}
-        <div class="aircraft-grid">${renderList()}${renderEditor()}</div>
+        ${isLocationsOnly() ? renderLocations() : isAircraftOnly() ? `<div class="aircraft-grid aircraft-only">${renderList()}${renderEditor()}</div>` : `${renderLocations()}<div class="aircraft-grid">${renderList()}${renderEditor()}</div>`}
         ${renderDebug()}
       </main>`;
     bindEvents();
@@ -695,7 +738,8 @@
 
   async function init(options = {}) {
     mountOptions = { ...mountOptions, ...obj(options) };
-    if (mountOptions.initialTab) state.activeTab = clean(mountOptions.initialTab) || state.activeTab;
+    if (mountOptions.initialView) setActiveView(mountOptions.initialView);
+    if (mountOptions.initialTab) setActiveView(mountOptions.initialTab);
     const el = root();
     if (!el) return;
     el.innerHTML = `<div style="max-width:900px;margin:0 auto;padding:18px;border:1px solid #d7e0ea;border-radius:14px;font-family:Arial,Helvetica,sans-serif">Loading Aircraft Admin...</div>`;
@@ -713,6 +757,8 @@
     if (!el) throw new Error("Aircraft Admin mount target was not found.");
     externalRoot = el;
     mountOptions = { ...obj(options), embedded: options.embedded !== false };
+    if (options.initialView) setActiveView(options.initialView);
+    if (options.initialTab) setActiveView(options.initialTab);
     if (options.organizationId) state.orgId = clean(options.organizationId);
     state.startedAt = performance.now();
     state.error = "";
@@ -735,6 +781,15 @@
     confirmDiscard
   };
 
+
+  window.SyncEtcAircraftAdminPage = {
+    version: VERSION,
+    boot: init,
+    isDirty,
+    confirmDiscard,
+    setActiveView,
+    reload: init
+  };
 
   window.addEventListener("beforeunload", (event) => {
     if (state.dirty || state.locationDirty) { event.preventDefault(); event.returnValue = DIRTY_MESSAGE; return DIRTY_MESSAGE; }

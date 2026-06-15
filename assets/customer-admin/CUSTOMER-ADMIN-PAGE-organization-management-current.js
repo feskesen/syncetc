@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-organization-management-current.js
-// Internal Version: 2026-06-14-114-B
+// Internal Version: 2026-06-14-114-C
 // Purpose: Customer/organization-side Organization Management console runtime. Immutable admin workbench shell with left navigation and right-panel module loading.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-14-114-B";
+  const VERSION = "2026-06-14-114-C";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -32,7 +32,8 @@
     orgOptions: [],
     activeModule: clean(new URLSearchParams(location.search).get("module")) || clean(new URLSearchParams(location.search).get("section")) || clean((location.hash || "").replace(/^#/, "")) || "overview",
     steps: [],
-    lastResult: null
+    lastResult: null,
+    navCollapsed: localStorage.getItem("syncetc.organizationManagement.navCollapsed") === "1"
   };
 
   function root() { return document.querySelector(ROOT_SELECTOR); }
@@ -202,8 +203,8 @@
     { key: "people-instructors", label: "Instructors / Qualifications", short: "Qualifications", group: "People", status: "placeholder", description: "Instructor roster, checkouts, and qualification records." },
 
     { key: "assets-types", label: "Asset Types", short: "Aircraft, vehicles, spaces", group: "Assets", status: "placeholder", description: "Configure what this organization operates and what customer-facing word should be used." },
-    { key: "assets-locations", label: "Spaces & Locations", short: "Bases and airports", group: "Assets", status: "active", kind: "aircraft", aircraftView: "locations", description: "Airport bases, locations, spaces, hangars, time zones, and address notes." },
-    { key: "assets-aircraft", label: "Assets / Aircraft", short: "Fleet records", group: "Assets", status: "active", kind: "aircraft", aircraftView: "identity", description: "Manage aircraft identity, classification, status, visibility, usage placeholders, and maintenance placeholders." },
+    { key: "assets-locations", label: "Spaces & Locations", short: "Locations", group: "Assets", status: "active", kind: "aircraft", aircraftView: "locations", description: "Manage shared locations such as airports, hangars, meeting rooms, offices, docks, storage, or other operating locations." },
+    { key: "assets-aircraft", label: "Assets / Aircraft", short: "Fleet records", group: "Assets", status: "active", kind: "aircraft", aircraftView: "identity", description: "Manage aircraft identity, classification, status, visibility, usage, rates, media, and setup fields." },
     { key: "assets-rates", label: "Rates", short: "Rate setup", group: "Assets", status: "placeholder", href: "/aircraft-admin#rates", description: "Basic rate and usage-basis setup. Full billing/finance is not built yet." },
     { key: "assets-usage", label: "Usage / Meters", short: "Hobbs/Tach/usage", group: "Assets", status: "placeholder", href: "/aircraft-admin#usage", description: "Usage basis, Hobbs/Tach/current readings, and future hours logs." },
     { key: "assets-maintenance-reminders", label: "Maintenance Reminders", short: "Due items", group: "Assets", status: "placeholder", href: "/aircraft-admin#maintenance", description: "Recurring aircraft/asset reminders by date, hours, or other basis." },
@@ -305,14 +306,16 @@
       <style>${css(cfg)}</style>
       <div class="omg-wrap" style="--omg-primary:${cfg.primary};--omg-soft:${cfg.soft};--omg-soft2:${cfg.soft2};--omg-text:${cfg.text};--omg-surface:${cfg.surface};--omg-radius:${cfg.radius};">
         <section class="omg-topbar">
-          <div>
-            <span class="omg-kicker">Organization Management</span>
-            <h1>${esc(orgName)}</h1>
-            <p>Customer-side management console. The structure is fixed for admin usability; organization colors and identity are used as accents.</p>
+          <div class="omg-topbar-title">
+            <button type="button" class="omg-rail-toggle" id="omg-nav-toggle" aria-label="Toggle management navigation">${state.navCollapsed ? "☰" : "‹"}</button>
+            <div>
+              <span class="omg-kicker">Organization Management</span>
+              <h1>${esc(orgName)}</h1>
+            </div>
           </div>
           <div class="omg-topbar-actions">${renderOrgSelect()}<span class="omg-version">${esc(VERSION)}</span></div>
         </section>
-        <section class="omg-console">
+        <section class="omg-console ${state.navCollapsed ? "nav-collapsed" : ""}">
           <aside class="omg-leftnav" aria-label="Organization management modules">${renderLeftNav()}</aside>
           <main class="omg-main">
             ${renderModuleHeader(active)}
@@ -358,7 +361,6 @@
     if (active.kind === "overview") return renderOverview();
     if (active.kind === "aircraft") {
       return `<section class="omg-embedded-panel">
-        <div class="omg-embedded-note"><strong>Active embedded module.</strong> Aircraft Admin is now running inside Organization Management. The standalone Aircraft Admin URL remains available for testing while admin modules are migrated into this console.</div>
         <div id="syncetc-organization-aircraft-admin-root" class="omg-module-host" data-syncetc-embedded-module="organization-management" data-syncetc-embedded-view="${attr(active.aircraftView || "identity")}"></div>
       </section>`;
     }
@@ -371,19 +373,19 @@
     const existing = MODULES.filter(m => m.status === "existing");
     const placeholder = MODULES.filter(m => m.status === "placeholder");
     return `<div class="omg-grid two">
-      <div class="omg-card"><h3>Active modules</h3><p class="omg-muted">Fully embedded and operational inside this console.</p><div class="omg-mini-list">${active.map(renderMiniModule).join("")}</div></div>
-      <div class="omg-card"><h3>Existing standalone modules</h3><p class="omg-muted">Built elsewhere and kept available while migration continues.</p><div class="omg-mini-list">${existing.slice(0, 10).map(renderMiniModule).join("")}</div></div>
-      <div class="omg-card wide"><h3>Placeholder modules</h3><p class="omg-muted">Planned future systems. They are shown here so the admin hierarchy is visible before every module is built.</p><div class="omg-placeholder-grid">${placeholder.map(renderPlaceholderChip).join("")}</div></div>
-      <div class="omg-card wide"><h3>Management structure</h3><p>This is the customer-side workbench. Admin pages should be dense, consistent, and easy to navigate. Customer branding is used for accents only; this console’s layout should remain stable across customers.</p><div class="omg-note-row"><span>Daily landing page</span><strong>Member Dashboard</strong></div><div class="omg-note-row"><span>Customer admin workbench</span><strong>Organization Management</strong></div><div class="omg-note-row"><span>Platform-only tools</span><strong>Separate SyncEtc support/setup pages</strong></div></div>
+      <div class="omg-card"><h3>Active modules</h3><p class="omg-muted">Ready to use in this management console.</p><div class="omg-mini-list">${active.map(renderMiniModule).join("")}</div></div>
+      <div class="omg-card"><h3>Existing modules</h3><p class="omg-muted">Available organization tools that can be opened from here.</p><div class="omg-mini-list">${existing.slice(0, 10).map(renderMiniModule).join("")}</div></div>
+      <div class="omg-card wide"><h3>Placeholder modules</h3><p class="omg-muted">Future management areas shown so the organization structure is easy to understand.</p><div class="omg-placeholder-grid">${placeholder.map(renderPlaceholderChip).join("")}</div></div>
+      <div class="omg-card wide"><h3>Management structure</h3><p>This console organizes customer-side management into one consistent workbench. Use the navigation on the left to manage people, assets, website/portal settings, communications, documents, store placeholders, and organization settings.</p><div class="omg-note-row"><span>Daily member landing page</span><strong>Member Dashboard</strong></div><div class="omg-note-row"><span>Customer management</span><strong>Organization Management</strong></div><div class="omg-note-row"><span>Operational tasks</span><strong>Module pages and admin notices</strong></div></div>
     </div>`;
   }
 
   function renderExistingPanel(active) {
-    return `<section class="omg-card module-state"><h3>${esc(active.label)} exists as a standalone module.</h3><p>${esc(active.description || "")}</p><p>This module has not been embedded into the Organization Management right panel yet. The direct page remains available during migration.</p>${active.href ? `<a class="omg-btn primary" href="${attr(active.href)}">Open standalone ${esc(active.label)}</a>` : ""}</section>`;
+    return `<section class="omg-card module-state"><h3>${esc(active.label)}</h3><p>${esc(active.description || "")}</p>${active.href ? `<a class="omg-btn primary" href="${attr(active.href)}">Open ${esc(active.label)}</a>` : ""}</section>`;
   }
 
   function renderPlaceholderPanel(active) {
-    return `<section class="omg-card module-state"><h3>${esc(active.label)} is a placeholder.</h3><p>${esc(active.description || "")}</p><p>This module is part of the planned admin hierarchy, but it has not been built yet.</p></section>`;
+    return `<section class="omg-card module-state"><h3>${esc(active.label)}</h3><p>${esc(active.description || "")}</p><p>This management area is not available yet.</p></section>`;
   }
 
   function renderMiniModule(m) {
@@ -461,7 +463,7 @@
       if (Date.now() - started > 8000) throw new Error("Aircraft Admin module did not become ready.");
       await wait(50);
     }
-    await mountFn()(host, { embedded: true, organizationId: state.orgId, initialTab: active.aircraftView || "identity", parentVersion: VERSION });
+    await mountFn()(host, { embedded: true, organizationId: state.orgId, initialView: active.aircraftView || "identity", initialTab: active.aircraftView || "identity", parentVersion: VERSION });
   }
 
   function showModuleError(error) {
@@ -470,6 +472,11 @@
   }
 
   function bindEvents() {
+    document.getElementById("omg-nav-toggle")?.addEventListener("click", () => {
+      state.navCollapsed = !state.navCollapsed;
+      try { localStorage.setItem("syncetc.organizationManagement.navCollapsed", state.navCollapsed ? "1" : "0"); } catch {}
+      render();
+    });
     document.querySelectorAll("[data-module]").forEach(btn => btn.addEventListener("click", () => setActiveModule(clean(btn.getAttribute("data-module")))));
     const orgSelect = document.getElementById("omg-org-select");
     if (orgSelect) orgSelect.addEventListener("change", () => {
@@ -492,36 +499,42 @@
 
   function css(cfg) {
     return `
-      .omg-wrap{width:100%;max-width:none;margin:0;padding:18px clamp(12px,1.8vw,26px) 70px;color:${cfg.text};font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:${cfg.page};box-sizing:border-box;}
+      .omg-wrap{width:100%;max-width:none;margin:0;padding:12px clamp(10px,1.4vw,22px) 60px;color:${cfg.text};font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:${cfg.page};box-sizing:border-box;}
       .omg-loading,.omg-error{max-width:980px;margin:40px auto;padding:24px;border:1px solid ${cfg.line};border-radius:${cfg.radius};background:#fff;box-shadow:0 12px 30px rgba(16,24,40,.08);}
       .omg-error{border-color:#fca5a5;background:#fff7f7;color:#7f1d1d;}
-      .omg-topbar{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;padding:18px 20px;border:1px solid ${cfg.line};border-radius:${cfg.radius};background:#fff;box-shadow:0 6px 18px rgba(16,24,40,.08);margin-bottom:14px;border-top:6px solid ${cfg.primary};}
-      .omg-topbar h1{font-size:clamp(26px,2.6vw,38px);line-height:1.05;margin:8px 0 7px;color:${cfg.ink};}
-      .omg-topbar p{margin:0;max-width:900px;font-weight:700;color:${cfg.muted};}
+      .omg-topbar{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:10px 14px;border:1px solid ${cfg.line};border-radius:${cfg.radius};background:#fff;box-shadow:0 6px 18px rgba(16,24,40,.08);margin-bottom:10px;border-top:4px solid ${cfg.primary};}
+      .omg-topbar-title{display:flex;align-items:center;gap:10px;min-width:0;}
+      .omg-topbar h1{font-size:22px;line-height:1.1;margin:4px 0 0;color:${cfg.ink};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+      .omg-rail-toggle{width:34px;height:34px;border:1px solid ${cfg.line};border-radius:10px;background:#fff;color:${cfg.primary};font-size:20px;font-weight:900;cursor:pointer;}
       .omg-kicker{display:inline-flex;padding:5px 9px;border-radius:999px;background:${cfg.soft};color:${cfg.primary};font-size:11px;text-transform:uppercase;font-weight:950;letter-spacing:.06em;}
-      .omg-topbar-actions{display:flex;gap:10px;align-items:flex-end;flex-direction:column;min-width:220px;}
+      .omg-topbar-actions{display:flex;gap:8px;align-items:center;flex-direction:row;min-width:0;flex-wrap:wrap;justify-content:flex-end;}
       .omg-version,.omg-org-chip{display:inline-flex;padding:8px 10px;border-radius:999px;background:${cfg.soft};border:1px solid ${cfg.soft2};font-weight:850;color:${cfg.primary};}
       .omg-org-select{display:grid;gap:5px;font-size:12px;font-weight:900;color:${cfg.muted};text-transform:uppercase;}
-      .omg-org-select select{min-width:250px;border:1px solid ${cfg.line};border-radius:999px;padding:9px 12px;background:#fff;color:${cfg.text};font-weight:800;}
-      .omg-console{display:grid;grid-template-columns:310px minmax(0,1fr);gap:14px;align-items:start;}
+      .omg-org-select select{min-width:220px;border:1px solid ${cfg.line};border-radius:999px;padding:9px 12px;background:#fff;color:${cfg.text};font-weight:800;}
+      .omg-console{display:grid;grid-template-columns:300px minmax(0,1fr);gap:12px;align-items:start;}
+      .omg-console.nav-collapsed{grid-template-columns:58px minmax(0,1fr);}
       .omg-leftnav{position:sticky;top:10px;max-height:calc(100vh - 20px);overflow:auto;border:1px solid ${cfg.line};border-radius:${cfg.radius};background:#fff;box-shadow:0 8px 22px rgba(16,24,40,.08);padding:10px;}
       .omg-nav-group{padding:7px 0 10px;border-bottom:1px solid #eef2f7;}.omg-nav-group:last-child{border-bottom:0;}
       .omg-nav-group-title{font-size:11px;font-weight:950;text-transform:uppercase;color:${cfg.muted};letter-spacing:.08em;margin:4px 8px 7px;}
       .omg-nav-item{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 9px;border:0;border-radius:10px;background:transparent;color:${cfg.text};font-weight:850;text-align:left;cursor:pointer;}
-      .omg-nav-item:hover{background:${cfg.soft};}.omg-nav-item.active{background:${cfg.primary};color:#fff;}.omg-nav-label{display:grid;gap:2px;}.omg-nav-label small{font-size:11px;opacity:.74;font-weight:750;}
+      .omg-nav-item:hover{background:${cfg.soft};}.omg-nav-item.active{background:${cfg.primary};color:#fff;}.omg-nav-label{display:grid;gap:2px;min-width:0;}.omg-nav-label small{font-size:11px;opacity:.74;font-weight:750;}
+      .omg-console.nav-collapsed .omg-leftnav{padding:8px 6px;overflow:hidden;}
+      .omg-console.nav-collapsed .omg-nav-group-title,.omg-console.nav-collapsed .omg-nav-label small,.omg-console.nav-collapsed .omg-pill{display:none;}
+      .omg-console.nav-collapsed .omg-nav-item{justify-content:center;padding:10px 6px;}
+      .omg-console.nav-collapsed .omg-nav-label span{max-width:38px;overflow:hidden;text-overflow:clip;white-space:nowrap;font-size:12px;}
       .omg-nav-item.active .omg-pill{background:rgba(255,255,255,.18);color:#fff;border-color:rgba(255,255,255,.24);}
       .omg-main{min-width:0;display:grid;gap:14px;}.omg-module-header,.omg-card,.omg-embedded-panel{border:1px solid ${cfg.line};border-radius:${cfg.radius};background:#fff;box-shadow:0 8px 22px rgba(16,24,40,.08);}
-      .omg-module-header{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;padding:15px 18px;}
-      .omg-module-header h2{margin:7px 0 5px;font-size:27px;line-height:1.1;color:${cfg.ink};}.omg-module-header p{margin:0;color:${cfg.muted};font-weight:650;}
+      .omg-module-header{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;padding:13px 16px;}
+      .omg-module-header h2{margin:6px 0 4px;font-size:25px;line-height:1.1;color:${cfg.ink};}.omg-module-header p{margin:0;color:${cfg.muted};font-weight:650;}
       .omg-module-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;}
       .omg-btn,.omg-link{display:inline-flex;align-items:center;justify-content:center;min-height:36px;border-radius:999px;border:1px solid ${cfg.primary};background:#fff;color:${cfg.primary};padding:8px 13px;font-weight:900;text-decoration:none;cursor:pointer;}.omg-btn.primary{background:${cfg.primary};color:#fff;}
       .omg-grid{display:grid;gap:14px;}.omg-grid.two{grid-template-columns:1fr 1fr;}.omg-card{padding:16px 18px;}.omg-card.wide{grid-column:1 / -1;}.omg-card h3{margin:0 0 6px;font-size:21px;color:${cfg.ink};}.omg-muted{color:${cfg.muted};font-weight:650;}
       .omg-mini-list{display:grid;gap:8px;margin-top:12px;}.omg-mini-module{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;align-items:center;border:1px solid ${cfg.line};border-radius:12px;background:#fff;padding:10px 12px;text-align:left;cursor:pointer;}.omg-mini-module:hover{border-color:${cfg.primary};background:${cfg.soft};}.omg-mini-module strong{color:${cfg.primary};}.omg-mini-module span:not(.omg-pill){color:${cfg.muted};font-size:12px;font-weight:700;}
       .omg-placeholder-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px;}.omg-placeholder-chip{border:1px dashed ${cfg.line};border-radius:12px;background:#fcfcfd;padding:10px;text-align:left;cursor:pointer;}.omg-placeholder-chip:hover{border-color:${cfg.primary};background:${cfg.soft};}.omg-placeholder-chip span{display:block;font-weight:900;color:${cfg.ink};}.omg-placeholder-chip small{color:${cfg.muted};font-weight:700;}
       .omg-pill{display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;padding:5px 8px;border-radius:999px;border:1px solid ${cfg.line};background:#f2f4f7;color:${cfg.text};font-size:10px;font-weight:950;text-transform:uppercase;}.omg-pill.active{background:${cfg.soft};color:${cfg.primary};border-color:${cfg.soft2};}.omg-pill.existing{background:#eef4ff;color:#3538cd;border-color:#c7d7fe;}.omg-pill.placeholder{background:#fff7ed;color:#9a3412;border-color:#fed7aa;}
-      .omg-note-row{display:flex;justify-content:space-between;gap:16px;border-top:1px solid #eef2f7;padding:10px 0;font-weight:750;}.omg-embedded-panel{padding:12px;}.omg-embedded-note{padding:12px 14px;margin-bottom:12px;border:1px solid ${cfg.soft2};border-radius:12px;background:${cfg.soft};color:${cfg.text};font-weight:700;}.omg-module-host{min-height:360px;}.omg-module-loading{padding:24px;border:1px dashed ${cfg.line};border-radius:12px;background:#fff;color:${cfg.muted};font-weight:800;}
+      .omg-note-row{display:flex;justify-content:space-between;gap:16px;border-top:1px solid #eef2f7;padding:10px 0;font-weight:750;}.omg-embedded-panel{padding:10px;}.omg-embedded-note{display:none;}.omg-module-host{min-height:360px;}.omg-module-loading{padding:24px;border:1px dashed ${cfg.line};border-radius:12px;background:#fff;color:${cfg.muted};font-weight:800;}
       .module-state p{color:${cfg.muted};font-weight:650;}.omg-status{margin-top:14px;display:inline-flex;padding:9px 12px;border-radius:999px;background:${cfg.soft};font-weight:850;color:${cfg.primary};}.omg-debug{margin-top:18px;border:1px solid #1f2937;border-radius:12px;background:#111827;color:#fff;padding:12px;}.omg-debug pre{white-space:pre-wrap;font-size:12px;}
-      @media(max-width:1100px){.omg-console{grid-template-columns:1fr}.omg-leftnav{position:static;max-height:none}.omg-grid.two,.omg-placeholder-grid{grid-template-columns:1fr}.omg-topbar,.omg-module-header{display:grid}.omg-topbar-actions,.omg-module-actions{align-items:flex-start;justify-content:flex-start}.omg-org-select select{min-width:0;width:100%;}}
+      @media(max-width:1100px){.omg-console,.omg-console.nav-collapsed{grid-template-columns:1fr}.omg-leftnav{position:static;max-height:none}.omg-grid.two,.omg-placeholder-grid{grid-template-columns:1fr}.omg-topbar,.omg-module-header{display:grid}.omg-topbar-actions,.omg-module-actions{align-items:flex-start;justify-content:flex-start}.omg-org-select select{min-width:0;width:100%;}}
     `;
   }
 

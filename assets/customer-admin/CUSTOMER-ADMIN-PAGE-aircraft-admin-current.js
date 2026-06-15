@@ -1,6 +1,6 @@
-// ADMIN-PAGE-aircraft-admin-current.js
+// CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js
 // Internal Version: 2026-06-14-113-A
-// Purpose: Legacy-compatible loader for customer/organization-side Aircraft Admin foundation. Uses core-access-action, not platform-only admin backend.
+// Purpose: Customer/organization-side Aircraft Admin foundation. Uses portal shell + core-access-action.
 
 (function () {
   "use strict";

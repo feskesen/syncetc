@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-organization-management-current.js
-// Internal Version: 2026-06-14-114-H
+// Internal Version: 2026-06-15-115-A
 // Purpose: Customer/organization-side Organization Management console runtime. Immutable admin workbench shell with left navigation and right-panel module loading.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-14-114-H";
+  const VERSION = "2026-06-15-115-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -216,7 +216,7 @@
     { key: "people-groups", label: "Groups / Roles", short: "Permissions", group: "People", status: "placeholder", description: "Member groups, roles, permission bundles, and future mention groups." },
     { key: "people-instructors", label: "Instructors / Qualifications", short: "Qualifications", group: "People", status: "placeholder", description: "Instructor roster, checkouts, and qualification records." },
 
-    { key: "assets-types", label: "Asset Types", short: "Aircraft, vehicles, spaces", group: "Assets", status: "placeholder", description: "Configure what this organization operates and what customer-facing word should be used." },
+    { key: "assets-types", label: "Asset Types", short: "Classifications", group: "Assets", status: "active", kind: "aircraft", aircraftView: "asset-types", description: "Manage simple asset classifications such as aircraft, vehicles, simulators, equipment, vessels, or other asset groups." },
     { key: "assets-locations", label: "Spaces & Locations", short: "Locations", group: "Assets", status: "active", kind: "aircraft", aircraftView: "locations", description: "Manage shared locations such as airports, hangars, meeting rooms, offices, docks, storage, or other operating locations." },
     { key: "assets-aircraft", label: "Assets / Aircraft", short: "Fleet records", group: "Assets", status: "active", kind: "aircraft", aircraftView: "identity", description: "Manage aircraft identity, classification, status, visibility, usage, rates, media, and setup fields." },
     { key: "assets-rates", label: "Rates", short: "Rate setup", group: "Assets", status: "placeholder", href: "/aircraft-admin#rates", description: "Basic rate and usage-basis setup. Full billing/finance is not built yet." },

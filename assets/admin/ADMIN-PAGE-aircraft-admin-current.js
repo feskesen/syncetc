@@ -1,11 +1,11 @@
-// ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-14-114-I
-// Purpose: Platform/support-compatible Aircraft Admin wrapper using the same customer-side module. Supports standalone page and embedded Organization Management module runtime.
+// CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js
+// Internal Version: 2026-06-15-115-A
+// Purpose: Customer/organization-side Aircraft Admin foundation. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-14-114-I";
+  const VERSION = "2026-06-15-115-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -19,6 +19,7 @@
   let mountOptions = {};
   let autoStarted = false;
   let locationSearchTimer = null;
+  let assetTypeSearchTimer = null;
 
 
   const state = {
@@ -39,23 +40,34 @@
     organizations: [],
     aircraft: [],
     locations: [],
+    assetTypes: [],
     selectedAircraftId: "",
     selectedLocationId: "",
+    selectedAssetTypeId: "",
     includeArchived: false,
     search: "",
     locationSearch: "",
     locationSearchText: "",
+    assetTypeSearch: "",
+    assetTypeSearchText: "",
     statusFilter: "all",
     activeTab: "identity",
     dirty: false,
     locationDirty: false,
+    assetTypeDirty: false,
     draft: null,
     locationDraft: null,
+    assetTypeDraft: null,
     locationSearchRestore: null,
+    assetTypeSearchRestore: null,
     locationOrderSaving: false,
     locationOrderStatus: "",
     locationOrderStatusKind: "",
+    assetTypeOrderSaving: false,
+    assetTypeOrderStatus: "",
+    assetTypeOrderStatusKind: "",
     draggingLocationId: "",
+    draggingAssetTypeId: "",
     lastResult: null,
     steps: []
   };
@@ -79,6 +91,22 @@
     state.locationSearchRestore = null;
     window.setTimeout(() => {
       const input = field("aircraft-location-search");
+      if (!input) return;
+      try { input.focus({ preventScroll: true }); } catch { input.focus(); }
+      try {
+        const start = Number.isFinite(restore.start) ? Math.min(restore.start, input.value.length) : input.value.length;
+        const end = Number.isFinite(restore.end) ? Math.min(restore.end, input.value.length) : start;
+        input.setSelectionRange(start, end);
+      } catch {}
+    }, 0);
+  }
+
+  function restoreAssetTypeSearchFocus() {
+    const restore = state.assetTypeSearchRestore;
+    if (!restore) return;
+    state.assetTypeSearchRestore = null;
+    window.setTimeout(() => {
+      const input = field("aircraft-asset-type-search");
       if (!input) return;
       try { input.focus({ preventScroll: true }); } catch { input.focus(); }
       try {
@@ -116,27 +144,29 @@
     state.dirty = !!value;
     const badge = field("aircraft-dirty-badge");
     if (badge) {
-      badge.textContent = state.dirty || state.locationDirty ? "Unsaved changes" : "Saved";
-      badge.className = `aircraft-pill ${state.dirty || state.locationDirty ? "warn" : "ok"}`;
+      badge.textContent = state.dirty || state.locationDirty || state.assetTypeDirty ? "Unsaved changes" : "Saved";
+      badge.className = `aircraft-pill ${state.dirty || state.locationDirty || state.assetTypeDirty ? "warn" : "ok"}`;
     }
     if (window.SyncEtcPortalShell && typeof window.SyncEtcPortalShell.setDirty === "function") {
-      window.SyncEtcPortalShell.setDirty(state.dirty || state.locationDirty, DIRTY_MESSAGE);
+      window.SyncEtcPortalShell.setDirty(state.dirty || state.locationDirty || state.assetTypeDirty, DIRTY_MESSAGE);
     }
     try {
-      if (typeof mountOptions.onDirtyChange === "function") mountOptions.onDirtyChange(state.dirty || state.locationDirty, DIRTY_MESSAGE);
+      if (typeof mountOptions.onDirtyChange === "function") mountOptions.onDirtyChange(state.dirty || state.locationDirty || state.assetTypeDirty, DIRTY_MESSAGE);
     } catch {}
   }
   function setLocationDirty(value) { state.locationDirty = !!value; setDirty(state.dirty); }
+  function setAssetTypeDirty(value) { state.assetTypeDirty = !!value; setDirty(state.dirty); }
   function markDirty() { setDirty(true); }
   function markLocationDirty() { setLocationDirty(true); }
-  function confirmDiscard(message = DIRTY_MESSAGE) { return !(state.dirty || state.locationDirty) || window.confirm(message); }
-  function isDirty() { return !!(state.dirty || state.locationDirty); }
+  function markAssetTypeDirty() { setAssetTypeDirty(true); }
+  function confirmDiscard(message = DIRTY_MESSAGE) { return !(state.dirty || state.locationDirty || state.assetTypeDirty) || window.confirm(message); }
+  function isDirty() { return !!(state.dirty || state.locationDirty || state.assetTypeDirty); }
   function setActiveView(view) {
     const v = clean(view);
     mountOptions.initialView = v || mountOptions.initialView || "identity";
-    const tabMap = { locations: "operations", spaces: "operations", "spaces-locations": "operations", assets: "identity", aircraft: "identity", "assets-aircraft": "identity", rates: "rates", usage: "rates", maintenance: "maintenance" };
+    const tabMap = { "asset-types": "asset-types", locations: "operations", spaces: "operations", "spaces-locations": "operations", assets: "identity", aircraft: "identity", "assets-aircraft": "identity", rates: "rates", usage: "rates", maintenance: "maintenance" };
     if (tabMap[v]) state.activeTab = tabMap[v];
-    else if (["identity", "classification", "operations", "rates", "media", "maintenance"].includes(v)) state.activeTab = v;
+    else if (["asset-types", "identity", "classification", "operations", "rates", "media", "maintenance"].includes(v)) state.activeTab = v;
   }
 
   function activeModuleView() {
@@ -148,9 +178,14 @@
     return mountOptions.embedded && ["locations", "spaces", "spaces-locations", "locations-only"].includes(v);
   }
 
+  function isAssetTypesOnly() {
+    const v = activeModuleView();
+    return mountOptions.embedded && ["asset-types", "types", "assets-types"].includes(v);
+  }
+
   function isAircraftOnly() {
     const v = activeModuleView();
-    return mountOptions.embedded && !isLocationsOnly() && ["identity", "classification", "operations", "rates", "usage", "media", "maintenance", "assets", "aircraft", "assets-aircraft", "aircraft-only"].includes(v || "identity");
+    return mountOptions.embedded && !isLocationsOnly() && !isAssetTypesOnly() && ["identity", "classification", "operations", "rates", "usage", "media", "maintenance", "assets", "aircraft", "assets-aircraft", "aircraft-only"].includes(v || "identity");
   }
 
   function waitForSupabaseLibrary(timeoutMs = 8000) {
@@ -266,20 +301,145 @@
     const result = await callAccess("organization_list_aircraft_admin", { organization_id: state.orgId, include_archived: state.includeArchived });
     state.aircraft = arr(result.aircraft);
     state.locations = arr(result.locations);
+    state.assetTypes = arr(result.asset_types || result.assetTypes);
     if (state.selectedAircraftId && !state.aircraft.some(a => clean(a.operational_asset_id) === state.selectedAircraftId)) state.selectedAircraftId = "";
     if (!state.selectedAircraftId && state.aircraft.length) state.selectedAircraftId = clean(state.aircraft[0].operational_asset_id);
     const selected = selectedAircraft();
     state.draft = selected ? draftFromAircraft(selected) : emptyAircraftDraft();
     state.locationDraft = state.locations[0] ? draftFromLocation(state.locations[0]) : emptyLocationDraft();
     state.selectedLocationId = clean(state.locationDraft.organization_location_id);
+    if (state.selectedAssetTypeId && !state.assetTypes.some(t => clean(t.asset_type_id) === state.selectedAssetTypeId)) state.selectedAssetTypeId = "";
+    if (!state.selectedAssetTypeId && state.assetTypes.length) state.selectedAssetTypeId = clean(state.assetTypes[0].asset_type_id);
+    const selectedAssetTypeRecord = selectedAssetType();
+    state.assetTypeDraft = selectedAssetTypeRecord ? draftFromAssetType(selectedAssetTypeRecord) : emptyAssetTypeDraft();
     setDirty(false);
     setLocationDirty(false);
+    setAssetTypeDirty(false);
     setStatus("", "");
     render();
   }
 
   function selectedAircraft() { return state.aircraft.find(a => clean(a.operational_asset_id) === state.selectedAircraftId) || null; }
   function selectedLocation() { return state.locations.find(l => clean(l.organization_location_id) === state.selectedLocationId) || null; }
+
+  function selectedAssetType() { return state.assetTypes.find(t => clean(t.asset_type_id) === state.selectedAssetTypeId) || null; }
+
+  function emptyAssetTypeDraft() {
+    return { asset_type_id: "", asset_type_key: "", label: "", plural_label: "", category_key: "aircraft", description: "", notes: "", status: "active", sort_order: "100" };
+  }
+
+  function draftFromAssetType(t) {
+    return {
+      asset_type_id: clean(t.asset_type_id),
+      asset_type_key: clean(t.asset_type_key),
+      label: clean(t.label || t.display_name),
+      plural_label: clean(t.plural_label),
+      category_key: clean(t.category_key || t.category || "other"),
+      description: clean(t.description),
+      notes: clean(t.notes),
+      status: clean(t.status || "active"),
+      sort_order: numberOrBlank(t.sort_order || 100)
+    };
+  }
+
+  function sortedAssetTypes(list = state.assetTypes) {
+    return arr(list).slice().sort((a, b) => {
+      const ao = Number(a.sort_order ?? 100);
+      const bo = Number(b.sort_order ?? 100);
+      if (Number.isFinite(ao) && Number.isFinite(bo) && ao !== bo) return ao - bo;
+      if (Number.isFinite(ao) && !Number.isFinite(bo)) return -1;
+      if (!Number.isFinite(ao) && Number.isFinite(bo)) return 1;
+      return clean(a.label || a.asset_type_key).localeCompare(clean(b.label || b.asset_type_key));
+    });
+  }
+
+  function assetTypeRowsForCurrentSearch() {
+    const query = lower(state.assetTypeSearch);
+    return sortedAssetTypes().filter(t => {
+      if (!query) return true;
+      const haystack = [t.label, t.plural_label, t.category_key || t.category, t.description, t.status].join(" ").toLowerCase();
+      return haystack.includes(query);
+    });
+  }
+
+  function renumberAssetTypes(list) { return arr(list).map((t, index) => ({ ...t, sort_order: (index + 1) * 10 })); }
+  function assetTypePayloadFromRecord(t) { return { ...draftFromAssetType(t), organization_id: state.orgId }; }
+
+  function setAssetTypeOrderStatus(message, kind = "") {
+    state.assetTypeOrderStatus = message || "";
+    state.assetTypeOrderStatusKind = kind || "";
+    document.querySelectorAll("[data-asset-type-order-status]").forEach(el => {
+      el.className = `aircraft-order-status ${state.assetTypeOrderStatusKind || ""}`;
+      el.textContent = state.assetTypeOrderStatus;
+      el.style.display = state.assetTypeOrderStatus ? "inline-flex" : "none";
+    });
+  }
+
+  function moveAssetTypeInList(sourceId, targetId, afterTarget = false) {
+    const list = sortedAssetTypes();
+    const sourceIndex = list.findIndex(t => clean(t.asset_type_id) === clean(sourceId));
+    if (sourceIndex < 0) return null;
+    const [source] = list.splice(sourceIndex, 1);
+    const targetIndex = list.findIndex(t => clean(t.asset_type_id) === clean(targetId));
+    if (targetIndex < 0) return null;
+    list.splice(afterTarget ? targetIndex + 1 : targetIndex, 0, source);
+    return renumberAssetTypes(list);
+  }
+
+  function moveAssetTypeByStep(assetTypeId, direction) {
+    const visible = assetTypeRowsForCurrentSearch();
+    const index = visible.findIndex(t => clean(t.asset_type_id) === clean(assetTypeId));
+    if (index < 0) return null;
+    if (direction === "up" && index > 0) return moveAssetTypeInList(assetTypeId, visible[index - 1].asset_type_id, false);
+    if (direction === "down" && index < visible.length - 1) return moveAssetTypeInList(assetTypeId, visible[index + 1].asset_type_id, true);
+    return null;
+  }
+
+  function canReorderAssetTypes() {
+    if (state.saving || state.assetTypeOrderSaving) return false;
+    if (state.dirty || state.locationDirty || state.assetTypeDirty) {
+      setStatus("Save or discard changes before reordering asset types.", "error");
+      return false;
+    }
+    return true;
+  }
+
+  async function persistAssetTypeOrder(nextAssetTypes) {
+    if (!nextAssetTypes || !nextAssetTypes.length || !canReorderAssetTypes()) return;
+    const previousAssetTypes = state.assetTypes.map(t => ({ ...t }));
+    const previousDraft = state.assetTypeDraft ? { ...state.assetTypeDraft } : null;
+    const previousSelectedId = state.selectedAssetTypeId;
+    const previousById = new Map(previousAssetTypes.map(t => [clean(t.asset_type_id), t]));
+    const changed = nextAssetTypes.filter(t => {
+      const prev = previousById.get(clean(t.asset_type_id));
+      return prev && Number(prev.sort_order ?? 100) !== Number(t.sort_order ?? 100);
+    });
+    if (!changed.length) return;
+    state.assetTypes = nextAssetTypes;
+    const selected = selectedAssetType();
+    if (selected) state.assetTypeDraft = draftFromAssetType(selected);
+    state.assetTypeOrderSaving = true;
+    setAssetTypeOrderStatus("Saving order...", "");
+    render();
+    try {
+      let result = null;
+      for (const assetType of changed) result = await callAccess("organization_save_asset_type", assetTypePayloadFromRecord(assetType));
+      if (result) state.assetTypes = arr(result.asset_types || result.assetTypes);
+      if (previousSelectedId) state.selectedAssetTypeId = previousSelectedId;
+      const refreshed = selectedAssetType();
+      if (refreshed) state.assetTypeDraft = draftFromAssetType(refreshed);
+      state.assetTypeOrderSaving = false;
+      setAssetTypeOrderStatus("Order saved.", "ok");
+      render();
+    } catch (error) {
+      state.assetTypes = previousAssetTypes;
+      state.selectedAssetTypeId = previousSelectedId;
+      state.assetTypeDraft = previousDraft;
+      state.assetTypeOrderSaving = false;
+      setAssetTypeOrderStatus(error instanceof Error ? `Order could not be saved: ${error.message}` : "Order could not be saved.", "error");
+      render();
+    }
+  }
 
   function sortedLocations(list = state.locations) {
     return arr(list).slice().sort((a, b) => {
@@ -469,6 +629,8 @@
   function setDraft(key, value) { if (!state.draft) state.draft = emptyAircraftDraft(); state.draft[key] = value; markDirty(); }
   function setLocationDraft(key, value) { if (!state.locationDraft) state.locationDraft = emptyLocationDraft(); state.locationDraft[key] = value; markLocationDirty(); }
 
+  function setAssetTypeDraft(key, value) { if (!state.assetTypeDraft) state.assetTypeDraft = emptyAssetTypeDraft(); state.assetTypeDraft[key] = value; markAssetTypeDirty(); }
+
   function collectAircraftPayload() {
     const d = state.draft || emptyAircraftDraft();
     return {
@@ -513,12 +675,58 @@
     };
   }
 
+  function collectAssetTypePayload(draft) {
+    const d = draft || state.assetTypeDraft || emptyAssetTypeDraft();
+    return { ...d, organization_id: state.orgId, category_key: d.category_key || "other" };
+  }
+
+  async function saveAssetType() {
+    try {
+      const d = state.assetTypeDraft || emptyAssetTypeDraft();
+      if (!clean(d.label)) throw new Error("Enter an asset type name.");
+      if (!clean(d.category_key)) throw new Error("Choose a category.");
+      state.saving = true; clearError(); setStatus("Saving asset type..."); renderActionState();
+      const result = await callAccess("organization_save_asset_type", collectAssetTypePayload());
+      state.assetTypes = arr(result.asset_types || result.assetTypes);
+      const saved = obj(result.asset_type);
+      state.selectedAssetTypeId = clean(saved.asset_type_id || state.selectedAssetTypeId);
+      state.assetTypeDraft = draftFromAssetType(saved);
+      setAssetTypeDirty(false);
+      setStatus("Asset type saved.", "ok");
+      render();
+    } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+    finally { state.saving = false; renderActionState(); }
+  }
+
+  async function archiveAssetType(restore = false) {
+    const selected = selectedAssetType();
+    if (!selected) return;
+    if (!restore && !window.confirm("Archive this asset type? Existing asset records are not deleted.")) return;
+    try {
+      state.saving = true; clearError(); renderActionState();
+      const result = await callAccess(restore ? "organization_restore_asset_type" : "organization_archive_asset_type", { organization_id: state.orgId, asset_type_id: clean(selected.asset_type_id) });
+      state.assetTypes = arr(result.asset_types || result.assetTypes);
+      const saved = obj(result.asset_type);
+      state.selectedAssetTypeId = clean(saved.asset_type_id || state.assetTypes[0]?.asset_type_id || "");
+      const refreshed = selectedAssetType();
+      state.assetTypeDraft = refreshed ? draftFromAssetType(refreshed) : emptyAssetTypeDraft();
+      setAssetTypeDirty(false);
+      setStatus(restore ? "Asset type restored." : "Asset type archived.", "ok");
+      render();
+    } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+    finally { state.saving = false; renderActionState(); }
+  }
+
+  function newAssetType() { if (!confirmDiscard("You have unsaved asset type changes. Continue?")) return; state.selectedAssetTypeId = ""; state.assetTypeDraft = emptyAssetTypeDraft(); setAssetTypeDirty(false); render(); }
+  function clearAssetType() { newAssetType(); }
+
   async function saveAircraft() {
     try {
       state.saving = true; clearError(); setStatus("Saving aircraft..."); renderActionState();
       const result = await callAccess("organization_save_aircraft", collectAircraftPayload());
       state.aircraft = arr(result.aircraft);
       state.locations = arr(result.locations);
+      state.assetTypes = arr(result.asset_types || result.assetTypes || state.assetTypes);
       const saved = obj(result.aircraft_record);
       state.selectedAircraftId = clean(saved.operational_asset_id || state.selectedAircraftId);
       state.draft = draftFromAircraft(saved);
@@ -538,6 +746,7 @@
       const result = await callAccess(restore ? "organization_restore_aircraft" : "organization_archive_aircraft", { organization_id: state.orgId, operational_asset_id: id });
       state.aircraft = arr(result.aircraft);
       state.locations = arr(result.locations);
+      state.assetTypes = arr(result.asset_types || result.assetTypes || state.assetTypes);
       state.includeArchived = true;
       const saved = obj(result.aircraft_record);
       state.selectedAircraftId = clean(saved.operational_asset_id || id);
@@ -558,6 +767,7 @@
       const result = await callAccess("organization_save_aircraft_location", collectLocationPayload());
       state.locations = arr(result.locations);
       state.aircraft = arr(result.aircraft);
+      state.assetTypes = arr(result.asset_types || result.assetTypes || state.assetTypes);
       const saved = obj(result.location);
       state.selectedLocationId = clean(saved.organization_location_id || state.selectedLocationId);
       state.locationDraft = draftFromLocation(saved);
@@ -606,7 +816,7 @@
   }
 
   function dirtyBadgeHtml() {
-    return `<span id="aircraft-dirty-badge" class="aircraft-pill ${state.dirty || state.locationDirty ? "warn" : "ok"}">${state.dirty || state.locationDirty ? "Unsaved changes" : "Saved"}</span>`;
+    return `<span id="aircraft-dirty-badge" class="aircraft-pill ${state.dirty || state.locationDirty || state.assetTypeDirty ? "warn" : "ok"}">${state.dirty || state.locationDirty || state.assetTypeDirty ? "Unsaved changes" : "Saved"}</span>`;
   }
 
   function inlineStatusHtml() {
@@ -772,6 +982,71 @@
       ${textHtml("General maintenance notes", "maintenance_notes_general", "Admin-only maintenance setup notes. Not a squawk log.")}`;
   }
 
+  function renderAssetTypes() {
+    const d = state.assetTypeDraft || emptyAssetTypeDraft();
+    const rows = assetTypeRowsForCurrentSearch();
+    const archived = clean(selectedAssetType()?.status) === "archived" || !!selectedAssetType()?.archived_at;
+    const categoryOptions = [
+      ["aircraft", "Aircraft"],
+      ["vehicle", "Vehicle"],
+      ["simulator", "Simulator"],
+      ["vessel", "Vessel"],
+      ["equipment", "Equipment"],
+      ["other", "Other"]
+    ];
+    return `
+      <section class="aircraft-card aircraft-location-card aircraft-asset-type-card">
+        <div class="aircraft-section-head compact">
+          <div><h2>Asset Types</h2><p>Manage simple asset classifications. Operational settings such as rates, meters, maintenance, and reservations belong on assets or later setup pages.</p></div>
+          <button class="aircraft-button secondary" id="aircraft-new-asset-type">New Asset Type</button>
+        </div>
+        <div class="aircraft-module-divider"></div>
+        <div class="aircraft-location-layout">
+          <div class="aircraft-location-list-wrap">
+            <div class="aircraft-list-tools"><input id="aircraft-asset-type-search" value="${attr(state.assetTypeSearchText)}" placeholder="Search asset types"></div>
+            <div class="aircraft-order-tools">
+              <span class="aircraft-order-hint">Drag or use arrows to sort.</span>
+              <span data-asset-type-order-status class="aircraft-order-status ${state.assetTypeOrderStatusKind}" style="display:${state.assetTypeOrderStatus ? "inline-flex" : "none"}">${esc(state.assetTypeOrderStatus)}</span>
+            </div>
+            <div class="aircraft-location-list">
+              ${rows.length ? rows.map((t, index) => {
+                const selected = clean(t.asset_type_id) === state.selectedAssetTypeId;
+                const id = attr(t.asset_type_id);
+                return `<div class="aircraft-location-row ${selected ? "selected" : ""} ${state.assetTypeOrderSaving ? "saving" : ""}" draggable="${state.assetTypeOrderSaving ? "false" : "true"}" data-asset-type-row data-asset-type-id="${id}">
+                  <button class="aircraft-location-main" type="button" data-asset-type-select="${id}">
+                    <span class="aircraft-drag-handle" aria-hidden="true">☰</span>
+                    <span class="aircraft-location-copy"><strong>${esc(t.label || t.asset_type_key || "Asset Type")}</strong><span>${esc([t.plural_label, t.category_key || t.category, t.status].filter(Boolean).join(" · "))}</span></span>
+                  </button>
+                  <span class="aircraft-order-buttons">
+                    <button type="button" class="aircraft-order-button" data-asset-type-move="${id}" data-direction="up" ${index === 0 || state.assetTypeOrderSaving ? "disabled" : ""} aria-label="Move asset type up">▲</button>
+                    <button type="button" class="aircraft-order-button" data-asset-type-move="${id}" data-direction="down" ${index === rows.length - 1 || state.assetTypeOrderSaving ? "disabled" : ""} aria-label="Move asset type down">▼</button>
+                  </span>
+                </div>`;
+              }).join("") : `<div class="aircraft-empty">No asset types match that search.</div>`}
+            </div>
+          </div>
+          <div class="aircraft-location-form">
+            <div class="aircraft-form-grid compact">
+              <label class="aircraft-field"><span>Name *</span><input data-asset-type-key="label" value="${attr(d.label)}" placeholder="Aircraft"></label>
+              <label class="aircraft-field"><span>Plural label</span><input data-asset-type-key="plural_label" value="${attr(d.plural_label)}" placeholder="Aircraft"></label>
+              <label class="aircraft-field"><span>Category *</span><select data-asset-type-key="category_key">${categoryOptions.map(([value,label]) => `<option value="${value}" ${d.category_key === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+              <label class="aircraft-field"><span>Status</span><select data-asset-type-key="status"><option value="active" ${d.status === "active" ? "selected" : ""}>Active</option><option value="inactive" ${d.status === "inactive" ? "selected" : ""}>Inactive</option><option value="archived" ${d.status === "archived" ? "selected" : ""}>Archived</option></select></label>
+              <label class="aircraft-field full"><span>Description</span><textarea data-asset-type-key="description" placeholder="Short explanation for admins.">${esc(d.description)}</textarea></label>
+              <label class="aircraft-field full"><span>Notes</span><textarea data-asset-type-key="notes" placeholder="Optional internal notes.">${esc(d.notes)}</textarea></label>
+            </div>
+            <div class="aircraft-actions aircraft-save-row">
+              <div class="aircraft-bottom-state">${dirtyBadgeHtml()}${inlineStatusHtml()}</div>
+              <div class="aircraft-action-buttons">
+                <button class="aircraft-button secondary" id="aircraft-clear-asset-type">Clear</button>
+                ${d.asset_type_id ? `<button class="aircraft-button ${archived ? "secondary" : "danger"}" id="aircraft-archive-asset-type">${archived ? "Restore" : "Archive"}</button>` : ""}
+                <button class="aircraft-button" data-save-button data-label="Save Asset Type" id="aircraft-save-asset-type">Save Asset Type</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>`;
+  }
+
   function renderLocations() {
     const d = state.locationDraft || emptyLocationDraft();
     const locationRows = locationRowsForCurrentSearch();
@@ -843,7 +1118,7 @@
 
   function renderDebug() {
     if (!state.debug) return "";
-    return `<section class="aircraft-card aircraft-debug"><h2>Debug</h2><pre>${esc(JSON.stringify({ version: VERSION, email: state.email, orgId: state.orgId, aircraft: state.aircraft.length, locations: state.locations.length, dirty: state.dirty, locationDirty: state.locationDirty, steps: state.steps, lastResult: state.lastResult }, null, 2))}</pre></section>`;
+    return `<section class="aircraft-card aircraft-debug"><h2>Debug</h2><pre>${esc(JSON.stringify({ version: VERSION, email: state.email, orgId: state.orgId, aircraft: state.aircraft.length, locations: state.locations.length, assetTypes: state.assetTypes.length, dirty: state.dirty, locationDirty: state.locationDirty, assetTypeDirty: state.assetTypeDirty, steps: state.steps, lastResult: state.lastResult }, null, 2))}</pre></section>`;
   }
 
   function render() {
@@ -880,7 +1155,7 @@
             ${renderOrgSelector() ? `<div class="aircraft-topline">${renderOrgSelector()}</div>` : ""}
           </section>`}
         <div id="aircraft-status" class="aircraft-status" style="display:none"></div>
-        ${isLocationsOnly() ? renderLocations() : isAircraftOnly() ? `<div class="aircraft-grid aircraft-only">${renderList()}${renderEditor()}</div>` : `${renderLocations()}<div class="aircraft-grid">${renderList()}${renderEditor()}</div>`}
+        ${isAssetTypesOnly() ? renderAssetTypes() : isLocationsOnly() ? renderLocations() : isAircraftOnly() ? `<div class="aircraft-grid aircraft-only">${renderList()}${renderEditor()}</div>` : `${renderLocations()}<div class="aircraft-grid">${renderList()}${renderEditor()}</div>`}
         ${renderDebug()}
       </main>`;
     bindEvents();
@@ -888,6 +1163,7 @@
     renderActionState();
     setLocationOrderStatus(state.locationOrderStatus, state.locationOrderStatusKind);
     restoreLocationSearchFocus();
+    restoreAssetTypeSearchFocus();
   }
 
   function bindEvents() {
@@ -908,6 +1184,70 @@
       const key = el.dataset.draftKey;
       const handler = () => setDraft(key, el.type === "checkbox" ? !!el.checked : el.value);
       el.addEventListener("input", handler); el.addEventListener("change", handler);
+    });
+    field("aircraft-new-asset-type")?.addEventListener("click", newAssetType);
+    field("aircraft-save-asset-type")?.addEventListener("click", saveAssetType);
+    field("aircraft-clear-asset-type")?.addEventListener("click", clearAssetType);
+    field("aircraft-archive-asset-type")?.addEventListener("click", () => archiveAssetType(clean(selectedAssetType()?.status) === "archived" || !!selectedAssetType()?.archived_at));
+    field("aircraft-asset-type-search")?.addEventListener("input", e => {
+      const input = e.target;
+      state.assetTypeSearchText = input.value;
+      if (assetTypeSearchTimer) window.clearTimeout(assetTypeSearchTimer);
+      assetTypeSearchTimer = window.setTimeout(() => {
+        state.assetTypeSearch = state.assetTypeSearchText;
+        state.assetTypeSearchRestore = {
+          start: typeof input.selectionStart === "number" ? input.selectionStart : input.value.length,
+          end: typeof input.selectionEnd === "number" ? input.selectionEnd : input.value.length
+        };
+        render();
+      }, 350);
+    });
+    document.querySelectorAll("[data-asset-type-select]").forEach(btn => btn.addEventListener("click", () => {
+      if (!confirmDiscard("You have unsaved asset type changes. Continue?")) return;
+      state.selectedAssetTypeId = clean(btn.dataset.assetTypeSelect);
+      const selected = selectedAssetType();
+      state.assetTypeDraft = selected ? draftFromAssetType(selected) : emptyAssetTypeDraft();
+      setAssetTypeDirty(false);
+      render();
+    }));
+    document.querySelectorAll("[data-asset-type-key]").forEach(el => {
+      const key = el.dataset.assetTypeKey;
+      const handler = () => setAssetTypeDraft(key, el.value);
+      el.addEventListener("input", handler); el.addEventListener("change", handler);
+    });
+    document.querySelectorAll("[data-asset-type-move]").forEach(btn => btn.addEventListener("click", (event) => {
+      event.preventDefault(); event.stopPropagation();
+      const next = moveAssetTypeByStep(btn.dataset.assetTypeMove, btn.dataset.direction);
+      if (next) persistAssetTypeOrder(next);
+    }));
+    document.querySelectorAll("[data-asset-type-row]").forEach(row => {
+      row.addEventListener("dragstart", (event) => {
+        if (!canReorderAssetTypes()) { event.preventDefault(); return; }
+        state.draggingAssetTypeId = row.dataset.assetTypeId;
+        row.classList.add("dragging");
+        try { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", state.draggingAssetTypeId); } catch {}
+      });
+      row.addEventListener("dragend", () => {
+        state.draggingAssetTypeId = "";
+        row.classList.remove("dragging", "drag-over");
+        document.querySelectorAll(".aircraft-location-row.drag-over").forEach(el => el.classList.remove("drag-over"));
+      });
+      row.addEventListener("dragover", (event) => {
+        if (!state.draggingAssetTypeId || state.draggingAssetTypeId === row.dataset.assetTypeId) return;
+        event.preventDefault(); row.classList.add("drag-over");
+        try { event.dataTransfer.dropEffect = "move"; } catch {}
+      });
+      row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+      row.addEventListener("drop", (event) => {
+        event.preventDefault(); row.classList.remove("drag-over");
+        const sourceId = clean((event.dataTransfer && event.dataTransfer.getData("text/plain")) || state.draggingAssetTypeId);
+        const targetId = clean(row.dataset.assetTypeId);
+        if (!sourceId || !targetId || sourceId === targetId) return;
+        const rect = row.getBoundingClientRect();
+        const afterTarget = event.clientY > rect.top + rect.height / 2;
+        const next = moveAssetTypeInList(sourceId, targetId, afterTarget);
+        if (next) persistAssetTypeOrder(next);
+      });
     });
     field("aircraft-new-location")?.addEventListener("click", newLocation);
     field("aircraft-save-location")?.addEventListener("click", saveLocation);
@@ -1019,14 +1359,14 @@
   window.SyncEtcAircraftAdminPage = {
     version: VERSION,
     mount,
-    hasUnsavedChanges: () => !!(state.dirty || state.locationDirty),
+    hasUnsavedChanges: () => !!(state.dirty || state.locationDirty || state.assetTypeDirty),
     confirmDiscard
   };
 
   window.SyncEtcAircraftAdmin = {
     version: VERSION,
     mount,
-    isDirty: () => !!(state.dirty || state.locationDirty),
+    isDirty: () => !!(state.dirty || state.locationDirty || state.assetTypeDirty),
     confirmDiscard
   };
 
@@ -1041,7 +1381,7 @@
   };
 
   window.addEventListener("beforeunload", (event) => {
-    if (state.dirty || state.locationDirty) { event.preventDefault(); event.returnValue = DIRTY_MESSAGE; return DIRTY_MESSAGE; }
+    if (state.dirty || state.locationDirty || state.assetTypeDirty) { event.preventDefault(); event.returnValue = DIRTY_MESSAGE; return DIRTY_MESSAGE; }
   });
 
   function autoInit() {

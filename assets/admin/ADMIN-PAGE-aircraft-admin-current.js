@@ -1,11 +1,11 @@
 // ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-14-114-C
+// Internal Version: 2026-06-14-114-D
 // Purpose: Platform/support-compatible Aircraft Admin wrapper using the same customer-side module. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-14-114-C";
+  const VERSION = "2026-06-14-114-D";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -41,6 +41,7 @@
     selectedLocationId: "",
     includeArchived: false,
     search: "",
+    locationSearch: "",
     statusFilter: "all",
     activeTab: "identity",
     dirty: false,
@@ -249,7 +250,7 @@
     state.selectedLocationId = clean(state.locationDraft.organization_location_id);
     setDirty(false);
     setLocationDirty(false);
-    setStatus("Aircraft admin data loaded.", "ok");
+    setStatus("", "");
     render();
   }
 
@@ -612,6 +613,12 @@
 
   function renderLocations() {
     const d = state.locationDraft || emptyLocationDraft();
+    const query = lower(state.locationSearch);
+    const locationRows = state.locations.filter(l => {
+      if (!query) return true;
+      const haystack = [l.display_name, l.airport_identifier, l.location_type, l.city || obj(l.address_json).city, l.state_region || obj(l.address_json).state_region || obj(l.address_json).state, l.postal_code || obj(l.address_json).postal_code].join(" ").toLowerCase();
+      return haystack.includes(query);
+    });
     const typeOptions = [
       ["airport", "Airport"],
       ["hangar", "Hangar"],
@@ -623,22 +630,26 @@
     ];
     return `
       <section class="aircraft-card aircraft-location-card">
-        <div class="aircraft-section-head">
+        <div class="aircraft-section-head compact">
           <div><h2>Spaces & Locations</h2><p>Manage shared locations such as airports, hangars, meeting rooms, offices, docks, storage, or other operating locations.</p></div>
           <button class="aircraft-button secondary" id="aircraft-new-location">New Location</button>
         </div>
+        <div class="aircraft-module-divider"></div>
         <div class="aircraft-location-layout">
-          <div class="aircraft-location-list">
-            ${state.locations.length ? state.locations.map(l => `<button class="aircraft-location-row ${clean(l.organization_location_id) === state.selectedLocationId ? "selected" : ""}" data-location-id="${attr(l.organization_location_id)}"><strong>${esc(l.display_name || l.airport_identifier || "Location")}</strong><span>${esc([l.airport_identifier, l.location_type, l.city || obj(l.address_json).city, l.state_region || obj(l.address_json).state_region || obj(l.address_json).state].filter(Boolean).join(" · "))}</span></button>`).join("") : `<div class="aircraft-empty">No locations yet.</div>`}
+          <div class="aircraft-location-list-wrap">
+            <div class="aircraft-list-tools"><input id="aircraft-location-search" value="${attr(state.locationSearch)}" placeholder="Search locations"></div>
+            <div class="aircraft-location-list">
+              ${locationRows.length ? locationRows.map(l => `<button class="aircraft-location-row ${clean(l.organization_location_id) === state.selectedLocationId ? "selected" : ""}" data-location-id="${attr(l.organization_location_id)}"><strong>${esc(l.display_name || l.airport_identifier || "Location")}</strong><span>${esc([l.airport_identifier, l.location_type, l.city || obj(l.address_json).city, l.state_region || obj(l.address_json).state_region || obj(l.address_json).state].filter(Boolean).join(" · "))}</span></button>`).join("") : `<div class="aircraft-empty">No locations match that search.</div>`}
+            </div>
           </div>
           <div class="aircraft-location-form">
-            <div class="aircraft-form-grid">
+            <div class="aircraft-form-grid compact">
               <label class="aircraft-field"><span>Display name *</span><input data-location-key="display_name" value="${attr(d.display_name)}" placeholder="First Flight Airport"></label>
               <label class="aircraft-field"><span>Location type *</span><select data-location-key="location_type">${typeOptions.map(([value,label]) => `<option value="${value}" ${d.location_type === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
               <label class="aircraft-field"><span>Airport / location identifier</span><input data-location-key="airport_identifier" value="${attr(d.airport_identifier)}" placeholder="KFFA, Hangar A, Room 2"></label>
               <label class="aircraft-field"><span>Time zone</span><input data-location-key="time_zone" value="${attr(d.time_zone)}" placeholder="America/New_York"></label>
-              <label class="aircraft-field full"><span>Address line 1</span><input data-location-key="address_line_1" value="${attr(d.address_line_1)}" placeholder="Street address or facility address"></label>
-              <label class="aircraft-field full"><span>Address line 2</span><input data-location-key="address_line_2" value="${attr(d.address_line_2)}" placeholder="Hangar, suite, unit, gate, or room"></label>
+              <label class="aircraft-field"><span>Address line 1</span><input data-location-key="address_line_1" value="${attr(d.address_line_1)}" placeholder="Street address or facility address"></label>
+              <label class="aircraft-field"><span>Address line 2</span><input data-location-key="address_line_2" value="${attr(d.address_line_2)}" placeholder="Hangar, suite, unit, gate, or room"></label>
               <label class="aircraft-field"><span>City</span><input data-location-key="city" value="${attr(d.city)}"></label>
               <label class="aircraft-field"><span>State / region</span><input data-location-key="state_region" value="${attr(d.state_region)}"></label>
               <label class="aircraft-field"><span>Postal code</span><input data-location-key="postal_code" value="${attr(d.postal_code)}"></label>
@@ -667,21 +678,21 @@
       <style>
         ${ROOT_SELECTOR}{--air-primary:${c.primary};--air-secondary:${c.secondary};--air-surface:${c.surface};--air-text:${c.text};--air-muted:${c.muted};--air-danger:${c.danger};--air-warning:${c.warning};font-family:Arial,Helvetica,sans-serif;color:var(--air-text);}
         ${ROOT_SELECTOR} *{box-sizing:border-box;}
-        .aircraft-wrap{max-width:1280px;margin:0 auto;padding:18px;}
-        .aircraft-wrap.embedded{max-width:none;margin:0;padding:0;}
+        .aircraft-wrap{max-width:1280px;margin:0 auto;padding:18px;min-width:0;}
+        .aircraft-wrap.embedded{max-width:none;margin:0;padding:0;min-width:0;width:100%;overflow:hidden;}
         .aircraft-inline-state{display:flex;justify-content:flex-end;margin-bottom:8px;}
         .aircraft-hero{background:linear-gradient(135deg,var(--air-primary),color-mix(in srgb,var(--air-primary) 82%,#000));color:#fff;border-radius:18px;padding:22px;margin-bottom:14px;}
         .aircraft-hero h1{margin:0 0 6px;font-size:34px;letter-spacing:-.03em;}.aircraft-hero p{margin:0;opacity:.9;line-height:1.45;}.aircraft-topline{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:14px;}
         .aircraft-card{background:var(--air-surface);border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);border-radius:16px;box-shadow:0 8px 24px rgba(10,30,55,.06);padding:16px;margin-bottom:14px;}
-        .aircraft-grid{display:grid;grid-template-columns:370px minmax(0,1fr);gap:14px;align-items:start;}.aircraft-grid.aircraft-only{grid-template-columns:360px minmax(720px,1fr);}.aircraft-section-head,.aircraft-editor-head,.aircraft-actions{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;}.aircraft-section-head h2,.aircraft-editor-head h2{margin:0;font-size:21px;}.aircraft-section-head p,.aircraft-editor-head p{margin:3px 0 0;color:var(--air-muted);font-size:13px;}
+        .aircraft-grid{display:grid;grid-template-columns:minmax(260px,340px) minmax(0,1fr);gap:12px;align-items:start;min-width:0;}.aircraft-grid.aircraft-only{grid-template-columns:minmax(260px,340px) minmax(0,1fr);}.aircraft-section-head,.aircraft-editor-head,.aircraft-actions{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;}.aircraft-section-head.compact{padding-bottom:8px;}.aircraft-section-head h2,.aircraft-editor-head h2{margin:0;font-size:21px;}.aircraft-section-head p,.aircraft-editor-head p{margin:3px 0 0;color:var(--air-muted);font-size:13px;line-height:1.35;}.aircraft-module-divider{height:1px;background:#e6edf5;margin:0 0 12px;}
         .aircraft-button{border:1px solid var(--air-primary);background:var(--air-primary);color:#fff;border-radius:999px;padding:9px 13px;font-weight:800;cursor:pointer;font-size:13px;}.aircraft-button.secondary{background:#fff;color:var(--air-primary);}.aircraft-button.danger{background:#fff;color:var(--air-danger);border-color:var(--air-danger);}.aircraft-button:disabled{opacity:.55;cursor:wait;}
         .aircraft-pill{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.03em;background:color-mix(in srgb,var(--air-primary) 12%,#fff);color:var(--air-primary);}.aircraft-pill.ok{background:#eaf7ef;color:#196f3b;}.aircraft-pill.warn{background:#fff5d8;color:var(--air-warning);}.aircraft-pill.danger{background:#ffecec;color:var(--air-danger);}.aircraft-pill.neutral{background:#eef3f8;color:#30435c;}
         .aircraft-filter-row{display:grid;grid-template-columns:1fr 145px auto;gap:8px;margin:12px 0;align-items:center;}.aircraft-filter-row input,.aircraft-filter-row select,.aircraft-field input,.aircraft-field select,.aircraft-field textarea{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#172033;font-size:13px;}.aircraft-field textarea{min-height:82px;resize:vertical;font-family:Arial,Helvetica,sans-serif;}.aircraft-check{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:800;color:#334155;}
         .aircraft-list{display:flex;flex-direction:column;gap:8px;}.aircraft-row,.aircraft-location-row{width:100%;border:1px solid #d7e0ea;background:#fff;border-radius:13px;padding:11px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:4px;}.aircraft-row.selected,.aircraft-location-row.selected{border-color:var(--air-primary);box-shadow:inset 4px 0 0 var(--air-primary);background:color-mix(in srgb,var(--air-secondary) 38%,#fff);}.aircraft-row-title{font-weight:900;font-size:15px;}.aircraft-row-sub,.aircraft-row-meta,.aircraft-location-row span{color:var(--air-muted);font-size:12px;}.aircraft-row-meta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;}
         .aircraft-tabs{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0;}.aircraft-tabs button{border:1px solid #cbd5e1;background:#fff;color:#26344d;border-radius:999px;padding:8px 11px;font-weight:900;cursor:pointer;}.aircraft-tabs button.active{background:var(--air-primary);color:#fff;border-color:var(--air-primary);}
-        .aircraft-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}.aircraft-field{display:flex;flex-direction:column;gap:5px;margin-bottom:12px;}.aircraft-field span{font-size:12px;font-weight:900;color:#334155;text-transform:uppercase;letter-spacing:.03em;}.aircraft-field.full{grid-column:1/-1;}.aircraft-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 4px;}.aircraft-note{background:color-mix(in srgb,var(--air-secondary) 55%,#fff);border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);border-radius:12px;padding:12px;margin-bottom:12px;color:#334155;font-size:13px;line-height:1.45;}
-        .aircraft-location-layout{display:grid;grid-template-columns:310px minmax(760px,1fr);gap:14px;}.aircraft-location-list{display:flex;flex-direction:column;gap:8px;}.aircraft-status{padding:12px;border-radius:12px;border:1px solid #d6e0ec;background:#eef3f8;color:#26344d;margin-bottom:14px;}.aircraft-status.ok{background:#eaf7ef;color:#196f3b}.aircraft-status.error{background:#ffecec;color:var(--air-danger);border-color:#ffc6c6;}.aircraft-empty{border:1px dashed #cbd5e1;border-radius:12px;padding:14px;color:var(--air-muted);background:#f8fafc;}.aircraft-debug pre{background:#101827;color:#e7edf6;border-radius:12px;padding:12px;overflow:auto;font-size:12px;}
-        @media(max-width:980px){.aircraft-grid,.aircraft-location-layout{grid-template-columns:1fr;}.aircraft-filter-row,.aircraft-form-grid,.aircraft-check-grid{grid-template-columns:1fr;}.aircraft-wrap{padding:12px;}}
+        .aircraft-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px;}.aircraft-form-grid.compact{gap:8px 12px;}.aircraft-field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px;min-width:0;}.aircraft-field span{font-size:12px;font-weight:900;color:#334155;text-transform:uppercase;letter-spacing:.03em;}.aircraft-field.full{grid-column:1/-1;}.aircraft-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 4px;}.aircraft-note{background:color-mix(in srgb,var(--air-secondary) 55%,#fff);border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);border-radius:12px;padding:12px;margin-bottom:12px;color:#334155;font-size:13px;line-height:1.45;}
+        .aircraft-location-layout{display:grid;grid-template-columns:minmax(240px,300px) minmax(0,1fr);gap:12px;min-width:0;}.aircraft-location-list-wrap{min-width:0;}.aircraft-list-tools{margin-bottom:8px;}.aircraft-list-tools input{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#172033;font-size:13px;}.aircraft-location-list{display:flex;flex-direction:column;gap:8px;}.aircraft-location-form{min-width:0;}.aircraft-status{padding:12px;border-radius:12px;border:1px solid #d6e0ec;background:#eef3f8;color:#26344d;margin-bottom:14px;}.aircraft-status.ok{background:#eaf7ef;color:#196f3b}.aircraft-status.error{background:#ffecec;color:var(--air-danger);border-color:#ffc6c6;}.aircraft-empty{border:1px dashed #cbd5e1;border-radius:12px;padding:14px;color:var(--air-muted);background:#f8fafc;}.aircraft-debug pre{background:#101827;color:#e7edf6;border-radius:12px;padding:12px;overflow:auto;font-size:12px;}
+        @media(max-width:1180px){.aircraft-grid,.aircraft-grid.aircraft-only,.aircraft-location-layout{grid-template-columns:1fr;}.aircraft-filter-row,.aircraft-form-grid,.aircraft-check-grid{grid-template-columns:1fr;}.aircraft-wrap{padding:12px;}}
       </style>
       <main class="aircraft-wrap ${mountOptions.embedded ? "embedded" : ""}">
         ${mountOptions.embedded ? `
@@ -721,6 +732,7 @@
     });
     field("aircraft-new-location")?.addEventListener("click", newLocation);
     field("aircraft-save-location")?.addEventListener("click", saveLocation);
+    field("aircraft-location-search")?.addEventListener("input", e => { state.locationSearch = e.target.value; render(); });
     document.querySelectorAll("[data-location-id]").forEach(btn => btn.addEventListener("click", () => { if (!confirmDiscard("You have unsaved location changes. Continue?")) return; state.selectedLocationId = btn.dataset.locationId; state.locationDraft = draftFromLocation(selectedLocation()); setLocationDirty(false); render(); }));
     document.querySelectorAll("[data-location-key]").forEach(el => {
       const key = el.dataset.locationKey;

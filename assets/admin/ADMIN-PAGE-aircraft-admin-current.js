@@ -1,11 +1,11 @@
 // ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-14-113-B
+// Internal Version: 2026-06-14-114-B
 // Purpose: Legacy-compatible loader for customer/organization-side Aircraft Admin foundation. Uses core-access-action, not platform-only admin backend.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-14-113-B";
+  const VERSION = "2026-06-14-114-B";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -15,9 +15,14 @@
   const DIRTY_MESSAGE = "You have unsaved aircraft admin changes. Leave anyway?";
 
   let supabaseClient = null;
+  let externalRoot = null;
+  let mountOptions = {};
+  let autoStarted = false;
 
   const state = {
     debug: new URLSearchParams(location.search).get("syncetc_debug") === "1",
+    embedded: false,
+    mountOptions: {},
     startedAt: performance.now(),
     token: "",
     email: "",
@@ -46,7 +51,7 @@
     steps: []
   };
 
-  function root() { return document.querySelector(ROOT_SELECTOR); }
+  function root() { return externalRoot || document.querySelector(ROOT_SELECTOR); }
   function mark(label, detail) { state.steps.push({ ms: Math.round(performance.now() - state.startedAt), label, detail: detail || "" }); }
   function clean(value) { return String(value ?? "").replace(/\s+/g, " ").trim(); }
   function arr(value) { return Array.isArray(value) ? value : []; }
@@ -92,6 +97,9 @@
     if (window.SyncEtcPortalShell && typeof window.SyncEtcPortalShell.setDirty === "function") {
       window.SyncEtcPortalShell.setDirty(state.dirty || state.locationDirty, DIRTY_MESSAGE);
     }
+    try {
+      if (typeof mountOptions.onDirtyChange === "function") mountOptions.onDirtyChange(state.dirty || state.locationDirty, DIRTY_MESSAGE);
+    } catch {}
   }
   function setLocationDirty(value) { state.locationDirty = !!value; setDirty(state.dirty); }
   function markDirty() { setDirty(true); }
@@ -196,7 +204,7 @@
       organization_key: clean(row.organization_key),
       display_name: clean(row.organization_name || row.display_name || row.organization_key || row.organization_id)
     }));
-    const stored = localStorage.getItem(SELECTED_ORG_KEY) || "";
+    const stored = state.orgId || localStorage.getItem(SELECTED_ORG_KEY) || "";
     const preferred = state.accessRows.find(row => clean(row.organization_id) === stored || clean(row.organization_key) === stored) || state.accessRows[0];
     if (!preferred) throw new Error("You do not have Aircraft Admin access for any organization.");
     state.accessRow = preferred;
@@ -609,6 +617,9 @@
         ${ROOT_SELECTOR}{--air-primary:${c.primary};--air-secondary:${c.secondary};--air-surface:${c.surface};--air-text:${c.text};--air-muted:${c.muted};--air-danger:${c.danger};--air-warning:${c.warning};font-family:Arial,Helvetica,sans-serif;color:var(--air-text);}
         ${ROOT_SELECTOR} *{box-sizing:border-box;}
         .aircraft-wrap{max-width:1280px;margin:0 auto;padding:18px;}
+        .aircraft-wrap.embedded{max-width:none;margin:0;padding:0;}
+        .aircraft-embedded-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);background:#fff;border-radius:16px;padding:14px 16px;margin-bottom:14px;box-shadow:0 8px 24px rgba(10,30,55,.05);}
+        .aircraft-embedded-head h2{margin:0 0 4px;font-size:24px;color:#172033;}.aircraft-embedded-head p{margin:0;color:var(--air-muted);font-size:13px;}
         .aircraft-hero{background:linear-gradient(135deg,var(--air-primary),color-mix(in srgb,var(--air-primary) 82%,#000));color:#fff;border-radius:18px;padding:22px;margin-bottom:14px;}
         .aircraft-hero h1{margin:0 0 6px;font-size:34px;letter-spacing:-.03em;}.aircraft-hero p{margin:0;opacity:.9;line-height:1.45;}.aircraft-topline{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:14px;}
         .aircraft-card{background:var(--air-surface);border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);border-radius:16px;box-shadow:0 8px 24px rgba(10,30,55,.06);padding:16px;margin-bottom:14px;}
@@ -622,12 +633,20 @@
         .aircraft-location-layout{display:grid;grid-template-columns:300px minmax(0,1fr);gap:14px;}.aircraft-location-list{display:flex;flex-direction:column;gap:8px;}.aircraft-status{padding:12px;border-radius:12px;border:1px solid #d6e0ec;background:#eef3f8;color:#26344d;margin-bottom:14px;}.aircraft-status.ok{background:#eaf7ef;color:#196f3b}.aircraft-status.error{background:#ffecec;color:var(--air-danger);border-color:#ffc6c6;}.aircraft-empty{border:1px dashed #cbd5e1;border-radius:12px;padding:14px;color:var(--air-muted);background:#f8fafc;}.aircraft-debug pre{background:#101827;color:#e7edf6;border-radius:12px;padding:12px;overflow:auto;font-size:12px;}
         @media(max-width:980px){.aircraft-grid,.aircraft-location-layout{grid-template-columns:1fr;}.aircraft-filter-row,.aircraft-form-grid,.aircraft-check-grid{grid-template-columns:1fr;}.aircraft-wrap{padding:12px;}}
       </style>
-      <main class="aircraft-wrap">
-        <section class="aircraft-hero">
-          <h1>Aircraft Admin</h1>
-          <p>Manage ${esc(orgName)} aircraft, bases, dispatch status, rates and usage placeholders. Squawks, reminders, scheduling and billing will build on this foundation later.</p>
-          <div class="aircraft-topline">${renderOrgSelector()}<span id="aircraft-dirty-badge" class="aircraft-pill ${state.dirty || state.locationDirty ? "warn" : "ok"}">${state.dirty || state.locationDirty ? "Unsaved changes" : "Saved"}</span></div>
-        </section>
+      <main class="aircraft-wrap ${mountOptions.embedded ? "embedded" : ""}">
+        ${mountOptions.embedded ? `
+          <section class="aircraft-embedded-head">
+            <div>
+              <h2>Aircraft / Asset Admin</h2>
+              <p>Manage bases, aircraft records, status, rates and usage placeholders for ${esc(orgName)}.</p>
+            </div>
+            <span id="aircraft-dirty-badge" class="aircraft-pill ${state.dirty || state.locationDirty ? "warn" : "ok"}">${state.dirty || state.locationDirty ? "Unsaved changes" : "Saved"}</span>
+          </section>` : `
+          <section class="aircraft-hero">
+            <h1>Aircraft Admin</h1>
+            <p>Manage ${esc(orgName)} aircraft, bases, dispatch status, rates and usage placeholders. Squawks, reminders, scheduling and billing will build on this foundation later.</p>
+            <div class="aircraft-topline">${renderOrgSelector()}<span id="aircraft-dirty-badge" class="aircraft-pill ${state.dirty || state.locationDirty ? "warn" : "ok"}">${state.dirty || state.locationDirty ? "Unsaved changes" : "Saved"}</span></div>
+          </section>`}
         <div id="aircraft-status" class="aircraft-status" style="display:none"></div>
         ${renderLocations()}
         <div class="aircraft-grid">${renderList()}${renderEditor()}</div>
@@ -674,10 +693,12 @@
     el.innerHTML = `<div style="max-width:960px;margin:24px auto;padding:18px;border:1px solid #ffc6c6;background:#fff3f3;border-radius:14px;color:#7f1d1d;font-family:Arial,Helvetica,sans-serif"><h2>Aircraft Admin could not load</h2><p>${esc(message)}</p><p style="font-size:13px;color:#555">Version ${esc(VERSION)}</p></div>`;
   }
 
-  async function init() {
+  async function init(options = {}) {
+    mountOptions = { ...mountOptions, ...obj(options) };
+    if (mountOptions.initialTab) state.activeTab = clean(mountOptions.initialTab) || state.activeTab;
     const el = root();
     if (!el) return;
-    el.innerHTML = `<div style="max-width:900px;margin:24px auto;padding:18px;border:1px solid #d7e0ea;border-radius:14px;font-family:Arial,Helvetica,sans-serif">Loading Aircraft Admin...</div>`;
+    el.innerHTML = `<div style="max-width:900px;margin:0 auto;padding:18px;border:1px solid #d7e0ea;border-radius:14px;font-family:Arial,Helvetica,sans-serif">Loading Aircraft Admin...</div>`;
     try {
       await initSupabase();
       await loadAccess();
@@ -687,9 +708,46 @@
     }
   }
 
+  function mount(target, options = {}) {
+    const el = typeof target === "string" ? document.querySelector(target) : target;
+    if (!el) throw new Error("Aircraft Admin mount target was not found.");
+    externalRoot = el;
+    mountOptions = { ...obj(options), embedded: options.embedded !== false };
+    if (options.organizationId) state.orgId = clean(options.organizationId);
+    state.startedAt = performance.now();
+    state.error = "";
+    state.status = "";
+    state.statusKind = "";
+    return init(mountOptions);
+  }
+
+  window.SyncEtcAircraftAdminPage = {
+    version: VERSION,
+    mount,
+    hasUnsavedChanges: () => !!(state.dirty || state.locationDirty),
+    confirmDiscard
+  };
+
+  window.SyncEtcAircraftAdmin = {
+    version: VERSION,
+    mount,
+    isDirty: () => !!(state.dirty || state.locationDirty),
+    confirmDiscard
+  };
+
+
   window.addEventListener("beforeunload", (event) => {
     if (state.dirty || state.locationDirty) { event.preventDefault(); event.returnValue = DIRTY_MESSAGE; return DIRTY_MESSAGE; }
   });
 
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();
+  function autoInit() {
+    if (autoStarted) return;
+    if (!document.querySelector(ROOT_SELECTOR)) return;
+    autoStarted = true;
+    init({ embedded: false });
+  }
+
+  if (!window.SyncEtcAircraftAdminSuppressAutoBoot) {
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", autoInit); else autoInit();
+  }
 })();

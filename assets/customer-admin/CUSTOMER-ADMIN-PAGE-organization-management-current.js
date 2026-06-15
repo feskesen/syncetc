@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-organization-management-current.js
-// Internal Version: 2026-06-14-114-E
+// Internal Version: 2026-06-14-114-F
 // Purpose: Customer/organization-side Organization Management console runtime. Immutable admin workbench shell with left navigation and right-panel module loading.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-14-114-E";
+  const VERSION = "2026-06-14-114-F";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -33,7 +33,7 @@
     activeModule: clean(new URLSearchParams(location.search).get("module")) || clean(new URLSearchParams(location.search).get("section")) || clean((location.hash || "").replace(/^#/, "")) || "overview",
     steps: [],
     lastResult: null,
-    openGroup: ""
+    openGroup: null
   };
 
   function root() { return document.querySelector(ROOT_SELECTOR); }
@@ -265,7 +265,7 @@
   }
 
   function openGroupName() {
-    if (state.openGroup) return state.openGroup;
+    if (state.openGroup !== null && state.openGroup !== undefined) return state.openGroup;
     const activeGroup = activeGroupName();
     return activeGroup && activeGroup !== "Home" ? activeGroup : "";
   }

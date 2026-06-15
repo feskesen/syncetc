@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-14-114-E
+// Internal Version: 2026-06-14-114-F
 // Purpose: Customer/organization-side Aircraft Admin foundation. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-14-114-E";
+  const VERSION = "2026-06-14-114-F";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -50,6 +50,7 @@
     locationDirty: false,
     draft: null,
     locationDraft: null,
+    locationSearchRestore: null,
     lastResult: null,
     steps: []
   };
@@ -66,6 +67,22 @@
   function money(value) { const n = Number(value); return Number.isFinite(n) ? `$${n.toFixed(2)}` : ""; }
   function numberOrBlank(value) { return value === null || value === undefined ? "" : String(value); }
   function bool(value) { return value === true || value === "true" || value === 1 || value === "1"; }
+
+  function restoreLocationSearchFocus() {
+    const restore = state.locationSearchRestore;
+    if (!restore) return;
+    state.locationSearchRestore = null;
+    window.setTimeout(() => {
+      const input = field("aircraft-location-search");
+      if (!input) return;
+      try { input.focus({ preventScroll: true }); } catch { input.focus(); }
+      try {
+        const start = Number.isFinite(restore.start) ? Math.min(restore.start, input.value.length) : input.value.length;
+        const end = Number.isFinite(restore.end) ? Math.min(restore.end, input.value.length) : start;
+        input.setSelectionRange(start, end);
+      } catch {}
+    }, 0);
+  }
 
   function styleConfig() {
     const style = obj(state.accessRow && state.accessRow.style_profile);
@@ -711,6 +728,7 @@
     bindEvents();
     renderStatus();
     renderActionState();
+    restoreLocationSearchFocus();
   }
 
   function bindEvents() {
@@ -735,10 +753,15 @@
     field("aircraft-new-location")?.addEventListener("click", newLocation);
     field("aircraft-save-location")?.addEventListener("click", saveLocation);
     field("aircraft-location-search")?.addEventListener("input", e => {
-      state.locationSearchText = e.target.value;
+      const input = e.target;
+      state.locationSearchText = input.value;
       if (locationSearchTimer) window.clearTimeout(locationSearchTimer);
       locationSearchTimer = window.setTimeout(() => {
         state.locationSearch = state.locationSearchText;
+        state.locationSearchRestore = {
+          start: typeof input.selectionStart === "number" ? input.selectionStart : input.value.length,
+          end: typeof input.selectionEnd === "number" ? input.selectionEnd : input.value.length
+        };
         render();
       }, 350);
     });

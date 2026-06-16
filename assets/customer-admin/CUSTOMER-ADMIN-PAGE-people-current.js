@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-16-116-H
+// Internal Version: 2026-06-16-116-I
 // Purpose: Organization Admin People workbench. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-H";
+  const VERSION = "2026-06-16-116-I";
   const ROOT_ID = "syncetc-organization-people-root";
   const ROOT_SELECTOR = "#syncetc-organization-people-root, #syncetc-people-admin-root, [data-syncetc-page=\"organization-people\"]";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -61,6 +61,7 @@
   let search = "";
   let filter = "all";
   let roleFilter = "all";
+  let advancedFiltersOpen = false;
   let message = "";
   let messageKind = "";
   let busy = false;
@@ -386,7 +387,7 @@
     await refreshAuth();
     setMessage("Logged in.", "ok");
   }
-  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [] }; selectedDefinition = null; authChecked = true; setShellState(); render(); }
+  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; roleFilter = "all"; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [] }; selectedDefinition = null; authChecked = true; setShellState(); render(); }
   async function resetOwnPassword() { await ensureSupabase(); const loginEmail = clean($("people-login-email")?.value || email).toLowerCase(); if (!loginEmail) throw new Error("Enter email first."); const { error } = await supabaseClient.auth.resetPasswordForEmail(loginEmail, { redirectTo: "https://syncetc.webflow.io/password-reset" }); if (error) throw error; setMessage("Password reset email requested.", "ok"); }
 
   async function runButton(id, label, fn) {
@@ -580,10 +581,10 @@
     if (k === "groups-roles") {
       return {
         kind: k, title: "Groups / Roles", kicker: "People",
-        helper: "Define organization roles and groups, then assign them to people from Members / People.",
+        helper: "Define organization roles and groups before assigning them to people.",
         listTitle: "Roles", newLabel: "New role", itemLabel: "role", rowsKey: "groups_roles",
         idField: "role_id", keyField: "role_key", categoryField: "role_type", categoryLabel: "Role type", categoryTip: "Choose how this role is used in your organization.",
-        categories: [["member","Member"],["board","Board"],["officer","Officer"],["committee","Committee"],["instructor","Instructor"],["manager","Manager"],["staff","Staff"],["admin","Admin / access"],["access","Admin / access"],["group","Group"],["custom","Custom"]]
+        categories: [["member","Member"],["board","Board"],["officer","Officer"],["committee","Committee"],["instructor","Instructor"],["manager","Manager"],["staff","Staff"],["access","Admin / access"],["group","Group"],["custom","Custom"]]
       };
     }
     if (k === "application-stages") {
@@ -717,16 +718,6 @@
     </aside>`;
   }
 
-  function definitionUsageLabel(row, cfg = definitionConfig()) {
-    if (cfg.kind === "groups-roles") {
-      const rk = key(row.role_key || row.definition_key);
-      if (!rk) return "";
-      const count = people.filter((person) => hasRole(person, rk)).length;
-      return count === 1 ? "1 person assigned" : `${count} people assigned`;
-    }
-    return "";
-  }
-
   function renderDefinitionRow(row) {
     const cfg = definitionConfig();
     const id = selectedDefinitionId(row);
@@ -734,8 +725,7 @@
     const status = definitionUiStatus(row);
     const muted = status === "archived" ? "archived" : status === "inactive" ? "restricted" : "";
     const category = clean(row[cfg.categoryField]);
-    const usage = definitionUsageLabel(row, cfg);
-    const meta = [category, usage, row.description].filter(Boolean).join(" • ");
+    const meta = [category, row.description].filter(Boolean).join(" • ");
     const canMove = status !== "archived";
     return `<div class="people-def-row people-person-card ${selectedClass} ${muted}" data-def-row data-def-id="${esc(id)}" draggable="${canMove ? "true" : "false"}">
       <span class="people-def-drag-handle" title="Drag to reorder" aria-hidden="true">⋮⋮</span>
@@ -1097,6 +1087,30 @@
   function hasSuperAdminRoleKeys(keysOrRow) { return roleKeyArrayHasAny(Array.isArray(keysOrRow) ? keysOrRow : arr(keysOrRow?.role_keys), ["organization-super-admin"]); }
   function isManagerRole(roleKey) { return ["applicant-manager","asset-manager","content-editor","document-manager","event-manager","gallery-manager"].includes(key(roleKey)); }
   function isAccessRelevantRole(roleKey) { const rk = key(roleKey); return ["organization-super-admin", "organization-admin", "board-member"].includes(rk) || isManagerRole(rk) || rk.endsWith("-admin") || rk.endsWith("-manager") || rk.endsWith("-editor"); }
+  function roleSettings(role) { return obj(role?.settings_json); }
+  function roleTypeOf(role) {
+    const rk = key(role?.role_key || role?.definition_key);
+    const explicit = key(role?.role_type || roleSettings(role).role_type || roleSettings(role).group_type);
+    if (explicit) return explicit;
+    if (["organization-super-admin", "organization-admin"].includes(rk) || rk.endsWith("-admin")) return "admin";
+    if (["board-member", "director", "president", "vice-president", "secretary", "treasurer"].includes(rk)) return "board";
+    if (isManagerRole(rk) || rk.endsWith("-manager") || rk.endsWith("-editor")) return "manager";
+    if (rk.includes("instructor") || rk.includes("cfi")) return "instructor";
+    if (rk === "member") return "member";
+    return "custom";
+  }
+  function roleDefinitionByKey(roleKey) { const rk = key(roleKey); return sortRoles(options.roles).find((role) => key(role.role_key) === rk) || null; }
+  function roleTypeOfKey(roleKey) { return roleTypeOf(roleDefinitionByKey(roleKey) || { role_key: roleKey }); }
+  function personHasRoleType(p, types) { const wanted = new Set(arr(types).map(key)); return arr(p.role_keys).map(key).some((rk) => wanted.has(roleTypeOfKey(rk))); }
+  function roleTypeLabel(type) {
+    const t = key(type || "custom");
+    return ({ admin: "Administrative access", access: "Administrative access", board: "Board / officers", officer: "Board / officers", committee: "Committees", instructor: "Instructors", manager: "Managers", staff: "Staff", member: "Member roles", group: "Groups", custom: "Other roles" })[t] || "Other roles";
+  }
+  function roleTypeSortValue(type) {
+    const t = key(type || "custom");
+    return ({ admin: 10, access: 15, board: 20, officer: 25, manager: 30, instructor: 40, committee: 50, staff: 60, member: 70, group: 80, custom: 90 })[t] || 95;
+  }
+  function activeAssignableRoles() { return sortRoles(options.roles).filter((role) => !role.archived_at && key(role.status || "active") !== "archived"); }
   function isAdminAccessRelevant(p) { return hasAdminRoleKeys(p) || arr(p.role_keys).some(isAccessRelevantRole) || bool(p.login_linked); }
   function isOwnSelectedPerson(row = selected || {}) {
     const actor = selectedRow() || {};
@@ -1107,62 +1121,6 @@
     return Boolean(actorEmail && rowEmail && actorEmail === rowEmail);
   }
   function isPlatformInternal(p) { return bool(p.is_platform_internal) || key(p.title).startsWith("platform-admin"); }
-
-  function roleDefinitionsForAssignment() {
-    return sortRoles(arr(options.roles)).filter((role) => definitionUiStatus(role) !== "archived");
-  }
-
-  function roleDefinitionByKey(roleKey) {
-    const wanted = key(roleKey);
-    return roleDefinitionsForAssignment().find((role) => key(role.role_key) === wanted) || null;
-  }
-
-  function roleTypeLabel(value) {
-    const v = key(value || "custom");
-    const labels = { member:"Member", board:"Board", officer:"Officer", committee:"Committee", instructor:"Instructor", manager:"Manager", staff:"Staff", admin:"Admin / access", access:"Admin / access", group:"Group", custom:"Custom", other:"Other" };
-    return labels[v] || clean(value || "Other");
-  }
-
-  function roleAssignmentGroupKey(role) {
-    const rk = key(role?.role_key);
-    if (["organization-super-admin", "organization-admin"].includes(rk) || isManagerRole(rk) || ["access", "admin"].includes(key(role?.role_type))) return "access";
-    return key(role?.role_type || "custom") || "custom";
-  }
-
-  function roleAssignmentGroups(roles) {
-    const groupOrder = ["access", "board", "officer", "manager", "committee", "instructor", "staff", "group", "member", "custom", "other"];
-    const buckets = new Map();
-    arr(roles).forEach((role) => {
-      const g = roleAssignmentGroupKey(role);
-      if (!buckets.has(g)) buckets.set(g, []);
-      buckets.get(g).push(role);
-    });
-    return Array.from(buckets.entries()).sort((a,b) => {
-      const ai = groupOrder.indexOf(a[0]);
-      const bi = groupOrder.indexOf(b[0]);
-      return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi) || roleTypeLabel(a[0]).localeCompare(roleTypeLabel(b[0]));
-    }).map(([groupKey, rows]) => ({ groupKey, label: roleTypeLabel(groupKey), rows: sortRoles(rows) }));
-  }
-
-  function personRoleDisplayLabels(p, max = 2) {
-    const defsByKey = new Map(roleDefinitionsForAssignment().map((role) => [key(role.role_key), role]));
-    return arr(p.role_keys).map((roleKey, index) => {
-      const role = defsByKey.get(key(roleKey));
-      return clean(role?.label || arr(p.role_labels)[index] || roleKey);
-    }).filter((label) => label && key(label) !== "member").slice(0, max);
-  }
-
-  function personMatchesRoleFilter(p) {
-    const rf = key(roleFilter || "all");
-    return !rf || rf === "all" || hasRole(p, rf);
-  }
-
-  function roleFilterOptions() {
-    const rows = roleDefinitionsForAssignment();
-    const basePeople = people.filter((p) => personMatchesSearch(p, search) && personMatchesLens(p, filter));
-    const countFor = (roleKey) => basePeople.filter((p) => hasRole(p, roleKey)).length;
-    return [["all", `All roles (${basePeople.length})`]].concat(rows.map((role) => [key(role.role_key), `${clean(role.label || role.role_key)} (${countFor(role.role_key)})`]));
-  }
 
   function personMatchesSearch(p, searchText) {
     const s = lower(searchText);
@@ -1193,13 +1151,18 @@
     if (f === "restricted") return restricted;
     if (["admins-access", "admin-access", "access"].includes(f)) return isAdminAccessRelevant(p);
     if (f === "admins") return hasAnyRole(p, ["organization-super-admin", "organization-admin"]);
-    if (f === "board") return hasRole(p, "board-member");
-    if (f === "managers") return arr(p.role_keys).some(isManagerRole);
+    if (f === "board") return hasRole(p, "board-member") || personHasRoleType(p, ["board", "officer"]);
+    if (f === "managers") return arr(p.role_keys).some(isManagerRole) || personHasRoleType(p, ["manager"]);
     if (f === "users") return hasRole(p, "member") && !hasAnyRole(p, ["organization-super-admin", "organization-admin"]);
     if (f === "non-member") return classKey === "non-member" || classCat === "non-member" || classCat === "non_member";
     if (f === "no-login") return !bool(p.login_linked);
     if (f === "platform-internal") return isPlatformInternal(p);
     return true;
+  }
+
+  function personMatchesRoleFilter(p, selectedRole = roleFilter) {
+    const rf = key(selectedRole || "all");
+    return rf === "all" || arr(p.role_keys).map(key).includes(rf);
   }
 
   function filteredPeople() {
@@ -1211,9 +1174,21 @@
     const keys = ["all","active","applicants","waitlist","onboarding","former","restricted","admins-access","admins","board","managers","users","non-member","no-login","archived"];
     const out = Object.fromEntries(keys.map((f) => [f, 0]));
     people.forEach((p) => {
+      // Primary view counts should stay understandable. Advanced group/role filters narrow the visible rows,
+      // but they should not make the main "All" view count look like it means something else.
       if (!personMatchesSearch(p, search)) return;
-      if (!personMatchesRoleFilter(p)) return;
       keys.forEach((f) => { if (personMatchesLens(p, f)) out[f] += 1; });
+    });
+    return out;
+  }
+
+  function roleFilterCounts() {
+    const out = { all: 0 };
+    activeAssignableRoles().forEach((role) => { out[key(role.role_key)] = 0; });
+    people.forEach((p) => {
+      if (!personMatchesSearch(p, search) || !personMatchesLens(p, filter)) return;
+      out.all += 1;
+      arr(p.role_keys).map(key).forEach((rk) => { if (Object.prototype.hasOwnProperty.call(out, rk)) out[rk] += 1; });
     });
     return out;
   }
@@ -1230,11 +1205,35 @@
     return `<select id="people-org-select">${rows.map((a) => `<option value="${esc(a.organization_id)}" ${String(a.organization_id) === selectedOrgId ? "selected" : ""}>${esc(a.organization_name)} (${esc(a.organization_key)})</option>`).join("")}</select>`;
   }
 
+  function activeRoleFilterLabel() {
+    const rf = key(roleFilter || "all");
+    if (rf === "all") return "";
+    const role = roleDefinitionByKey(rf) || {};
+    return clean(role.label || role.name || rf.replace(/-/g, " ")) || "Selected role";
+  }
+
+  function renderAdvancedPeopleFilters() {
+    const roles = activeAssignableRoles();
+    const hasRoleFilter = key(roleFilter || "all") !== "all";
+    if (!roles.length && !hasRoleFilter) return "";
+    const open = Boolean(advancedFiltersOpen || hasRoleFilter);
+    const rc = roleFilterCounts();
+    const roleLabel = activeRoleFilterLabel();
+    const activeChips = hasRoleFilter
+      ? `<div class="people-active-filters"><span>Active filter:</span><button class="people-filter-chip" data-clear-role-filter="1" type="button">Group / role: ${esc(roleLabel)} ×</button><button id="people-clear-advanced-filters" class="people-link-btn" type="button">Clear</button></div>`
+      : "";
+    const roleChoices = roles.some((role) => key(role.role_key) === key(roleFilter)) || !hasRoleFilter
+      ? roles
+      : [{ role_key: roleFilter, label: roleLabel }, ...roles];
+    const panel = open && roleChoices.length
+      ? `<div class="people-advanced-panel"><label class="people-field people-role-filter"><span>Group / role</span><select id="people-role-filter-select"><option value="all" ${roleFilter === "all" ? "selected" : ""}>All groups / roles (${rc.all || 0})</option>${roleChoices.map((role) => { const rk = key(role.role_key); return `<option value="${esc(rk)}" ${roleFilter === rk ? "selected" : ""}>${esc(role.label || rk)} (${rc[rk] || 0})</option>`; }).join("")}</select></label></div>`
+      : "";
+    return `<div class="people-advanced-filters">${activeChips}<button id="people-advanced-filters-toggle" class="people-link-btn people-advanced-toggle" type="button">${open ? "Hide advanced filters" : "Advanced filters"}</button>${panel}</div>`;
+  }
+
   function renderFinder() {
     const c = counts();
     const rows = filteredPeople();
-    const roleOptions = roleFilterOptions();
-    const showRoleFilter = !isAdminAccessLens() && roleDefinitionsForAssignment().length > 0;
     const adminLens = isAdminAccessLens();
     const filters = adminLens
       ? [["admins-access","Admins & access"],["admins","Organization admins"],["managers","Managers"],["board","Board"],["users","Members"],["no-login","No login"],["archived","Archived"],["all","All"]]
@@ -1243,7 +1242,7 @@
       <div class="people-list-head"><div><h3>${adminLens ? "Administrators & Access" : "People"}</h3><p>${adminLens ? "Find people with login, manager, board, or administrator access." : "Search and filter organization records."}</p></div></div>
       <div class="people-toolbar-row"><button id="people-export" class="people-btn secondary" type="button">Export</button><button id="people-print" class="people-btn secondary" type="button">Print</button><button id="people-refresh" class="people-btn secondary" type="button">Refresh</button></div>
       <label class="people-field people-status-filter"><span>${adminLens ? "Access lens" : "Status / lens"}</span><select id="people-filter-select">${filters.map(([f,label]) => `<option value="${esc(f)}" ${filter===f ? "selected" : ""}>${esc(label)} (${c[f] || 0})</option>`).join("")}</select></label>
-      ${showRoleFilter ? `<label class="people-field people-status-filter"><span>Role / group</span><select id="people-role-filter-select">${roleOptions.map(([value,label]) => `<option value="${esc(value)}" ${roleFilter===value ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>` : ""}
+      ${renderAdvancedPeopleFilters()}
       <div class="people-search-wrap"><input id="people-search" value="${esc(search)}" placeholder="Search names, emails, phones, roles…"><button id="people-clear-search" class="people-icon-btn" title="Clear" type="button">×</button></div>
       <div class="people-sort-hint">Sorted by last name. Archived rows stay visible in All and are muted at the bottom.</div>
       <div class="people-compact-list">${rows.length ? rows.map(renderPersonCard).join("") : `<div class="people-empty-row">No people match this search.</div>`}</div>
@@ -1256,10 +1255,11 @@
     const selectedClass = selected?.membership_id === p.membership_id ? "selected" : "";
     const archived = isArchivedRow(p) ? "archived" : "";
     const restricted = isRestrictedRow(p) ? "restricted" : "";
-    const roleBadges = personRoleDisplayLabels(p, 2);
-    const badges = [p.lifecycle_status_label || p.lifecycle_status_key, p.membership_class_label, ...roleBadges, p.login_linked ? "Login" : "No login"].filter(Boolean).slice(0, 5);
+    const primaryRole = hasSuperAdminRoleKeys(p) ? "Super Admin" : hasAnyRole(p, ["organization-admin"]) ? "Admin" : arr(p.role_keys).some(isManagerRole) || personHasRoleType(p, ["manager"]) ? "Manager" : hasRole(p, "board-member") || personHasRoleType(p, ["board", "officer"]) ? "Board" : (arr(p.role_labels).find(Boolean) || "");
+    const badges = [p.lifecycle_status_label || p.lifecycle_status_key, p.membership_class_label, primaryRole, p.login_linked ? "Login" : "No login"].filter(Boolean).slice(0, 4);
     return `<button class="people-person-card ${selectedClass} ${archived} ${restricted}" data-open="${esc(p.membership_id)}" type="button"><span class="person-main"><strong>${esc(finderDisplayName(p))}</strong><small>${esc(clean(p.primary_email || p.email || p.primary_phone || p.phone || "No contact on file"))}</small></span><span class="person-badges">${badges.map((b) => `<em>${esc(b)}</em>`).join("")}</span></button>`;
   }
+
 
 
   function renderPersonTimeline(row) {
@@ -1268,32 +1268,42 @@
   }
 
 
+  function renderRoleAssignmentCheckbox(role, rowRoleKeys, mayEditAnyRole, mayEditSuperAdmin) {
+    const rk = key(role.role_key);
+    const protectedAdminRole = isSuperAdminRole(rk);
+    const locked = !mayEditAnyRole || (protectedAdminRole && !mayEditSuperAdmin);
+    const hint = protectedAdminRole && !mayEditSuperAdmin ? "Super Admin locked" : "";
+    return checkbox(`role-${rk}`, role.label || rk, rowRoleKeys.includes(rk), locked, hint);
+  }
+
+  function renderRoleAssignmentSection(title, roles, rowRoleKeys, mayEditAnyRole, mayEditSuperAdmin, emptyText = "No roles in this section yet.") {
+    const visible = arr(roles).filter(Boolean);
+    return `<section class="people-role-section"><div class="people-role-section-head"><h4>${esc(title)}</h4><span>${esc(visible.length)} available</span></div>${visible.length ? `<div class="people-role-grid">${visible.map((role) => renderRoleAssignmentCheckbox(role, rowRoleKeys, mayEditAnyRole, mayEditSuperAdmin)).join("")}</div>` : `<div class="people-empty-row compact">${esc(emptyText)}</div>`}</section>`;
+  }
+
   function renderAccessTab(row, roles, mayEdit, mayEditAnyRole, mayEditSuperAdmin) {
     const rowRoleKeys = arr(row.role_keys).map(key);
-    const rowRoleSet = new Set(rowRoleKeys);
-    const roleRows = roleDefinitionsForAssignment();
-    const selectedRoles = roleRows.filter((role) => rowRoleSet.has(key(role.role_key)));
-    const selectedLabels = selectedRoles.map((role) => clean(role.label || role.role_key)).filter(Boolean);
-    const adminLevel = hasSuperAdminRoleKeys(row) ? "Organization Super Admin" : hasAdminRoleKeys(row) ? "Organization Admin" : arr(row.role_keys).some(isManagerRole) ? "Manager access" : hasRole(row, "board-member") ? "Board access" : "Standard access";
+    const roleLabels = arr(row.role_labels).length ? arr(row.role_labels) : rowRoleKeys;
+    const activeRoles = activeAssignableRoles();
+    const adminRoles = activeRoles.filter((role) => ["admin", "access"].includes(roleTypeOf(role)) || hasAdminRoleKeys([role.role_key]) || isAccessRelevantRole(role.role_key));
+    const nonAdminRoles = activeRoles.filter((role) => !adminRoles.some((adminRole) => key(adminRole.role_key) === key(role.role_key)));
+    const roleGroups = Array.from(nonAdminRoles.reduce((map, role) => {
+      const type = roleTypeOf(role);
+      const label = roleTypeLabel(type);
+      if (!map.has(label)) map.set(label, { label, order: roleTypeSortValue(type), roles: [] });
+      map.get(label).roles.push(role);
+      return map;
+    }, new Map()).values()).sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+    const adminLevel = hasSuperAdminRoleKeys(row) ? "Organization Super Admin" : hasAdminRoleKeys(row) ? "Organization Admin" : arr(row.role_keys).some(isManagerRole) || personHasRoleType(row, ["manager"]) ? "Manager access" : hasRole(row, "board-member") || personHasRoleType(row, ["board", "officer"]) ? "Board access" : "Standard access";
     const ownWarning = isOwnSelectedPerson(row) ? `<p class="people-warning">You are editing your own access. Changes that would remove your organization admin access are blocked.</p>` : "";
     const accessSummary = `<div class="people-access-summary">
       <div><span>Login</span><strong>${row.login_linked ? "Linked" : "Not linked"}</strong></div>
       <div><span>Access level</span><strong>${esc(adminLevel)}</strong></div>
-      <div><span>Groups / roles</span><strong>${esc(selectedLabels.length ? selectedLabels.join(", ") : "None assigned")}</strong></div>
+      <div><span>Assigned groups / roles</span><strong>${esc(roleLabels.length ? roleLabels.join(", ") : "No groups or roles assigned")}</strong></div>
     </div>`;
-    const roleSections = roleAssignmentGroups(roleRows).map((group) => {
-      const rows = group.rows.map((role) => {
-        const rk = key(role.role_key);
-        const locked = !mayEditAnyRole || (isSuperAdminRole(rk) && !mayEditSuperAdmin);
-        const checked = rowRoleSet.has(rk);
-        const description = clean(role.description || obj(role.settings_json).description || "");
-        const hint = locked && isSuperAdminRole(rk) ? "Super Admin locked" : "";
-        return `<label class="people-role-option ${checked ? "checked" : ""} ${locked ? "locked" : ""}"><input id="role-${esc(rk)}" type="checkbox" ${checked ? "checked" : ""} ${locked ? "disabled" : ""}><span><strong>${esc(role.label || rk)}</strong>${description ? `<small>${esc(description)}</small>` : hint ? `<small>${esc(hint)}</small>` : ""}</span></label>`;
-      }).join("");
-      return `<section class="people-role-group"><h4>${esc(group.label)}</h4><div class="people-role-grid">${rows}</div></section>`;
-    }).join("");
-    const emptyRoles = !roleRows.length ? `<div class="people-empty-row">No groups or roles are active yet. Define them under Groups / Roles, then return here to assign them.</div>` : "";
-    return `<div class="people-access-callout"><div><strong>Access actions</strong><p>Send login help or update this person's groups and roles.</p></div><div class="people-inline-actions"><button id="people-invite" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Send invite</button><button id="people-reset-password" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Password reset</button></div></div>${accessSummary}${ownWarning}<div class="people-role-assignment-head"><div><strong>Groups & roles</strong><p>Choose the groups, committees, officer roles, instructor roles, or access roles this person belongs to.</p></div></div>${emptyRoles}${roleSections}${!mayEditAnyRole ? `<p class="people-warning">Role editing is locked for your account.</p>` : !mayEditSuperAdmin ? `<p class="people-warning">Organization Super Admin is locked. You can manage ordinary roles and Organization Admin.</p>` : ""}`;
+    const adminSection = renderRoleAssignmentSection("Administrative access", adminRoles, rowRoleKeys, mayEditAnyRole, mayEditSuperAdmin, "No administrative roles are available.");
+    const groupSections = roleGroups.length ? roleGroups.map((group) => renderRoleAssignmentSection(group.label, group.roles, rowRoleKeys, mayEditAnyRole, mayEditSuperAdmin)).join("") : `<section class="people-role-section"><div class="people-empty-row compact">Create groups or roles in Groups / Roles, then assign them here.</div></section>`;
+    return `<div class="people-access-callout"><div><strong>Login actions</strong><p>Send login help or password reset instructions for this person.</p></div><div class="people-inline-actions"><button id="people-invite" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Send invite</button><button id="people-reset-password" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Password reset</button></div></div>${accessSummary}${ownWarning}<div class="people-role-assignment-wrap"><p class="muted">Assign the organization hats this person should hold. Most groups are for organization lists, communication, and workflow routing. Admin roles should be limited to trusted people.</p>${adminSection}${groupSections}</div>${!mayEditAnyRole ? `<p class="people-warning">Role editing is locked for your account.</p>` : !mayEditSuperAdmin ? `<p class="people-warning">Organization Super Admin is locked. You can manage ordinary groups, roles, and Organization Admin.</p>` : ""}`;
   }
 
 
@@ -1348,7 +1358,7 @@
     if (isDefinitionMode()) return renderDefinitionModule(warningMessage);
     const adminLens = isAdminAccessLens();
     const title = adminLens ? "Administrators & Access" : (clean(pageConfig?.title) || "Members / People");
-    const intro = adminLens ? "Manage login status, invitations, password help, and organization roles." : (clean(pageConfig?.intro_text) || "Manage people, member lifecycle, contact details, access roles, and administrator flags from one workbench.");
+    const intro = adminLens ? "Manage login status, invitations, password help, and organization roles." : (clean(pageConfig?.intro_text) || "Manage people, member lifecycle, contact details, group assignments, access roles, and qualifications from one workbench.");
     return `<section class="people-module-header"><div><span class="people-kicker">People</span><h2>${esc(title)}</h2><p>${esc(intro)}</p></div><div class="people-header-actions">${!embeddedMode ? renderOrgSelector() : ""}<button id="people-new" class="people-btn outline" type="button">New person</button></div></section>${warningMessage}<section class="people-workbench">${renderFinder()}${renderEditor()}</section>`;
   }
 
@@ -1358,11 +1368,11 @@
       .people-wrap *{box-sizing:border-box}.people-card,.people-module-header,.people-list-panel,.people-editor-panel{background:rgba(255,255,255,.98);border:1px solid var(--people-border);border-radius:14px;box-shadow:0 6px 18px rgba(16,24,40,.07)}
       .people-card{padding:18px;margin:12px 0}.people-hero{display:${embeddedMode ? "none" : "block"};background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.78)});color:#fff}.people-hero h1{margin:8px 0;color:#fff;font-size:clamp(28px,4vw,42px);letter-spacing:-.035em}.people-hero p{color:rgba(255,255,255,.9);max-width:900px}.people-eyebrow,.people-kicker{display:inline-flex;padding:5px 10px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:11px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.people-hero .people-eyebrow{background:rgba(255,255,255,.16);color:#fff}
       .people-module-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:15px 17px;margin:0 0 10px;border-top:3px solid var(--people-primary)}.people-module-header h2{margin:6px 0 4px;font-size:25px;line-height:1.1;color:#101828}.people-module-header p{margin:0;color:var(--people-muted);font-weight:650}.people-header-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
-      .people-workbench{display:grid;grid-template-columns:330px minmax(0,1fr);gap:10px;align-items:start}.people-list-panel{padding:12px;position:sticky;top:10px;max-height:calc(100vh - 24px);overflow:auto}.people-list-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}.people-list-head h3,.people-editor-head h3{margin:0;font-size:21px;color:#101828}.people-list-head p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-toolbar-row,.people-inline-actions,.people-action-buttons,.people-pill-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.people-toolbar-row{margin:8px 0 10px}.people-btn,.people-icon-btn,.people-link-btn{border:0;border-radius:999px;background:var(--people-primary);color:#fff;font-weight:900;padding:10px 14px;cursor:pointer;text-decoration:none;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}.people-btn:hover,.people-person-card:hover{transform:translateY(-1px)}.people-btn.secondary,.people-btn.outline{background:#fff;color:var(--people-primary);border:1px solid var(--people-primary)}.people-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-btn:disabled{opacity:.55;cursor:not-allowed;transform:none}.people-link-btn{background:transparent;color:var(--people-primary);text-decoration:underline;padding:8px}.people-message{margin-top:12px;padding:10px 12px;border-radius:12px;background:var(--people-soft);color:var(--people-primary);font-weight:850}.people-message:empty{display:none}.people-message.ok{background:#ecfdf5;color:#047857}.people-message.warn,.people-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:12px;padding:10px 12px}.people-action-status{display:block;margin-top:3px;color:var(--people-muted);font-size:12px;line-height:1.25}.people-context-single{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);padding:9px 12px;border-radius:999px;font-weight:900}.muted{color:var(--people-muted)}
-      .people-field{display:grid;gap:6px;font-weight:850}.people-field span{font-size:13px}.people-field small{font-weight:600;color:var(--people-muted);line-height:1.35}.people-field input,.people-field select,.people-field textarea,.people-search-wrap input,#people-org-select{width:100%;border:1px solid var(--people-border);border-radius:12px;background:#fff;color:var(--people-text);padding:10px 12px;font:inherit;min-height:42px}.people-field textarea{min-height:104px;resize:vertical}.people-field input[readonly],.people-field input:disabled,.people-field select:disabled{background:#f8fafc;color:var(--people-muted);cursor:not-allowed}.people-field-wide{grid-column:1/-1}.field-error{color:#b91c1c!important;font-weight:900!important}.people-field.disabled-field{opacity:.72}.people-status-filter{margin:10px 0}.people-search-wrap{position:relative;margin:10px 0}.people-search-wrap input{padding-right:44px}.people-icon-btn{position:absolute;right:6px;top:5px;width:32px;height:32px;padding:0;background:var(--people-soft);color:var(--people-primary)}.people-sort-hint{font-size:12px;color:var(--people-muted);font-weight:750;margin:8px 0 10px}.people-compact-list{display:grid;gap:7px;max-height:calc(100vh - 320px);min-height:240px;overflow:auto;padding:3px 2px 8px;overscroll-behavior:contain}.people-person-card{text-align:left;border:1px solid var(--people-border);border-radius:13px;background:#fff;color:var(--people-text);padding:10px;display:grid;gap:8px;cursor:pointer;box-shadow:0 3px 11px ${rgba(cfg.primary,.04)}}.people-person-card.selected{border-color:var(--people-primary);box-shadow:0 0 0 3px var(--people-strong-soft)}.people-person-card.archived{opacity:.58;background:#f8fafc}.people-person-card.restricted:not(.archived){border-color:#fed7aa;background:#fff7ed}.person-main{display:grid;gap:3px;min-width:0}.person-main strong{font-weight:950;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-main small{color:var(--people-muted);font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-badges{display:flex;gap:4px;flex-wrap:wrap}.person-badges em{font-style:normal;font-size:10px;font-weight:900;border-radius:999px;padding:3px 6px;background:var(--people-soft);color:var(--people-primary)}.people-empty-row{border:1px dashed var(--people-border);border-radius:13px;padding:18px;text-align:center;color:var(--people-muted);background:#fff}.people-empty{min-height:380px;display:grid;align-content:center;text-align:center;padding:24px}
-      .people-editor-panel{min-width:0;padding:0;overflow:hidden}.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:15px 17px;border-bottom:1px solid var(--people-border)}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}.people-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--people-border);background:#fcfcfd}.people-tab{border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-weight:900;padding:8px 11px;cursor:pointer}.people-tab.active{background:var(--people-primary);color:#fff;border-color:var(--people-primary)}.people-tab-panel{padding:16px}.people-tab-panel[hidden]{display:none!important}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}.people-access-status-grid{padding-bottom:8px}.people-affiliation-grid{padding-top:8px;border-top:1px solid var(--people-border)}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;margin:10px 0 14px}.primary-pick{min-height:42px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:12px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border:1px solid var(--people-border);border-radius:12px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-access-callout{display:flex;justify-content:space-between;gap:14px;align-items:center;border:1px solid var(--people-border);border-radius:13px;background:var(--people-soft);padding:12px;margin-bottom:14px}.people-access-callout p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-access-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 14px}.people-access-summary>div{border:1px solid var(--people-border);border-radius:12px;background:#fff;padding:10px;display:grid;gap:3px}.people-access-summary span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-access-summary strong{font-size:13px;line-height:1.25}.people-inline-actions{margin:10px 0}.people-action-row{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid var(--people-border);padding:12px 14px;background:#fcfcfd}.people-save-state{display:grid;gap:2px;font-weight:900;color:var(--people-muted)}.people-save-state.dirty{color:#9a3412}.people-photo-panel{grid-column:1/-1;display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;align-items:center;border:1px dashed var(--people-border);border-radius:14px;background:var(--people-soft);padding:14px}.people-photo-panel.dragover{box-shadow:0 0 0 3px var(--people-strong-soft);border-color:var(--people-primary)}.people-photo-preview{width:132px;height:132px;border-radius:18px;background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--people-border);box-shadow:0 10px 26px ${rgba(cfg.primary,.16)}}.people-photo-preview img{width:100%;height:100%;object-fit:cover;display:block}.people-photo-preview span{font-size:38px;font-weight:950;letter-spacing:.03em}.people-photo-copy strong{display:block;color:var(--people-primary);font-size:15px;margin-bottom:4px}.people-photo-copy p{margin:0 0 8px;color:var(--people-muted);font-weight:750}.people-photo-copy small{display:block;color:var(--people-muted);font-weight:750;margin-bottom:10px}.people-photo-actions{display:flex;gap:8px;flex-wrap:wrap}.people-timeline-list{display:grid;gap:10px;margin-top:10px}.people-note-card{border-left:4px solid var(--people-primary);background:#f8fafc;border-radius:12px;padding:10px}.people-note-card strong{display:block;color:var(--people-primary)}.people-note-card span{font-size:12px;color:#64748b;font-weight:800}.people-note-card p{margin:6px 0;white-space:pre-wrap}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:12px;padding:14px;font-size:12px;max-height:260px;overflow:auto}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}.people-def-row{padding:0;display:grid;grid-template-columns:30px minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab}.people-def-row.dragging{opacity:.55}.people-def-row.drag-over{outline:2px dashed var(--people-primary);outline-offset:2px}.people-def-drag-handle{display:flex;align-items:center;justify-content:center;color:var(--people-muted);font-weight:950;letter-spacing:-5px;background:#f8fafc;border-right:1px solid var(--people-border);cursor:grab;user-select:none}.people-def-row .people-def-main{border:0;background:transparent;text-align:left;padding:10px;display:grid;gap:7px;cursor:pointer;color:inherit}.people-def-order{display:flex;flex-direction:column;justify-content:space-between;border-left:1px solid var(--people-border);background:#f8fafc}.people-order-button{border:0;background:#f8fafc;color:var(--people-primary);font-weight:950;width:34px;min-height:32px;cursor:pointer}.people-order-button:first-child{border-bottom:1px solid var(--people-border)}.people-order-button:last-child{border-top:1px solid var(--people-border)}.people-order-button:disabled{opacity:.35;cursor:not-allowed}.people-info-btn{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:5px;border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-size:11px;font-weight:950;line-height:1;vertical-align:middle;padding:0;cursor:help}.people-def-editor .people-tab-panel>.people-form-grid{grid-template-columns:1fr}.people-def-editor .people-form-grid .people-form-grid{grid-template-columns:repeat(3,minmax(0,1fr));}.people-role-assignment-head{margin:16px 0 8px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.people-role-assignment-head strong{display:block;color:var(--people-primary);font-size:14px}.people-role-assignment-head p{margin:3px 0 0;color:var(--people-muted);font-size:12px;font-weight:800}.people-role-group{border:1px solid var(--people-border);border-radius:14px;padding:12px;margin:12px 0;background:#fff}.people-role-group h4{margin:0 0 9px;color:var(--people-primary);font-size:13px}.people-role-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.people-role-option{border:1px solid var(--people-border);border-radius:12px;padding:10px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:start;background:#f8fafc;cursor:pointer}.people-role-option.checked{border-color:color-mix(in srgb,var(--people-primary) 45%,#fff);background:color-mix(in srgb,var(--people-primary) 8%,#fff)}.people-role-option.locked{opacity:.72;cursor:not-allowed}.people-role-option input{margin-top:2px}.people-role-option strong{display:block;color:#111827;font-size:13px}.people-role-option small{display:block;color:var(--people-muted);font-weight:750;margin-top:2px}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}
-      @media(max-width:1100px){.people-workbench{grid-template-columns:1fr}.people-list-panel{position:static;max-height:none}.people-compact-list{max-height:320px;min-height:0}.people-form-grid,.people-check-grid,.people-access-summary{grid-template-columns:1fr 1fr}.people-module-header,.people-action-row,.people-access-callout{display:grid}.people-header-actions,.people-action-buttons{justify-content:flex-start}.phone-grid{grid-template-columns:1fr}.primary-pick{justify-content:flex-start;padding:0 12px}}
-      @media(max-width:640px){.people-form-grid,.people-check-grid,.people-access-summary{grid-template-columns:1fr}.people-photo-panel{grid-template-columns:1fr}.people-photo-preview{margin:auto}.people-btn{width:100%}.people-action-buttons{width:100%}}
+      .people-workbench{display:grid;grid-template-columns:330px minmax(0,1fr);gap:10px;align-items:start}.people-list-panel{padding:12px;position:sticky;top:10px;max-height:calc(100vh - 24px);overflow:auto}.people-list-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}.people-list-head h3,.people-editor-head h3{margin:0;font-size:21px;color:#101828}.people-list-head p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-toolbar-row,.people-inline-actions,.people-action-buttons,.people-pill-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.people-toolbar-row{margin:8px 0 10px}.people-btn,.people-icon-btn,.people-link-btn{border:0;border-radius:999px;background:var(--people-primary);color:#fff;font-weight:900;padding:10px 14px;cursor:pointer;text-decoration:none;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}.people-btn:hover,.people-person-card:hover{transform:translateY(-1px)}.people-btn.secondary,.people-btn.outline{background:#fff;color:var(--people-primary);border:1px solid var(--people-primary)}.people-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-btn:disabled{opacity:.55;cursor:not-allowed;transform:none}.people-link-btn{background:transparent;color:var(--people-primary);text-decoration:underline;padding:8px}.people-message{margin-top:12px;padding:10px 12px;border-radius:12px;background:var(--people-soft);color:var(--people-primary);font-weight:850}.people-message:empty{display:none}.people-message.ok{background:#ecfdf5;color:#047857}.people-message.warn,.people-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:12px;padding:10px 12px}.people-action-status{display:block;margin-top:3px;color:var(--people-muted);font-size:12px;line-height:1.25}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}.people-context-single{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);padding:9px 12px;border-radius:999px;font-weight:900}.muted{color:var(--people-muted)}
+      .people-field{display:grid;gap:6px;font-weight:850}.people-field span{font-size:13px}.people-field small{font-weight:600;color:var(--people-muted);line-height:1.35}.people-field input,.people-field select,.people-field textarea,.people-search-wrap input,#people-org-select{width:100%;border:1px solid var(--people-border);border-radius:12px;background:#fff;color:var(--people-text);padding:10px 12px;font:inherit;min-height:42px}.people-field textarea{min-height:104px;resize:vertical}.people-field input[readonly],.people-field input:disabled,.people-field select:disabled{background:#f8fafc;color:var(--people-muted);cursor:not-allowed}.people-field-wide{grid-column:1/-1}.field-error{color:#b91c1c!important;font-weight:900!important}.people-field.disabled-field{opacity:.72}.people-status-filter,.people-role-filter{margin:10px 0}.people-advanced-filters{display:grid;gap:8px;margin:6px 0 10px}.people-advanced-toggle{justify-self:start;padding-left:0}.people-active-filters{display:flex;gap:7px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--people-muted);font-weight:850}.people-filter-chip{border:1px solid var(--people-border);border-radius:999px;background:var(--people-soft);color:var(--people-primary);font:inherit;font-size:12px;font-weight:900;padding:5px 9px;cursor:pointer}.people-advanced-panel{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:10px}.people-search-wrap{position:relative;margin:10px 0}.people-search-wrap input{padding-right:44px}.people-icon-btn{position:absolute;right:6px;top:5px;width:32px;height:32px;padding:0;background:var(--people-soft);color:var(--people-primary)}.people-sort-hint{font-size:12px;color:var(--people-muted);font-weight:750;margin:8px 0 10px}.people-compact-list{display:grid;gap:7px;max-height:calc(100vh - 320px);min-height:240px;overflow:auto;padding:3px 2px 8px;overscroll-behavior:contain}.people-person-card{text-align:left;border:1px solid var(--people-border);border-radius:13px;background:#fff;color:var(--people-text);padding:10px;display:grid;gap:8px;cursor:pointer;box-shadow:0 3px 11px ${rgba(cfg.primary,.04)}}.people-person-card.selected{border-color:var(--people-primary);box-shadow:0 0 0 3px var(--people-strong-soft)}.people-person-card.archived{opacity:.58;background:#f8fafc}.people-person-card.restricted:not(.archived){border-color:#fed7aa;background:#fff7ed}.person-main{display:grid;gap:3px;min-width:0}.person-main strong{font-weight:950;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-main small{color:var(--people-muted);font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-badges{display:flex;gap:4px;flex-wrap:wrap}.person-badges em{font-style:normal;font-size:10px;font-weight:900;border-radius:999px;padding:3px 6px;background:var(--people-soft);color:var(--people-primary)}.people-empty-row{border:1px dashed var(--people-border);border-radius:13px;padding:18px;text-align:center;color:var(--people-muted);background:#fff}.people-empty-row.compact{padding:12px;text-align:left}.people-empty{min-height:380px;display:grid;align-content:center;text-align:center;padding:24px}
+      .people-editor-panel{min-width:0;padding:0;overflow:hidden}.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:15px 17px;border-bottom:1px solid var(--people-border)}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}.people-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--people-border);background:#fcfcfd}.people-tab{border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-weight:900;padding:8px 11px;cursor:pointer}.people-tab.active{background:var(--people-primary);color:#fff;border-color:var(--people-primary)}.people-tab-panel{padding:16px}.people-tab-panel[hidden]{display:none!important}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}.people-access-status-grid{padding-bottom:8px}.people-affiliation-grid{padding-top:8px;border-top:1px solid var(--people-border)}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;margin:10px 0 14px}.primary-pick{min-height:42px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:12px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border:1px solid var(--people-border);border-radius:12px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-access-callout{display:flex;justify-content:space-between;gap:14px;align-items:center;border:1px solid var(--people-border);border-radius:13px;background:var(--people-soft);padding:12px;margin-bottom:14px}.people-access-callout p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-access-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 14px}.people-access-summary>div{border:1px solid var(--people-border);border-radius:12px;background:#fff;padding:10px;display:grid;gap:3px}.people-access-summary span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-access-summary strong{font-size:13px;line-height:1.25}.people-role-assignment-wrap{display:grid;gap:12px}.people-role-section{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px}.people-role-section-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}.people-role-section-head h4{margin:0;color:#101828;font-size:15px}.people-role-section-head span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-role-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.people-inline-actions{margin:10px 0}.people-action-row{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid var(--people-border);padding:12px 14px;background:#fcfcfd}.people-save-state{display:grid;gap:2px;font-weight:900;color:var(--people-muted)}.people-save-state.dirty{color:#9a3412}.people-photo-panel{grid-column:1/-1;display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;align-items:center;border:1px dashed var(--people-border);border-radius:14px;background:var(--people-soft);padding:14px}.people-photo-panel.dragover{box-shadow:0 0 0 3px var(--people-strong-soft);border-color:var(--people-primary)}.people-photo-preview{width:132px;height:132px;border-radius:18px;background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--people-border);box-shadow:0 10px 26px ${rgba(cfg.primary,.16)}}.people-photo-preview img{width:100%;height:100%;object-fit:cover;display:block}.people-photo-preview span{font-size:38px;font-weight:950;letter-spacing:.03em}.people-photo-copy strong{display:block;color:var(--people-primary);font-size:15px;margin-bottom:4px}.people-photo-copy p{margin:0 0 8px;color:var(--people-muted);font-weight:750}.people-photo-copy small{display:block;color:var(--people-muted);font-weight:750;margin-bottom:10px}.people-photo-actions{display:flex;gap:8px;flex-wrap:wrap}.people-timeline-list{display:grid;gap:10px;margin-top:10px}.people-note-card{border-left:4px solid var(--people-primary);background:#f8fafc;border-radius:12px;padding:10px}.people-note-card strong{display:block;color:var(--people-primary)}.people-note-card span{font-size:12px;color:#64748b;font-weight:800}.people-note-card p{margin:6px 0;white-space:pre-wrap}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:12px;padding:14px;font-size:12px;max-height:260px;overflow:auto}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}.people-def-row{padding:0;display:grid;grid-template-columns:30px minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab}.people-def-row.dragging{opacity:.55}.people-def-row.drag-over{outline:2px dashed var(--people-primary);outline-offset:2px}.people-def-drag-handle{display:flex;align-items:center;justify-content:center;color:var(--people-muted);font-weight:950;letter-spacing:-5px;background:#f8fafc;border-right:1px solid var(--people-border);cursor:grab;user-select:none}.people-def-row .people-def-main{border:0;background:transparent;text-align:left;padding:10px;display:grid;gap:7px;cursor:pointer;color:inherit}.people-def-order{display:flex;flex-direction:column;justify-content:space-between;border-left:1px solid var(--people-border);background:#f8fafc}.people-order-button{border:0;background:#f8fafc;color:var(--people-primary);font-weight:950;width:34px;min-height:32px;cursor:pointer}.people-order-button:first-child{border-bottom:1px solid var(--people-border)}.people-order-button:last-child{border-top:1px solid var(--people-border)}.people-order-button:disabled{opacity:.35;cursor:not-allowed}.people-info-btn{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:5px;border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-size:11px;font-weight:950;line-height:1;vertical-align:middle;padding:0;cursor:help}.people-def-editor .people-tab-panel>.people-form-grid{grid-template-columns:1fr}.people-def-editor .people-form-grid .people-form-grid{grid-template-columns:repeat(3,minmax(0,1fr));}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}
+      @media(max-width:1100px){.people-workbench{grid-template-columns:1fr}.people-list-panel{position:static;max-height:none}.people-compact-list{max-height:320px;min-height:0}.people-form-grid,.people-check-grid,.people-role-grid,.people-access-summary{grid-template-columns:1fr 1fr}.people-module-header,.people-action-row,.people-access-callout{display:grid}.people-header-actions,.people-action-buttons{justify-content:flex-start}.phone-grid{grid-template-columns:1fr}.primary-pick{justify-content:flex-start;padding:0 12px}}
+      @media(max-width:640px){.people-form-grid,.people-check-grid,.people-role-grid,.people-access-summary{grid-template-columns:1fr}.people-photo-panel{grid-template-columns:1fr}.people-photo-preview{margin:auto}.people-btn{width:100%}.people-action-buttons{width:100%}}
       @media print{#syncetc-portal-shell,.people-hero,.people-list-panel,.people-editor-panel,.people-message,.people-module-header{display:none!important}.people-wrap{max-width:none;margin:0;padding:0}.people-card{box-shadow:none;border:none}}
     `;
   }
@@ -1372,7 +1382,7 @@
     const el = ensureRoot();
     if (!el) return;
     const cfg = styleConfig(selectedRow());
-    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, active_people_lens: activePeopleLens, active_definition_kind: activeDefinitionKind, people_count: people.length, definition_counts: { statuses: arr(definitionLists.statuses).length, membership_classes: arr(definitionLists.membership_classes).length, application_stages: arr(definitionLists.application_stages).length, groups_roles: arr(definitionLists.groups_roles).length }, cache_ttl_ms: PEOPLE_CACHE_TTL_MS, parent_script_load_ms: mountOptions.scriptLoadMs || null, load_timings: loadTimings, backend: backend || {} }, null, 2))}</pre></details>` : "";
+    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, active_people_lens: activePeopleLens, active_definition_kind: activeDefinitionKind, role_filter: roleFilter, people_count: people.length, definition_counts: { statuses: arr(definitionLists.statuses).length, membership_classes: arr(definitionLists.membership_classes).length, application_stages: arr(definitionLists.application_stages).length, groups_roles: arr(definitionLists.groups_roles).length }, cache_ttl_ms: PEOPLE_CACHE_TTL_MS, parent_script_load_ms: mountOptions.scriptLoadMs || null, load_timings: loadTimings, backend: backend || {} }, null, 2))}</pre></details>` : "";
     el.innerHTML = `<style>${peopleStyles(cfg)}</style><div class="people-wrap"><section class="people-card people-hero"><div class="people-eyebrow">Organization Admin</div><h1>${esc(clean(pageConfig?.title) || "People & Access")}</h1><p>${esc(clean(pageConfig?.intro_text) || "Search the full people pool, manage members and applicants, keep contact information current, and handle safe access updates from one place.")}</p><div class="people-message ${esc(messageKind)}">${esc(message)}</div></section>${renderContent()}${diagnostics}</div>`;
     bindEvents();
     restorePeopleSearchFocus();
@@ -1414,7 +1424,10 @@
     $("people-org-select")?.addEventListener("change", async (e) => { if (!confirmDiscard()) { e.target.value = selectedOrgId; return; } setDirty(false); selectedOrgId = e.target.value; try { localStorage.setItem(SELECTED_ORG_KEY, selectedOrgId); } catch {} adminAccess = null; selected = null; selectedDefinition = null; try { await loadOrgContext({ force: true }); setMessage("Organization loaded.", "ok"); } catch (err) { setMessage(err.message || String(err), "warn"); } render(); });
     bindDefinitionEvents();
     $("people-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = filter; return; } setDirty(false); filter = e.target.value || "all"; render(); });
-    $("people-role-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = roleFilter; return; } setDirty(false); roleFilter = e.target.value || "all"; render(); });
+    $("people-advanced-filters-toggle")?.addEventListener("click", () => { advancedFiltersOpen = !advancedFiltersOpen; render(); });
+    document.querySelectorAll("[data-clear-role-filter]").forEach((btn) => btn.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); roleFilter = "all"; advancedFiltersOpen = false; render(); }));
+    $("people-clear-advanced-filters")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); roleFilter = "all"; advancedFiltersOpen = false; render(); });
+    $("people-role-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = roleFilter; return; } setDirty(false); roleFilter = key(e.target.value || "all") || "all"; advancedFiltersOpen = roleFilter !== "all"; render(); });
     $("people-search")?.addEventListener("input", (e) => { clearTimeout(debounceTimer); peopleSearchRestore = { start: e.target.selectionStart, end: e.target.selectionEnd }; debounceTimer = setTimeout(() => { search = e.target.value || ""; render(); }, 300); });
     $("people-clear-search")?.addEventListener("click", () => { search = ""; render(); });
     document.querySelectorAll("[data-open]").forEach((btn) => btn.addEventListener("click", () => runButton("people-refresh", "Opening…", async () => { if (!confirmDiscard()) return; setDirty(false); message = ""; messageKind = ""; const id = btn.getAttribute("data-open"); await loadSelectedPerson(id); fieldErrors = {}; render(); })));

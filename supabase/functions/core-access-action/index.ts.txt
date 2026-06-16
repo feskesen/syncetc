@@ -1,7 +1,7 @@
 // index.ts
 // Deploy target: Supabase Edge Function named core-access-action
 // JWT verification: ON
-// Internal Version: 2026-06-16-116-D
+// Internal Version: 2026-06-16-116-E
 // Purpose: secured user/organization-admin access foundation for SyncEtc. Separates lifecycle status, membership class, onboarding/application stage, roles, permissions, and future RSVP audience rules.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
@@ -11,7 +11,7 @@ type JsonRecord = Record<string, unknown>;
 type SupabaseClientAny = any;
 declare const Deno: { env: { get: (key: string) => string | undefined } };
 
-const VERSION = "2026-06-16-116-D";
+const VERSION = "2026-06-16-116-E";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -1055,7 +1055,7 @@ async function listRoleStatusOptions(serviceClient: SupabaseClientAny, organizat
 }
 
 
-// People definition maintenance 0116-D
+// People definition maintenance 0116-E
 function normalizeLifecycleStatusDefinitionKey0116D(value: unknown): string {
   return clean(value)
     .toLowerCase()
@@ -1066,7 +1066,8 @@ function normalizeLifecycleStatusDefinitionKey0116D(value: unknown): string {
 
 function normalizeDefinitionStatus0116D(value: unknown, fallback = "active"): string {
   const next = normalizeKey(value || fallback);
-  return ["active", "paused", "archived"].includes(next) ? next : fallback;
+  if (next === "inactive") return "paused";
+  return ["active", "paused"].includes(next) ? next : fallback;
 }
 
 const PEOPLE_LIFECYCLE_CATEGORIES_0116D = new Set(["prospect", "onboarding", "applicant", "invited", "pending", "active", "inactive", "suspended", "expelled", "former", "archived", "blocked"]);
@@ -1076,6 +1077,13 @@ const PEOPLE_BLOCKING_LIFECYCLE_CATEGORIES_0116D = new Set(["suspended", "expell
 function normalizeLifecycleCategory0116D(value: unknown, fallback = "active"): string {
   const next = normalizeKey(value || fallback);
   return PEOPLE_LIFECYCLE_CATEGORIES_0116D.has(next) ? next : fallback;
+}
+
+const PEOPLE_APPLICATION_STAGE_CATEGORIES_0116E = new Set(["application", "review", "onboarding", "terminal", "other"]);
+
+function normalizeApplicationStageCategory0116E(value: unknown, fallback = "application"): string {
+  const next = normalizeKey(value || fallback);
+  return PEOPLE_APPLICATION_STAGE_CATEGORIES_0116E.has(next) ? next : fallback;
 }
 
 async function peopleRequireDefinitionAdminAccess0116D(serviceClient: SupabaseClientAny, personId: string, organizationId: string, platformAdmin: boolean): Promise<JsonRecord> {
@@ -1090,7 +1098,7 @@ function sortedPeopleDefinitions0116D(rows: JsonRecord[]): JsonRecord[] {
     const aArchived = a.archived_at || normalizeKey(a.status) === "archived" ? 1 : 0;
     const bArchived = b.archived_at || normalizeKey(b.status) === "archived" ? 1 : 0;
     if (aArchived !== bArchived) return aArchived - bArchived;
-    return Number(a.sort_order || 0) - Number(b.sort_order || 0) || clean(a.label || a.status_key || a.class_key).localeCompare(clean(b.label || b.status_key || b.class_key));
+    return Number(a.sort_order || 0) - Number(b.sort_order || 0) || clean(a.label || a.status_key || a.class_key || a.stage_key).localeCompare(clean(b.label || b.status_key || b.class_key || b.stage_key));
   });
 }
 
@@ -1134,7 +1142,7 @@ async function peopleSaveLifecycleStatus0116D(serviceClient: SupabaseClientAny, 
     description: clean(body.description || rawSettings.description || ""),
     notes: clean(body.notes || rawSettings.notes || ""),
     model_role: "lifecycle_status",
-    last_edited_by_module: "people_definition_modules_0116D",
+    last_edited_by_module: "people_definition_modules_0116E",
   };
   const payload: JsonRecord = {
     organization_id: organizationId,
@@ -1196,7 +1204,7 @@ async function peopleSaveMembershipClass0116D(serviceClient: SupabaseClientAny, 
     is_default: optionalBoolean(body, "is_default", Boolean(existingRow.is_default)),
     sort_order: Number(body.sort_order ?? existingRow.sort_order ?? 100) || 100,
     status: statusValue,
-    settings_json: { ...rawSettings, notes: clean(body.notes || rawSettings.notes || ""), model_role: "membership_class", last_edited_by_module: "people_definition_modules_0116D" },
+    settings_json: { ...rawSettings, notes: clean(body.notes || rawSettings.notes || ""), model_role: "membership_class", last_edited_by_module: "people_definition_modules_0116E" },
   };
   if (statusValue === "archived") payload.archived_at = existingRow.archived_at || new Date().toISOString();
   else payload.archived_at = null;
@@ -1217,9 +1225,61 @@ async function peopleSetMembershipClassArchive0116D(serviceClient: SupabaseClien
   return data as JsonRecord;
 }
 
+async function peopleSaveApplicationStage0116E(serviceClient: SupabaseClientAny, organizationId: string, body: JsonRecord): Promise<JsonRecord> {
+  const id = clean(body.application_stage_definition_id);
+  const label = clean(body.label);
+  if (!label) throw new Error("Application/onboarding stage name is required.");
+  const existing = id ? (await serviceClient.from("core_application_stage_definitions").select("*").eq("organization_id", organizationId).eq("application_stage_definition_id", id).maybeSingle()) : { data: null, error: null };
+  if (existing.error) throw existing.error;
+  const existingRow = (existing.data || {}) as JsonRecord;
+  const stageKey = id ? clean(existingRow.stage_key) : normalizeKey(body.stage_key || label);
+  if (!stageKey) throw new Error("Could not create a stage key from that name.");
+  const rawSettings = jsonObject(existingRow.settings_json);
+  const statusValue = normalizeDefinitionStatus0116D(body.status || existingRow.status || "active");
+  const payload: JsonRecord = {
+    organization_id: organizationId,
+    stage_key: stageKey,
+    label,
+    description: clean(body.description || "") || null,
+    stage_category: normalizeApplicationStageCategory0116E(body.stage_category || existingRow.stage_category || "application"),
+    default_lifecycle_status_key: normalizeKey(body.default_lifecycle_status_key || existingRow.default_lifecycle_status_key || "applicant") || "applicant",
+    default_can_login: optionalBoolean(body, "default_can_login", Boolean(existingRow.default_can_login)),
+    default_can_view_portal: optionalBoolean(body, "default_can_view_portal", Boolean(existingRow.default_can_view_portal)),
+    default_requires_admin_review: optionalBoolean(body, "default_requires_admin_review", existingRow.default_requires_admin_review !== false),
+    is_terminal: optionalBoolean(body, "is_terminal", Boolean(existingRow.is_terminal)),
+    is_default: optionalBoolean(body, "is_default", Boolean(existingRow.is_default)),
+    sort_order: Number(body.sort_order ?? existingRow.sort_order ?? 100) || 100,
+    status: statusValue,
+    archived_at: null,
+    settings_json: { ...rawSettings, model_role: "application_stage", last_edited_by_module: "people_definition_modules_0116E" },
+  };
+  if (id) {
+    const { data, error } = await serviceClient.from("core_application_stage_definitions").update(payload).eq("organization_id", organizationId).eq("application_stage_definition_id", id).select("*").single();
+    if (error) throw error;
+    return data as JsonRecord;
+  }
+  const { data, error } = await serviceClient.from("core_application_stage_definitions").insert(payload).select("*").single();
+  if (error) throw error;
+  return data as JsonRecord;
+}
+
+async function peopleSetApplicationStageArchive0116E(serviceClient: SupabaseClientAny, organizationId: string, applicationStageDefinitionId: string, archived: boolean): Promise<JsonRecord> {
+  const payload: JsonRecord = archived ? { archived_at: new Date().toISOString(), status: "archived", sort_order: 999 } : { archived_at: null, status: "active" };
+  const { data, error } = await serviceClient.from("core_application_stage_definitions").update(payload).eq("organization_id", organizationId).eq("application_stage_definition_id", applicationStageDefinitionId).select("*").single();
+  if (error) throw error;
+  return data as JsonRecord;
+}
+
 async function peopleReorderDefinitions0116D(serviceClient: SupabaseClientAny, organizationId: string, definitionKind: string, ids: string[]): Promise<void> {
-  const table = definitionKind === "lifecycle_status" ? "core_membership_status_definitions" : "core_membership_class_definitions";
-  const idColumn = definitionKind === "lifecycle_status" ? "status_definition_id" : "membership_class_definition_id";
+  let table = "core_membership_class_definitions";
+  let idColumn = "membership_class_definition_id";
+  if (definitionKind === "lifecycle_status") {
+    table = "core_membership_status_definitions";
+    idColumn = "status_definition_id";
+  } else if (definitionKind === "application_stage") {
+    table = "core_application_stage_definitions";
+    idColumn = "application_stage_definition_id";
+  }
   for (let i = 0; i < ids.length; i += 1) {
     const id = clean(ids[i]);
     if (!id) continue;
@@ -8349,6 +8409,31 @@ serve(async (req: Request) => {
         const actorAccess = await peopleRequireDefinitionAdminAccess0116D(serviceClient, personId, organizationId, platformAdmin);
         await peopleReorderDefinitions0116D(serviceClient, organizationId, "membership_class", Array.isArray(body.membership_class_definition_ids) ? body.membership_class_definition_ids.map(clean) : []);
         await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_membership_class_definitions", organizationId, { organization_id: organizationId }, { reordered: true });
+        const result = await peopleListDefinitions0116D(serviceClient, organizationId);
+        return jsonResponse(200, { ok: true, action, access: actorAccess, ...result });
+      }
+
+      if (action === "organization_save_application_stage") {
+        const actorAccess = await peopleRequireDefinitionAdminAccess0116D(serviceClient, personId, organizationId, platformAdmin);
+        const application_stage = await peopleSaveApplicationStage0116E(serviceClient, organizationId, body);
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_application_stage_definitions", clean(application_stage.application_stage_definition_id), { organization_id: organizationId, label: clean(body.label) }, { saved: true });
+        const result = await peopleListDefinitions0116D(serviceClient, organizationId);
+        return jsonResponse(200, { ok: true, action, access: actorAccess, application_stage, ...result });
+      }
+
+      if (action === "organization_archive_application_stage" || action === "organization_restore_application_stage") {
+        const actorAccess = await peopleRequireDefinitionAdminAccess0116D(serviceClient, personId, organizationId, platformAdmin);
+        const applicationStageDefinitionId = requireString(body, "application_stage_definition_id");
+        const application_stage = await peopleSetApplicationStageArchive0116E(serviceClient, organizationId, applicationStageDefinitionId, action === "organization_archive_application_stage");
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_application_stage_definitions", applicationStageDefinitionId, { organization_id: organizationId }, { archived: action === "organization_archive_application_stage" });
+        const result = await peopleListDefinitions0116D(serviceClient, organizationId);
+        return jsonResponse(200, { ok: true, action, access: actorAccess, application_stage, ...result });
+      }
+
+      if (action === "organization_reorder_application_stages") {
+        const actorAccess = await peopleRequireDefinitionAdminAccess0116D(serviceClient, personId, organizationId, platformAdmin);
+        await peopleReorderDefinitions0116D(serviceClient, organizationId, "application_stage", Array.isArray(body.application_stage_definition_ids) ? body.application_stage_definition_ids.map(clean) : []);
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_application_stage_definitions", organizationId, { organization_id: organizationId }, { reordered: true });
         const result = await peopleListDefinitions0116D(serviceClient, organizationId);
         return jsonResponse(200, { ok: true, action, access: actorAccess, ...result });
       }

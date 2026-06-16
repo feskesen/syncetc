@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-16-116-D
+// Internal Version: 2026-06-16-116-E
 // Purpose: Organization Admin People workbench. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-D";
+  const VERSION = "2026-06-16-116-E";
   const ROOT_ID = "syncetc-organization-people-root";
   const ROOT_SELECTOR = "#syncetc-organization-people-root, #syncetc-people-admin-root, [data-syncetc-page=\"organization-people\"]";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -50,7 +50,7 @@
   let pageConfig = null;
   let selected = null;
   let activeDefinitionKind = "";
-  let definitionLists = { statuses: [], membership_classes: [] };
+  let definitionLists = { statuses: [], membership_classes: [], application_stages: [] };
   let selectedDefinition = null;
   let definitionSearch = "";
   let definitionFilter = "all";
@@ -119,7 +119,7 @@
   }
   function saveOrgContextCache(orgId) {
     if (!orgId) return;
-    peopleCacheByOrg[clean(orgId)] = { cached_at_ms: Date.now(), adminAccess, options, pageConfig, people: arr(people).slice(), definitionLists: { statuses: arr(definitionLists.statuses).slice(), membership_classes: arr(definitionLists.membership_classes).slice() } };
+    peopleCacheByOrg[clean(orgId)] = { cached_at_ms: Date.now(), adminAccess, options, pageConfig, people: arr(people).slice(), definitionLists: { statuses: arr(definitionLists.statuses).slice(), membership_classes: arr(definitionLists.membership_classes).slice(), application_stages: arr(definitionLists.application_stages).slice() } };
   }
   function hydrateFromMountOptions() {
     if (!embeddedMode) return false;
@@ -146,6 +146,7 @@
     const k = key(value);
     if (["lifecycle-statuses", "lifecycle-status", "statuses", "status", "membership-statuses"].includes(k)) return "lifecycle-statuses";
     if (["membership-classes", "membership-class", "classes", "class"].includes(k)) return "membership-classes";
+    if (["application-stages", "application-stage", "applicant-stages", "onboarding-stages", "stages", "stage", "people-stages"].includes(k)) return "application-stages";
     return "";
   }
   function isDefinitionMode() { return Boolean(activeDefinitionKind); }
@@ -374,7 +375,7 @@
     await refreshAuth();
     setMessage("Logged in.", "ok");
   }
-  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; definitionLists = { statuses: [], membership_classes: [] }; selectedDefinition = null; authChecked = true; setShellState(); render(); }
+  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; definitionLists = { statuses: [], membership_classes: [], application_stages: [] }; selectedDefinition = null; authChecked = true; setShellState(); render(); }
   async function resetOwnPassword() { await ensureSupabase(); const loginEmail = clean($("people-login-email")?.value || email).toLowerCase(); if (!loginEmail) throw new Error("Enter email first."); const { error } = await supabaseClient.auth.resetPasswordForEmail(loginEmail, { redirectTo: "https://syncetc.webflow.io/password-reset" }); if (error) throw error; setMessage("Password reset email requested.", "ok"); }
 
   async function runButton(id, label, fn) {
@@ -431,7 +432,7 @@
         definitionLists = cached.definitionLists || definitionLists;
         if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
         markLoad("people context cache", `${people.length} people`, run);
-        if (isDefinitionMode() && (!arr(definitionLists.statuses).length && !arr(definitionLists.membership_classes).length)) {
+        if (isDefinitionMode() && !arr(definitionLists[definitionConfig(activeDefinitionKind).rowsKey]).length) {
           await loadPeopleDefinitionLists(run);
           saveOrgContextCache(selectedOrgId);
         }
@@ -472,11 +473,19 @@
       r.description = clean(r.description || obj(r.settings_json).description || obj(r.settings_json).notes || "");
       r.ui_status = definitionUiStatus(r);
       r.sort_order = Number(r.sort_order || 100);
-    } else {
+    } else if (type === "membership-classes") {
       r.definition_type = "membership-classes";
       r.definition_id = clean(r.membership_class_definition_id);
       r.definition_key = clean(r.class_key);
       r.label = clean(r.label || r.class_key || "Untitled class");
+      r.description = clean(r.description || "");
+      r.ui_status = definitionUiStatus(r);
+      r.sort_order = Number(r.sort_order || 100);
+    } else {
+      r.definition_type = "application-stages";
+      r.definition_id = clean(r.application_stage_definition_id);
+      r.definition_key = clean(r.stage_key);
+      r.label = clean(r.label || r.stage_key || "Untitled stage");
       r.description = clean(r.description || "");
       r.ui_status = definitionUiStatus(r);
       r.sort_order = Number(r.sort_order || 100);
@@ -495,7 +504,8 @@
     const data = obj(payload);
     const statuses = arr(data.lifecycle_statuses || data.statuses).map((r) => normalizeDefinitionRow(r, "lifecycle-statuses"));
     const classes = arr(data.membership_classes).map((r) => normalizeDefinitionRow(r, "membership-classes"));
-    if (statuses.length || classes.length) definitionLists = { statuses, membership_classes: classes };
+    const stages = arr(data.application_stages || data.stages).map((r) => normalizeDefinitionRow(r, "application-stages"));
+    if (statuses.length || classes.length || stages.length) definitionLists = { statuses, membership_classes: classes, application_stages: stages };
   }
 
   async function loadPeopleDefinitionLists(run = activeLoadRun) {
@@ -508,7 +518,8 @@
       definitionRpcAvailable = false;
       definitionLists = {
         statuses: arr(options.statuses).map((r) => normalizeDefinitionRow(r, "lifecycle-statuses")),
-        membership_classes: arr(options.membership_classes).map((r) => normalizeDefinitionRow(r, "membership-classes"))
+        membership_classes: arr(options.membership_classes).map((r) => normalizeDefinitionRow(r, "membership-classes")),
+        application_stages: arr(options.application_stages).map((r) => normalizeDefinitionRow(r, "application-stages"))
       };
       if (isDefinitionMode()) {
         message = e.message || "People definitions could not be loaded.";
@@ -523,18 +534,27 @@
     if (k === "membership-classes") {
       return {
         kind: k, title: "Membership Classes", kicker: "People",
-        helper: "Define customer-specific membership or user classes before assigning them to people.",
+        helper: "Define the membership or user classes your organization assigns to people.",
         listTitle: "Classes", newLabel: "New class", itemLabel: "class", rowsKey: "membership_classes",
-        idField: "membership_class_definition_id", keyField: "class_key", categoryField: "class_category", categoryLabel: "Class category",
+        idField: "membership_class_definition_id", keyField: "class_key", categoryField: "class_category", categoryLabel: "Class type", categoryTip: "Choose the general type this class belongs to.",
         categories: [["member","Member"],["probationary","Probationary"],["family","Family / household"],["honorary","Honorary"],["student","Student"],["non_member","Non-member / limited user"],["user","Generic user"],["external","External / vendor"],["other","Other"]]
+      };
+    }
+    if (k === "application-stages") {
+      return {
+        kind: k, title: "Application / Onboarding Stages", kicker: "People",
+        helper: "Define the application and onboarding steps your organization uses before assigning them to people.",
+        listTitle: "Stages", newLabel: "New stage", itemLabel: "stage", rowsKey: "application_stages",
+        idField: "application_stage_definition_id", keyField: "stage_key", categoryField: "stage_category", categoryLabel: "Stage type", categoryTip: "Choose the general part of the application or onboarding process this stage belongs to.",
+        categories: [["application","Application"],["review","Review"],["onboarding","Onboarding"],["terminal","Final step"],["other","Other"]]
       };
     }
     return {
       kind: "lifecycle-statuses", title: "Lifecycle Statuses", kicker: "People",
-      helper: "Define customer-specific lifecycle statuses while keeping each one mapped to a safe internal category.",
+      helper: "Define the member journey labels your organization uses before assigning them to people.",
       listTitle: "Statuses", newLabel: "New status", itemLabel: "status", rowsKey: "statuses",
-      idField: "status_definition_id", keyField: "status_key", categoryField: "lifecycle_category", categoryLabel: "Lifecycle category",
-      categories: [["prospect","Prospect"],["applicant","Applicant"],["onboarding","Onboarding"],["invited","Invited"],["pending","Pending review"],["active","Active"],["inactive","Inactive"],["suspended","Suspended"],["expelled","Expelled"],["former","Former"],["archived","Archived"],["blocked","Blocked"]]
+      idField: "status_definition_id", keyField: "status_key", categoryField: "lifecycle_category", categoryLabel: "Journey category", categoryTip: "Choose the general part of the member journey this status belongs to.",
+      categories: [["prospect","Prospect"],["applicant","Applicant"],["onboarding","Onboarding"],["invited","Invited"],["pending","Pending review"],["active","Active"],["inactive","Inactive"],["suspended","Suspended"],["expelled","Expelled"],["former","Former"],["blocked","Blocked"]]
     };
   }
 
@@ -559,7 +579,7 @@
   function definitionMatchesSearch(row) {
     const q = lower(definitionSearch);
     if (!q) return true;
-    const hay = [row.label, row.definition_key, row.description, row.lifecycle_category, row.class_category, row.dues_behavior].map(clean).join(" ").toLowerCase();
+    const hay = [row.label, row.description, row.lifecycle_category, row.class_category, row.stage_category, row.dues_behavior, row.default_lifecycle_status_key].map(clean).join(" ").toLowerCase();
     return hay.includes(q);
   }
 
@@ -584,6 +604,9 @@
     if (cfg.kind === "membership-classes") {
       return { membership_class_definition_id: "", class_key: "", label: "", description: "", class_category: "member", dues_behavior: "standard", billing_notes: "", privilege_notes: "", default_can_reserve_assets: false, default_can_view_member_documents: true, requires_admin_review: false, is_default: false, status: "active", ui_status: "active", sort_order: nextDefinitionSortOrder() };
     }
+    if (cfg.kind === "application-stages") {
+      return { application_stage_definition_id: "", stage_key: "", label: "", description: "", stage_category: "application", default_lifecycle_status_key: "applicant", default_can_login: false, default_can_view_portal: false, default_requires_admin_review: true, is_terminal: false, is_default: false, status: "active", ui_status: "active", sort_order: nextDefinitionSortOrder() };
+    }
     return { status_definition_id: "", status_key: "", label: "", description: "", lifecycle_category: "active", is_active_member: true, can_login: true, can_view_member_portal: true, can_reserve_assets: true, requires_admin_review: false, is_default: false, status: "active", ui_status: "active", sort_order: nextDefinitionSortOrder() };
   }
 
@@ -599,8 +622,9 @@
 
   function definitionStatusOptions(value) {
     const v = definitionUiStatus({ status: value });
-    const rows = [["active","Active","active"],["paused","Inactive","inactive"],["archived","Archived","archived"]];
-    return rows.map(([optionValue, label, uiKey]) => `<option value="${esc(optionValue)}" ${v === uiKey ? "selected" : ""}>${esc(label)}</option>`).join("");
+    const selected = v === "inactive" || v === "archived" ? "paused" : "active";
+    const rows = [["active","Active"],["paused","Inactive"]];
+    return rows.map(([optionValue, label]) => `<option value="${esc(optionValue)}" ${selected === optionValue ? "selected" : ""}>${esc(label)}</option>`).join("");
   }
 
   function definitionCategoryOptions(cfg, value) {
@@ -614,6 +638,19 @@
     return rows.map(([k,label]) => `<option value="${esc(k)}" ${current === k ? "selected" : ""}>${esc(label)}</option>`).join("");
   }
 
+  function definitionFieldLabel(label, tip = "") {
+    return `${esc(label)}${tip ? ` <button class="people-info-btn" type="button" tabindex="0" aria-label="${esc(tip)}" title="${esc(tip)}">?</button>` : ""}`;
+  }
+
+  function lifecycleStatusOptions(value) {
+    const current = key(value || "applicant");
+    const rows = arr(options.statuses).filter((r) => !r.archived_at && definitionUiStatus(r) !== "archived");
+    if (!rows.length) {
+      return [["applicant","Applicant"],["invited","Invited"],["pending","Pending"],["active","Active"],["inactive","Inactive"]].map(([k,label]) => `<option value="${esc(k)}" ${current === k ? "selected" : ""}>${esc(label)}</option>`).join("");
+    }
+    return rows.map((r) => { const k = clean(r.status_key || r.definition_key); return `<option value="${esc(k)}" ${current === key(k) ? "selected" : ""}>${esc(clean(r.label || k))}</option>`; }).join("");
+  }
+
   function renderDefinitionList() {
     const cfg = definitionConfig();
     const rows = visibleDefinitionRows();
@@ -622,12 +659,12 @@
     allRows.forEach((r) => { if (!definitionMatchesSearch(r)) return; counts.all += 1; counts[definitionUiStatus(r)] = (counts[definitionUiStatus(r)] || 0) + 1; });
     const filters = [["all","All"],["active","Active"],["inactive","Inactive"],["archived","Archived"]];
     return `<aside class="people-list-panel">
-      <div class="people-list-head"><div><h3>${esc(cfg.listTitle)}</h3><p>Search, filter, and reorder ${esc(cfg.itemLabel)} definitions.</p></div></div>
+      <div class="people-list-head"><div><h3>${esc(cfg.listTitle)}</h3><p>Search, filter, and reorder ${esc(cfg.itemLabel)} items.</p></div></div>
       <div class="people-toolbar-row"><button id="people-def-refresh" class="people-btn secondary" type="button">Refresh</button></div>
       <label class="people-field people-status-filter"><span>Status filter</span><select id="people-def-filter">${filters.map(([f,label]) => `<option value="${esc(f)}" ${definitionFilter===f ? "selected" : ""}>${esc(label)} (${counts[f] || 0})</option>`).join("")}</select></label>
       <div class="people-search-wrap"><input id="people-def-search" value="${esc(definitionSearch)}" placeholder="Search labels, notes, categories…"><button id="people-def-clear-search" class="people-icon-btn" title="Clear" type="button">×</button></div>
-      <div class="people-sort-hint">Sorted by display order. Archived rows are muted and stay at the bottom.</div>
-      <div class="people-compact-list people-def-list">${rows.length ? rows.map(renderDefinitionRow).join("") : `<div class="people-empty-row">No ${esc(cfg.itemLabel)} definitions match this search.</div>`}</div>
+      <div class="people-sort-hint">Drag rows or use arrows to set display order. Archived rows stay at the bottom.</div>
+      <div class="people-compact-list people-def-list">${rows.length ? rows.map(renderDefinitionRow).join("") : `<div class="people-empty-row">No ${esc(cfg.itemLabel)} items match this search.</div>`}</div>
     </aside>`;
   }
 
@@ -641,8 +678,9 @@
     const meta = [category, row.description].filter(Boolean).join(" • ");
     const canMove = status !== "archived";
     return `<div class="people-def-row people-person-card ${selectedClass} ${muted}" data-def-row data-def-id="${esc(id)}" draggable="${canMove ? "true" : "false"}">
-      <button class="people-def-main" data-def-open="${esc(id)}" type="button"><span class="person-main"><strong>${esc(row.label || "Untitled")}</strong><small>${esc(meta || row.definition_key || "No notes")}</small></span><span class="person-badges"><em>${esc(status === "inactive" ? "Inactive" : status === "archived" ? "Archived" : "Active")}</em>${row.is_default ? `<em>Default</em>` : ""}</span></button>
-      <span class="people-def-order"><button class="people-order-button" data-def-move="up" data-def-id="${esc(id)}" type="button" ${canMove ? "" : "disabled"}>↑</button><button class="people-order-button" data-def-move="down" data-def-id="${esc(id)}" type="button" ${canMove ? "" : "disabled"}>↓</button></span>
+      <span class="people-def-drag-handle" title="Drag to reorder" aria-hidden="true">⋮⋮</span>
+      <button class="people-def-main" data-def-open="${esc(id)}" type="button"><span class="person-main"><strong>${esc(row.label || "Untitled")}</strong><small>${esc(meta || "No notes")}</small></span><span class="person-badges">${status === "archived" ? "<em>Archived</em>" : status === "inactive" ? "<em>Inactive</em>" : ""}${row.is_default ? "<em>Default</em>" : ""}</span></button>
+      <span class="people-def-order"><button class="people-order-button" data-def-move="up" data-def-id="${esc(id)}" type="button" ${canMove ? "" : "disabled"} title="Move up">↑</button><button class="people-order-button" data-def-move="down" data-def-id="${esc(id)}" type="button" ${canMove ? "" : "disabled"} title="Move down">↓</button></span>
     </div>`;
   }
 
@@ -650,19 +688,28 @@
     const cfg = definitionConfig();
     const row = selectedDefinition;
     const mayEdit = canManagePeople(selectedRow());
-    if (!row) return `<section class="people-editor-panel people-empty"><h3>Select a ${esc(cfg.itemLabel)}</h3><p>Choose a definition on the left, or create a new one. These definitions control vocabulary used by the Members / People editor.</p>${!definitionRpcAvailable ? `<p class="people-warning">Definition editing is temporarily unavailable.</p>` : ""}</section>`;
+    if (!row) return `<section class="people-editor-panel people-empty"><h3>Select a ${esc(cfg.itemLabel)}</h3><p>Choose an item on the left, or create a new one.</p>${!definitionRpcAvailable ? `<p class="people-warning">This list could not be edited right now.</p>` : ""}</section>`;
     const status = definitionUiStatus(row);
-    const archiveButton = status === "archived" ? `<button id="people-def-restore" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Restore</button>` : `<button id="people-def-archive" class="people-btn danger" type="button" ${mayEdit ? "" : "disabled"}>Archive</button>`;
-    const debugKey = currentDebugEnabled() ? `<label class="people-field"><span>Key</span><input value="${esc(row.definition_key || row[cfg.keyField] || "Will be generated")}" readonly><small>Debug only. Keys stay stable after creation.</small></label>` : "";
-    const commonTop = `${input("people-def-label", "Display name", row.label)}<label class="people-field"><span>Status</span><select id="people-def-ui-status">${definitionStatusOptions(status)}</select><small>Use Archive instead of deleting definitions that may be referenced by people.</small></label><label class="people-field"><span>${esc(cfg.categoryLabel)}</span><select id="people-def-category">${definitionCategoryOptions(cfg, row[cfg.categoryField])}</select><small>Safe internal mapping used by access and future workflow logic.</small></label>${debugKey}${textarea("people-def-description", "Description / notes", row.description || obj(row.settings_json).description || "")}`;
-    const body = cfg.kind === "membership-classes"
-      ? `${commonTop}<div class="people-form-grid"><label class="people-field"><span>Dues behavior</span><select id="people-def-dues-behavior">${duesBehaviorOptions(row.dues_behavior)}</select><small>For future billing rules. No billing automation is added here.</small></label>${textarea("people-def-privilege-notes", "Privilege notes", row.privilege_notes || "")}${textarea("people-def-billing-notes", "Billing notes", row.billing_notes || "")}</div><div class="people-check-grid">${checkbox("people-def-can-reserve", "Default can reserve/use assets", row.default_can_reserve_assets)}${checkbox("people-def-view-docs", "Default can view member documents", row.default_can_view_member_documents)}${checkbox("people-def-review", "Requires admin review", row.requires_admin_review)}${checkbox("people-def-default", "Default class", row.is_default)}</div>`
-      : `${commonTop}<div class="people-check-grid">${checkbox("people-def-active-member", "Counts as active member", row.is_active_member)}${checkbox("people-def-can-login", "Can log in", row.can_login)}${checkbox("people-def-view-portal", "Can view member portal", row.can_view_member_portal)}${checkbox("people-def-can-reserve", "Can reserve/use assets", row.can_reserve_assets)}${checkbox("people-def-review", "Requires admin review", row.requires_admin_review)}${checkbox("people-def-default", "Default status", row.is_default)}</div>`;
+    const archived = status === "archived";
+    const archiveButton = archived ? `<button id="people-def-restore" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Restore</button>` : `<button id="people-def-archive" class="people-btn danger" type="button" ${mayEdit ? "" : "disabled"}>Archive</button>`;
+    const statusValue = status === "inactive" || archived ? "paused" : "active";
+    const statusHelp = archived ? `<small>Restore this item before changing active/inactive.</small>` : "";
+    const categoryTip = cfg.categoryTip || "Choose the general category for this item.";
+    const commonTop = `${input("people-def-label", "Display name", row.label)}<label class="people-field"><span>Status</span><select id="people-def-ui-status" ${archived ? "disabled" : ""}>${definitionStatusOptions(statusValue)}</select>${statusHelp}</label><label class="people-field"><span>${definitionFieldLabel(cfg.categoryLabel, categoryTip)}</span><select id="people-def-category" ${archived ? "disabled" : ""}>${definitionCategoryOptions(cfg, row[cfg.categoryField])}</select></label>${textarea("people-def-description", "Description / notes", row.description || obj(row.settings_json).description || "")}`;
+    let body = "";
+    if (cfg.kind === "membership-classes") {
+      body = `${commonTop}<div class="people-form-grid"><label class="people-field"><span>${definitionFieldLabel("Dues behavior", "Choose the broad dues treatment for this class.")}</span><select id="people-def-dues-behavior" ${archived ? "disabled" : ""}>${duesBehaviorOptions(row.dues_behavior)}</select></label>${textarea("people-def-privilege-notes", "Privilege notes", row.privilege_notes || "")}${textarea("people-def-billing-notes", "Billing notes", row.billing_notes || "")}</div><div class="people-check-grid">${checkbox("people-def-can-reserve", "Default can reserve/use assets", row.default_can_reserve_assets)}${checkbox("people-def-view-docs", "Default can view member documents", row.default_can_view_member_documents)}${checkbox("people-def-review", "Requires admin review", row.requires_admin_review)}${checkbox("people-def-default", "Default class", row.is_default)}</div>`;
+    } else if (cfg.kind === "application-stages") {
+      body = `${commonTop}<div class="people-form-grid"><label class="people-field"><span>${definitionFieldLabel("Suggested lifecycle status", "Choose the lifecycle status normally associated with this stage.")}</span><select id="people-def-lifecycle-status" ${archived ? "disabled" : ""}>${lifecycleStatusOptions(row.default_lifecycle_status_key)}</select></label></div><div class="people-check-grid">${checkbox("people-def-stage-login", "Allow login during this stage", row.default_can_login)}${checkbox("people-def-stage-portal", "Allow portal during this stage", row.default_can_view_portal)}${checkbox("people-def-stage-review", "Requires admin review", row.default_requires_admin_review)}${checkbox("people-def-stage-terminal", "Final step", row.is_terminal)}${checkbox("people-def-default", "Default stage", row.is_default)}</div>`;
+    } else {
+      body = `${commonTop}<div class="people-check-grid">${checkbox("people-def-active-member", "Counts as active member", row.is_active_member)}${checkbox("people-def-can-login", "Can log in", row.can_login)}${checkbox("people-def-view-portal", "Can view member portal", row.can_view_member_portal)}${checkbox("people-def-can-reserve", "Can reserve/use assets", row.can_reserve_assets)}${checkbox("people-def-review", "Requires admin review", row.requires_admin_review)}${checkbox("people-def-default", "Default status", row.is_default)}</div>`;
+    }
+    const saveDisabled = !mayEdit || archived;
     return `<section class="people-editor-panel people-editor people-def-editor">
-      <div class="people-editor-head"><div><h3>${esc(row.label || `New ${cfg.itemLabel}`)}</h3><div class="people-pill-row">${pill(status === "inactive" ? "Inactive" : status === "archived" ? "Archived" : "Active", status === "archived" || status === "inactive" ? "warn" : "ok")}${pill(row[cfg.categoryField])}${row.is_default ? pill("Default") : ""}</div></div></div>
-      ${!mayEdit ? `<p class="people-warning">You can view these definitions, but you do not have permission to edit them.</p>` : ""}
+      <div class="people-editor-head"><div><h3>${esc(row.label || `New ${cfg.itemLabel}`)}</h3><div class="people-pill-row">${pill(status === "inactive" ? "Inactive" : archived ? "Archived" : "Active", archived || status === "inactive" ? "warn" : "ok")}${pill(row[cfg.categoryField])}${row.is_default ? pill("Default") : ""}</div></div></div>
+      ${!mayEdit ? `<p class="people-warning">You can view these items, but you do not have permission to edit them.</p>` : ""}
       <div class="people-tab-panel active"><div class="people-form-grid">${body}</div></div>
-      <div class="people-action-row"><div class="people-save-state ${dirty ? "dirty" : ""}"><span>${dirty ? "Unsaved changes" : "Saved"}</span>${message ? `<small class="people-action-status ${esc(messageKind)}">${esc(message)}</small>` : ""}</div><div class="people-action-buttons"><button id="people-def-reset" class="people-btn secondary" type="button">Reset</button>${archiveButton}<button id="people-def-save" class="people-btn" type="button" ${mayEdit ? "" : "disabled"}>Save</button></div></div>
+      <div class="people-action-row"><div class="people-save-state ${dirty ? "dirty" : ""}"><span>${dirty ? "Unsaved changes" : "Saved"}</span>${message ? `<small class="people-action-status ${esc(messageKind)}">${esc(message)}</small>` : ""}</div><div class="people-action-buttons"><button id="people-def-reset" class="people-btn secondary" type="button">Reset</button>${archiveButton}<button id="people-def-save" class="people-btn" type="button" ${saveDisabled ? "disabled" : ""}>Save</button></div></div>
     </section>`;
   }
 
@@ -674,6 +721,7 @@
   function collectDefinitionPayload() {
     const cfg = definitionConfig();
     const original = obj(selectedDefinition);
+    if (definitionUiStatus(original) === "archived") throw new Error(`Restore this ${cfg.itemLabel} before saving changes.`);
     const label = clean($("people-def-label")?.value);
     if (!label) throw new Error(`Enter a display name for this ${cfg.itemLabel}.`);
     const uiStatus = key($("people-def-ui-status")?.value || "active");
@@ -681,7 +729,7 @@
       [cfg.idField]: clean(original[cfg.idField] || original.definition_id),
       [cfg.keyField]: clean(original[cfg.keyField] || original.definition_key) || slugFromLabel(label, cfg.itemLabel),
       label, description: clean($("people-def-description")?.value), status: uiStatus, ui_status: uiStatus,
-      is_default: bool($("people-def-default")?.checked), requires_admin_review: bool($("people-def-review")?.checked),
+      is_default: bool($("people-def-default")?.checked),
       sort_order: Number(original.sort_order || nextDefinitionSortOrder() || 100)
     };
     if (cfg.kind === "membership-classes") {
@@ -691,12 +739,21 @@
       base.privilege_notes = clean($("people-def-privilege-notes")?.value);
       base.default_can_reserve_assets = bool($("people-def-can-reserve")?.checked);
       base.default_can_view_member_documents = bool($("people-def-view-docs")?.checked);
+      base.requires_admin_review = bool($("people-def-review")?.checked);
+    } else if (cfg.kind === "application-stages") {
+      base.stage_category = clean($("people-def-category")?.value) || "application";
+      base.default_lifecycle_status_key = clean($("people-def-lifecycle-status")?.value) || "applicant";
+      base.default_can_login = bool($("people-def-stage-login")?.checked);
+      base.default_can_view_portal = bool($("people-def-stage-portal")?.checked);
+      base.default_requires_admin_review = bool($("people-def-stage-review")?.checked);
+      base.is_terminal = bool($("people-def-stage-terminal")?.checked);
     } else {
       base.lifecycle_category = clean($("people-def-category")?.value) || "active";
       base.is_active_member = bool($("people-def-active-member")?.checked);
       base.can_login = bool($("people-def-can-login")?.checked);
       base.can_view_member_portal = bool($("people-def-view-portal")?.checked);
       base.can_reserve_assets = bool($("people-def-can-reserve")?.checked);
+      base.requires_admin_review = bool($("people-def-review")?.checked);
     }
     return base;
   }
@@ -711,7 +768,7 @@
 
   async function saveDefinitionPayload(payload) {
     const cfg = definitionConfig();
-    const action = cfg.kind === "membership-classes" ? "organization_save_membership_class" : "organization_save_lifecycle_status";
+    const action = cfg.kind === "membership-classes" ? "organization_save_membership_class" : cfg.kind === "application-stages" ? "organization_save_application_stage" : "organization_save_lifecycle_status";
     const data = await call(action, { organization_id: selectedOrgId, ...obj(payload) });
     setDefinitionListsFromPayload(data);
     await refreshAccessVocabularyAfterDefinitionSave();
@@ -722,7 +779,7 @@
     const payload = collectDefinitionPayload();
     const data = await saveDefinitionPayload(payload);
     const cfg = definitionConfig();
-    const saved = cfg.kind === "membership-classes" ? obj(data.membership_class || data.saved_definition) : obj(data.lifecycle_status || data.saved_definition);
+    const saved = cfg.kind === "membership-classes" ? obj(data.membership_class || data.saved_definition) : cfg.kind === "application-stages" ? obj(data.application_stage || data.saved_definition) : obj(data.lifecycle_status || data.saved_definition);
     selectedDefinition = normalizeDefinitionRow(saved[cfg.idField] || saved[cfg.keyField] ? saved : payload, cfg.kind);
     const match = allDefinitionRows().find((r) => selectedDefinitionId(r) === selectedDefinitionId(selectedDefinition));
     if (match) selectedDefinition = { ...match };
@@ -739,17 +796,23 @@
   }
 
   async function archiveDefinition(restore = false) {
-    if (!selectedDefinition) throw new Error("Select a definition first.");
+    if (!selectedDefinition) throw new Error("Select an item first.");
     const cfg = definitionConfig();
     if (!restore && !confirm(`Archive this ${cfg.itemLabel}? Existing people can keep their current value, but it should no longer be assigned to new records.`)) return;
     const id = clean(selectedDefinition[cfg.idField] || selectedDefinition.definition_id);
-    if (!id) throw new Error("Save this definition before archiving it.");
-    const action = cfg.kind === "membership-classes"
-      ? (restore ? "organization_restore_membership_class" : "organization_archive_membership_class")
-      : (restore ? "organization_restore_lifecycle_status" : "organization_archive_lifecycle_status");
-    const payload = cfg.kind === "membership-classes"
-      ? { organization_id: selectedOrgId, membership_class_definition_id: id }
-      : { organization_id: selectedOrgId, status_definition_id: id };
+    if (!id) throw new Error(`Save this ${cfg.itemLabel} before archiving it.`);
+    let action = "";
+    let payload = { organization_id: selectedOrgId };
+    if (cfg.kind === "membership-classes") {
+      action = restore ? "organization_restore_membership_class" : "organization_archive_membership_class";
+      payload = { organization_id: selectedOrgId, membership_class_definition_id: id };
+    } else if (cfg.kind === "application-stages") {
+      action = restore ? "organization_restore_application_stage" : "organization_archive_application_stage";
+      payload = { organization_id: selectedOrgId, application_stage_definition_id: id };
+    } else {
+      action = restore ? "organization_restore_lifecycle_status" : "organization_archive_lifecycle_status";
+      payload = { organization_id: selectedOrgId, status_definition_id: id };
+    }
     const data = await call(action, payload);
     setDefinitionListsFromPayload(data);
     await refreshAccessVocabularyAfterDefinitionSave();
@@ -778,10 +841,12 @@
     definitionLists[cfg.rowsKey] = allRows.map((r) => byId.get(selectedDefinitionId(r)) || r);
     render();
     try {
-      const action = cfg.kind === "membership-classes" ? "organization_reorder_membership_classes" : "organization_reorder_lifecycle_statuses";
+      const action = cfg.kind === "membership-classes" ? "organization_reorder_membership_classes" : cfg.kind === "application-stages" ? "organization_reorder_application_stages" : "organization_reorder_lifecycle_statuses";
       const payload = cfg.kind === "membership-classes"
         ? { organization_id: selectedOrgId, membership_class_definition_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) }
-        : { organization_id: selectedOrgId, status_definition_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) };
+        : cfg.kind === "application-stages"
+          ? { organization_id: selectedOrgId, application_stage_definition_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) }
+          : { organization_id: selectedOrgId, status_definition_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) };
       const data = await call(action, payload);
       setDefinitionListsFromPayload(data);
       saveOrgContextCache(selectedOrgId);
@@ -1083,7 +1148,7 @@
       ${!mayEdit ? `<p class="people-warning">You can view this roster, but you do not have permission to edit people.</p>` : ""}
       <div class="people-tabs" role="tablist">${tabRows.map(([id,label]) => `<button class="people-tab ${tab === id ? "active" : ""}" data-tab="${esc(id)}" type="button" role="tab" aria-selected="${tab === id ? "true" : "false"}">${esc(label)}</button>`).join("")}</div>
       <div class="people-tab-panel ${tab === "identity" ? "active" : ""}" data-tab-panel="identity" ${tab === "identity" ? "" : "hidden"}><div class="people-form-grid">${renderPersonPhoto(row, mayEdit)}${input("people-first-name","Legal first name",row.first_name)}${input("people-preferred-first-name","Preferred first name",preferred)}${input("people-middle-name","Middle name / initial",middle)}${input("people-last-name","Last name",row.last_name)}${input("people-suffix","Suffix",suffix)}${input("people-display-name-preview","Display name",displayPreview,"text","Calculated from preferred/legal first name and last name.","readonly")}${input("people-primary-email","Primary email",row.primary_email,"email","Used for login/contact when linked to an auth account.","inputmode=\"email\" autocomplete=\"email\"")}${input("people-member-number","Member / account number",row.member_number)}${input("people-title","Title / position",row.title)}</div></div>
-      <div class="people-tab-panel ${tab === "membership" ? "active" : ""}" data-tab-panel="membership" ${tab === "membership" ? "" : "hidden"}><div class="people-form-grid people-access-status-grid"><label class="people-field"><span>Lifecycle status</span><select id="people-status-key">${optionList(options.statuses,row.lifecycle_status_key,"status_key","label","Select status")}</select><small>Status is the broad safety gate.</small></label><label class="people-field"><span>Membership class</span><select id="people-class-key">${optionList(options.membership_classes,row.membership_class_key,"class_key","label","No class")}</select><small>Class controls business rules like dues/privileges.</small></label><label class="people-field"><span>Application / onboarding stage</span><select id="people-stage-key">${optionList(options.application_stages,row.application_stage_key,"stage_key","label","No stage")}</select><small>Stage tracks applicants and onboarding.</small></label></div><div class="people-form-grid people-affiliation-grid">${input("people-joined-at","Affiliation start date",String(row.joined_at || "").slice(0,10),"date")}<label class="people-field ${endFieldsDisabled ? "disabled-field" : ""}"><span>Affiliation end date</span><input id="people-affiliation-end-date" type="date" value="${esc(String(row.left_at || "").slice(0,10))}" ${endFieldsDisabled ? "disabled" : ""}><small id="people-affiliation-end-hint">${endFieldsDisabled ? "Enabled when status is inactive, former, expelled, archived, or blocked." : "Use when this organization affiliation has ended."}</small></label><label class="people-field ${endFieldsDisabled ? "disabled-field" : ""}"><span>End reason</span><select id="people-affiliation-end-reason" ${endFieldsDisabled ? "disabled" : ""}>${endReasonOptions(settings.end_reason)}</select><small id="people-affiliation-end-reason-hint">Use internal notes below if more detail is needed.</small></label>${textarea("people-notes","Internal notes — not visible to this person",row.notes)}</div></div>
+      <div class="people-tab-panel ${tab === "membership" ? "active" : ""}" data-tab-panel="membership" ${tab === "membership" ? "" : "hidden"}><div class="people-form-grid people-access-status-grid"><label class="people-field"><span>Lifecycle status</span><select id="people-status-key">${optionList(options.statuses,row.lifecycle_status_key,"status_key","label","Select status")}</select><small>Where this person is in their membership journey.</small></label><label class="people-field"><span>Membership class</span><select id="people-class-key">${optionList(options.membership_classes,row.membership_class_key,"class_key","label","No class")}</select><small>The type of membership or user relationship.</small></label><label class="people-field"><span>Application / onboarding stage</span><select id="people-stage-key">${optionList(options.application_stages,row.application_stage_key,"stage_key","label","No stage")}</select><small>The current application or onboarding step.</small></label></div><div class="people-form-grid people-affiliation-grid">${input("people-joined-at","Affiliation start date",String(row.joined_at || "").slice(0,10),"date")}<label class="people-field ${endFieldsDisabled ? "disabled-field" : ""}"><span>Affiliation end date</span><input id="people-affiliation-end-date" type="date" value="${esc(String(row.left_at || "").slice(0,10))}" ${endFieldsDisabled ? "disabled" : ""}><small id="people-affiliation-end-hint">${endFieldsDisabled ? "Enabled when status is inactive, former, expelled, archived, or blocked." : "Use when this organization affiliation has ended."}</small></label><label class="people-field ${endFieldsDisabled ? "disabled-field" : ""}"><span>End reason</span><select id="people-affiliation-end-reason" ${endFieldsDisabled ? "disabled" : ""}>${endReasonOptions(settings.end_reason)}</select><small id="people-affiliation-end-reason-hint">Use internal notes below if more detail is needed.</small></label>${textarea("people-notes","Internal notes — not visible to this person",row.notes)}</div></div>
       <div class="people-tab-panel ${tab === "contact" ? "active" : ""}" data-tab-panel="contact" ${tab === "contact" ? "" : "hidden"}><p class="muted">Choose one primary phone. This avoids duplicating the same number in multiple places.</p><div class="phone-grid"><label class="primary-pick"><input name="primary-phone-type" type="radio" value="mobile" ${primaryType === "mobile" || primaryType === "primary" ? "checked" : ""}> Primary</label>${input("people-mobile-phone","Mobile phone",contact.mobile_phone || row.primary_phone || row.phone,"tel","","inputmode=\"tel\"")}<label class="primary-pick"><input name="primary-phone-type" type="radio" value="home" ${primaryType === "home" ? "checked" : ""}> Primary</label>${input("people-home-phone","Home phone",contact.home_phone,"tel","","inputmode=\"tel\"")}<label class="primary-pick"><input name="primary-phone-type" type="radio" value="work" ${primaryType === "work" ? "checked" : ""}> Primary</label>${input("people-work-phone","Work phone",contact.work_phone,"tel","","inputmode=\"tel\"")}</div><div class="people-form-grid">${input("people-alt-email","Alternate email",contact.alternate_email,"email","","inputmode=\"email\"")}${input("people-address","Street address",contact.address)}${input("people-city","City",contact.city)}${input("people-state","State",contact.state)}${input("people-zip","ZIP",contact.zip)}${input("people-emergency-name","Emergency contact",emergency.name)}${input("people-emergency-phone","Emergency phone",emergency.phone,"tel","","inputmode=\"tel\"")}${input("people-emergency-relation","Emergency relation",emergency.relation)}</div></div>
       <div class="people-tab-panel ${tab === "access" ? "active" : ""}" data-tab-panel="access" ${tab === "access" ? "" : "hidden"}><div class="people-access-callout"><div><strong>Login and access</strong><p>Invite and password reset actions use this person’s saved organization membership and primary email/login link.</p></div><div class="people-inline-actions"><button id="people-invite" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Send invite</button><button id="people-reset-password" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Password reset</button></div></div><p class="muted">Roles control what this person can do. Organization admins can assign ordinary roles and Organization Admin. Organization Super Admin is protected.</p><div class="people-check-grid">${roles.map((role) => { const rk = key(role.role_key); const locked = !mayEditAnyRole || (isSuperAdminRole(rk) && !mayEditSuperAdmin); const hint = locked && isSuperAdminRole(rk) ? "Super Admin locked" : ""; return checkbox(`role-${rk}`, role.label || rk, arr(row.role_keys).map(key).includes(rk), locked, hint); }).join("")}</div>${!mayEditAnyRole ? `<p class="people-warning">Role editing is locked for your account.</p>` : !mayEditSuperAdmin ? `<p class="people-warning">Organization Super Admin is locked. You can manage ordinary roles and Organization Admin.</p>` : ""}</div>
       <div class="people-tab-panel ${tab === "aviation" ? "active" : ""}" data-tab-panel="aviation" ${tab === "aviation" ? "" : "hidden"}><div class="people-check-grid">${checkbox("people-club-cfi","CFI / instructor",aviation.club_cfi)}${checkbox("people-maintenance","Maintenance crew",aviation.on_maintenance_crew)}${checkbox("people-ifr-rated","IFR rated",aviation.ifr_rated)}${checkbox("people-night-checkout","Night checkout",aviation.club_night_checkout)}</div><div class="people-form-grid">${input("people-bfr-expiry","Flight review / BFR expiry",aviation.bfr_expiry_date,"date")}${input("people-last-checkout","Last organization checkout",aviation.last_club_checkout,"date")}${input("people-medical-expiry","Medical expiry",aviation.medical_expiry_date,"date")}${input("people-last-medical","Last medical date",aviation.last_medical_date,"date")}${input("people-medical-class","Medical class",aviation.medical_class)}${input("people-application-date","Application date",aviation.application_date || applicant.application_date,"date")}${input("people-employer","Employer",background.employer)}${input("people-occupation","Occupation",background.occupation)}${input("people-ratings","Ratings",aviation.ratings)}${input("people-pilot-certificate","Pilot certificate #",aviation.pilot_certificate_number)}${input("people-aircraft-types","Aircraft types",aviation.aircraft_types)}${input("people-bfr-aircraft","BFR aircraft",aviation.bfr_aircraft)}${input("people-clubs-fbos","Prior clubs/FBOs",aviation.clubs_fbos)}${input("people-flying-type","Type of flying",aviation.flying_type)}${input("people-total-hours","Total hours",aviation.total_hours,"number")}${input("people-night-hours","Night hours",aviation.total_night_hours,"number")}${input("people-ifr-hours","IFR hours",aviation.total_ifr_hours,"number")}${input("people-complex-hours","Complex hours",aviation.total_complex_hours,"number")}</div></div>
@@ -1111,7 +1176,7 @@
       .people-module-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:15px 17px;margin:0 0 10px;border-top:3px solid var(--people-primary)}.people-module-header h2{margin:6px 0 4px;font-size:25px;line-height:1.1;color:#101828}.people-module-header p{margin:0;color:var(--people-muted);font-weight:650}.people-header-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
       .people-workbench{display:grid;grid-template-columns:330px minmax(0,1fr);gap:10px;align-items:start}.people-list-panel{padding:12px;position:sticky;top:10px;max-height:calc(100vh - 24px);overflow:auto}.people-list-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}.people-list-head h3,.people-editor-head h3{margin:0;font-size:21px;color:#101828}.people-list-head p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-toolbar-row,.people-inline-actions,.people-action-buttons,.people-pill-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.people-toolbar-row{margin:8px 0 10px}.people-btn,.people-icon-btn,.people-link-btn{border:0;border-radius:999px;background:var(--people-primary);color:#fff;font-weight:900;padding:10px 14px;cursor:pointer;text-decoration:none;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}.people-btn:hover,.people-person-card:hover{transform:translateY(-1px)}.people-btn.secondary,.people-btn.outline{background:#fff;color:var(--people-primary);border:1px solid var(--people-primary)}.people-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-btn:disabled{opacity:.55;cursor:not-allowed;transform:none}.people-link-btn{background:transparent;color:var(--people-primary);text-decoration:underline;padding:8px}.people-message{margin-top:12px;padding:10px 12px;border-radius:12px;background:var(--people-soft);color:var(--people-primary);font-weight:850}.people-message:empty{display:none}.people-message.ok{background:#ecfdf5;color:#047857}.people-message.warn,.people-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:12px;padding:10px 12px}.people-action-status{display:block;margin-top:3px;color:var(--people-muted);font-size:12px;line-height:1.25}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}.people-context-single{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);padding:9px 12px;border-radius:999px;font-weight:900}.muted{color:var(--people-muted)}
       .people-field{display:grid;gap:6px;font-weight:850}.people-field span{font-size:13px}.people-field small{font-weight:600;color:var(--people-muted);line-height:1.35}.people-field input,.people-field select,.people-field textarea,.people-search-wrap input,#people-org-select{width:100%;border:1px solid var(--people-border);border-radius:12px;background:#fff;color:var(--people-text);padding:10px 12px;font:inherit;min-height:42px}.people-field textarea{min-height:104px;resize:vertical}.people-field input[readonly],.people-field input:disabled,.people-field select:disabled{background:#f8fafc;color:var(--people-muted);cursor:not-allowed}.people-field-wide{grid-column:1/-1}.field-error{color:#b91c1c!important;font-weight:900!important}.people-field.disabled-field{opacity:.72}.people-status-filter{margin:10px 0}.people-search-wrap{position:relative;margin:10px 0}.people-search-wrap input{padding-right:44px}.people-icon-btn{position:absolute;right:6px;top:5px;width:32px;height:32px;padding:0;background:var(--people-soft);color:var(--people-primary)}.people-sort-hint{font-size:12px;color:var(--people-muted);font-weight:750;margin:8px 0 10px}.people-compact-list{display:grid;gap:7px;max-height:calc(100vh - 320px);min-height:240px;overflow:auto;padding:3px 2px 8px;overscroll-behavior:contain}.people-person-card{text-align:left;border:1px solid var(--people-border);border-radius:13px;background:#fff;color:var(--people-text);padding:10px;display:grid;gap:8px;cursor:pointer;box-shadow:0 3px 11px ${rgba(cfg.primary,.04)}}.people-person-card.selected{border-color:var(--people-primary);box-shadow:0 0 0 3px var(--people-strong-soft)}.people-person-card.archived{opacity:.58;background:#f8fafc}.people-person-card.restricted:not(.archived){border-color:#fed7aa;background:#fff7ed}.person-main{display:grid;gap:3px;min-width:0}.person-main strong{font-weight:950;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-main small{color:var(--people-muted);font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-badges{display:flex;gap:4px;flex-wrap:wrap}.person-badges em{font-style:normal;font-size:10px;font-weight:900;border-radius:999px;padding:3px 6px;background:var(--people-soft);color:var(--people-primary)}.people-empty-row{border:1px dashed var(--people-border);border-radius:13px;padding:18px;text-align:center;color:var(--people-muted);background:#fff}.people-empty{min-height:380px;display:grid;align-content:center;text-align:center;padding:24px}
-      .people-editor-panel{min-width:0;padding:0;overflow:hidden}.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:15px 17px;border-bottom:1px solid var(--people-border)}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}.people-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--people-border);background:#fcfcfd}.people-tab{border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-weight:900;padding:8px 11px;cursor:pointer}.people-tab.active{background:var(--people-primary);color:#fff;border-color:var(--people-primary)}.people-tab-panel{padding:16px}.people-tab-panel[hidden]{display:none!important}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}.people-access-status-grid{padding-bottom:8px}.people-affiliation-grid{padding-top:8px;border-top:1px solid var(--people-border)}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;margin:10px 0 14px}.primary-pick{min-height:42px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:12px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border:1px solid var(--people-border);border-radius:12px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-access-callout{display:flex;justify-content:space-between;gap:14px;align-items:center;border:1px solid var(--people-border);border-radius:13px;background:var(--people-soft);padding:12px;margin-bottom:14px}.people-access-callout p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-inline-actions{margin:10px 0}.people-action-row{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid var(--people-border);padding:12px 14px;background:#fcfcfd}.people-save-state{display:grid;gap:2px;font-weight:900;color:var(--people-muted)}.people-save-state.dirty{color:#9a3412}.people-photo-panel{grid-column:1/-1;display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;align-items:center;border:1px dashed var(--people-border);border-radius:14px;background:var(--people-soft);padding:14px}.people-photo-panel.dragover{box-shadow:0 0 0 3px var(--people-strong-soft);border-color:var(--people-primary)}.people-photo-preview{width:132px;height:132px;border-radius:18px;background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--people-border);box-shadow:0 10px 26px ${rgba(cfg.primary,.16)}}.people-photo-preview img{width:100%;height:100%;object-fit:cover;display:block}.people-photo-preview span{font-size:38px;font-weight:950;letter-spacing:.03em}.people-photo-copy strong{display:block;color:var(--people-primary);font-size:15px;margin-bottom:4px}.people-photo-copy p{margin:0 0 8px;color:var(--people-muted);font-weight:750}.people-photo-copy small{display:block;color:var(--people-muted);font-weight:750;margin-bottom:10px}.people-photo-actions{display:flex;gap:8px;flex-wrap:wrap}.people-timeline-list{display:grid;gap:10px;margin-top:10px}.people-note-card{border-left:4px solid var(--people-primary);background:#f8fafc;border-radius:12px;padding:10px}.people-note-card strong{display:block;color:var(--people-primary)}.people-note-card span{font-size:12px;color:#64748b;font-weight:800}.people-note-card p{margin:6px 0;white-space:pre-wrap}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:12px;padding:14px;font-size:12px;max-height:260px;overflow:auto}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}.people-def-row{padding:0;display:grid;grid-template-columns:minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab}.people-def-row.dragging{opacity:.55}.people-def-row.drag-over{outline:2px dashed var(--people-primary);outline-offset:2px}.people-def-row .people-def-main{border:0;background:transparent;text-align:left;padding:10px;display:grid;gap:7px;cursor:pointer;color:inherit}.people-def-order{display:flex;flex-direction:column;border-left:1px solid var(--people-border)}.people-order-button{border:0;border-bottom:1px solid var(--people-border);background:#f8fafc;color:var(--people-primary);font-weight:950;width:34px;min-height:29px;cursor:pointer}.people-order-button:last-child{border-bottom:0}.people-order-button:disabled{opacity:.35;cursor:not-allowed}.people-def-editor .people-tab-panel>.people-form-grid{grid-template-columns:1fr}.people-def-editor .people-form-grid .people-form-grid{grid-template-columns:repeat(3,minmax(0,1fr));}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}
+      .people-editor-panel{min-width:0;padding:0;overflow:hidden}.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:15px 17px;border-bottom:1px solid var(--people-border)}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}.people-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--people-border);background:#fcfcfd}.people-tab{border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-weight:900;padding:8px 11px;cursor:pointer}.people-tab.active{background:var(--people-primary);color:#fff;border-color:var(--people-primary)}.people-tab-panel{padding:16px}.people-tab-panel[hidden]{display:none!important}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}.people-access-status-grid{padding-bottom:8px}.people-affiliation-grid{padding-top:8px;border-top:1px solid var(--people-border)}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;margin:10px 0 14px}.primary-pick{min-height:42px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:12px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border:1px solid var(--people-border);border-radius:12px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-access-callout{display:flex;justify-content:space-between;gap:14px;align-items:center;border:1px solid var(--people-border);border-radius:13px;background:var(--people-soft);padding:12px;margin-bottom:14px}.people-access-callout p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-inline-actions{margin:10px 0}.people-action-row{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid var(--people-border);padding:12px 14px;background:#fcfcfd}.people-save-state{display:grid;gap:2px;font-weight:900;color:var(--people-muted)}.people-save-state.dirty{color:#9a3412}.people-photo-panel{grid-column:1/-1;display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;align-items:center;border:1px dashed var(--people-border);border-radius:14px;background:var(--people-soft);padding:14px}.people-photo-panel.dragover{box-shadow:0 0 0 3px var(--people-strong-soft);border-color:var(--people-primary)}.people-photo-preview{width:132px;height:132px;border-radius:18px;background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--people-border);box-shadow:0 10px 26px ${rgba(cfg.primary,.16)}}.people-photo-preview img{width:100%;height:100%;object-fit:cover;display:block}.people-photo-preview span{font-size:38px;font-weight:950;letter-spacing:.03em}.people-photo-copy strong{display:block;color:var(--people-primary);font-size:15px;margin-bottom:4px}.people-photo-copy p{margin:0 0 8px;color:var(--people-muted);font-weight:750}.people-photo-copy small{display:block;color:var(--people-muted);font-weight:750;margin-bottom:10px}.people-photo-actions{display:flex;gap:8px;flex-wrap:wrap}.people-timeline-list{display:grid;gap:10px;margin-top:10px}.people-note-card{border-left:4px solid var(--people-primary);background:#f8fafc;border-radius:12px;padding:10px}.people-note-card strong{display:block;color:var(--people-primary)}.people-note-card span{font-size:12px;color:#64748b;font-weight:800}.people-note-card p{margin:6px 0;white-space:pre-wrap}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:12px;padding:14px;font-size:12px;max-height:260px;overflow:auto}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}.people-def-row{padding:0;display:grid;grid-template-columns:30px minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab}.people-def-row.dragging{opacity:.55}.people-def-row.drag-over{outline:2px dashed var(--people-primary);outline-offset:2px}.people-def-drag-handle{display:flex;align-items:center;justify-content:center;color:var(--people-muted);font-weight:950;letter-spacing:-5px;background:#f8fafc;border-right:1px solid var(--people-border);cursor:grab;user-select:none}.people-def-row .people-def-main{border:0;background:transparent;text-align:left;padding:10px;display:grid;gap:7px;cursor:pointer;color:inherit}.people-def-order{display:flex;flex-direction:column;justify-content:space-between;border-left:1px solid var(--people-border);background:#f8fafc}.people-order-button{border:0;background:#f8fafc;color:var(--people-primary);font-weight:950;width:34px;min-height:32px;cursor:pointer}.people-order-button:first-child{border-bottom:1px solid var(--people-border)}.people-order-button:last-child{border-top:1px solid var(--people-border)}.people-order-button:disabled{opacity:.35;cursor:not-allowed}.people-info-btn{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:5px;border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-size:11px;font-weight:950;line-height:1;vertical-align:middle;padding:0;cursor:help}.people-def-editor .people-tab-panel>.people-form-grid{grid-template-columns:1fr}.people-def-editor .people-form-grid .people-form-grid{grid-template-columns:repeat(3,minmax(0,1fr));}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}
       @media(max-width:1100px){.people-workbench{grid-template-columns:1fr}.people-list-panel{position:static;max-height:none}.people-compact-list{max-height:320px;min-height:0}.people-form-grid,.people-check-grid{grid-template-columns:1fr 1fr}.people-module-header,.people-action-row,.people-access-callout{display:grid}.people-header-actions,.people-action-buttons{justify-content:flex-start}.phone-grid{grid-template-columns:1fr}.primary-pick{justify-content:flex-start;padding:0 12px}}
       @media(max-width:640px){.people-form-grid,.people-check-grid{grid-template-columns:1fr}.people-photo-panel{grid-template-columns:1fr}.people-photo-preview{margin:auto}.people-btn{width:100%}.people-action-buttons{width:100%}}
       @media print{#syncetc-portal-shell,.people-hero,.people-list-panel,.people-editor-panel,.people-message,.people-module-header{display:none!important}.people-wrap{max-width:none;margin:0;padding:0}.people-card{box-shadow:none;border:none}}
@@ -1123,7 +1188,7 @@
     const el = ensureRoot();
     if (!el) return;
     const cfg = styleConfig(selectedRow());
-    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, active_definition_kind: activeDefinitionKind, people_count: people.length, definition_counts: { statuses: arr(definitionLists.statuses).length, membership_classes: arr(definitionLists.membership_classes).length }, cache_ttl_ms: PEOPLE_CACHE_TTL_MS, parent_script_load_ms: mountOptions.scriptLoadMs || null, load_timings: loadTimings, backend: backend || {} }, null, 2))}</pre></details>` : "";
+    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, active_definition_kind: activeDefinitionKind, people_count: people.length, definition_counts: { statuses: arr(definitionLists.statuses).length, membership_classes: arr(definitionLists.membership_classes).length, application_stages: arr(definitionLists.application_stages).length }, cache_ttl_ms: PEOPLE_CACHE_TTL_MS, parent_script_load_ms: mountOptions.scriptLoadMs || null, load_timings: loadTimings, backend: backend || {} }, null, 2))}</pre></details>` : "";
     el.innerHTML = `<style>${peopleStyles(cfg)}</style><div class="people-wrap"><section class="people-card people-hero"><div class="people-eyebrow">Organization Admin</div><h1>${esc(clean(pageConfig?.title) || "People & Access")}</h1><p>${esc(clean(pageConfig?.intro_text) || "Search the full people pool, manage members and applicants, keep contact information current, and handle safe access updates from one place.")}</p><div class="people-message ${esc(messageKind)}">${esc(message)}</div></section>${renderContent()}${diagnostics}</div>`;
     bindEvents();
     restorePeopleSearchFocus();

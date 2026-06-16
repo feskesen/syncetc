@@ -1,18 +1,18 @@
 // CUSTOMER-ADMIN-PAGE-organization-management-current.js
-// Internal Version: 2026-06-16-116-D
+// Internal Version: 2026-06-16-116-E
 // Purpose: Customer/organization-side Organization Management console runtime. Immutable admin workbench shell with left navigation and right-panel module loading.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-D";
+  const VERSION = "2026-06-16-116-E";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
   const SUPABASE_JS_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
   const AIRCRAFT_ADMIN_EXPECTED_VERSION = "2026-06-15-115-G";
   const AIRCRAFT_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js?v=${encodeURIComponent(AIRCRAFT_ADMIN_EXPECTED_VERSION)}`;
-  const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-16-116-D";
+  const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-16-116-E";
   const PEOPLE_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-people-current.js?v=${encodeURIComponent(PEOPLE_ADMIN_EXPECTED_VERSION)}`;
   const ROOT_SELECTOR = "#syncetc-organization-management-root, #syncetc-organization-admin-console-root, [data-syncetc-page='organization-management']";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -226,11 +226,11 @@
   const MODULES = [
     { key: "overview", label: "Overview", short: "Console home", group: "Home", status: "active", kind: "overview", description: "Organization management home, module status map, and setup shortcuts." },
 
-    { key: "people-lifecycle-statuses", label: "Lifecycle Statuses", short: "Status vocabulary", group: "People", status: "active", kind: "people", peopleView: "lifecycle-statuses", description: "Define the customer vocabulary and safe behavior mapping for applicants, active members, inactive/former people, and restricted lifecycle statuses." },
+    { key: "people-lifecycle-statuses", label: "Lifecycle Statuses", short: "Status vocabulary", group: "People", status: "active", kind: "people", peopleView: "lifecycle-statuses", description: "Define the member journey labels used for applicants, active members, inactive members, and former people." },
     { key: "people-membership-classes", label: "Membership Classes", short: "Class vocabulary", group: "People", status: "active", kind: "people", peopleView: "membership-classes", description: "Define membership/user classes such as full, probationary, family, honorary, social, student, or non-member classes." },
+    { key: "people-stages", label: "Application / Onboarding Stages", short: "Workflow stages", group: "People", status: "active", kind: "people", peopleView: "application-stages", description: "Define the application and onboarding steps used before assigning them to people." },
     { key: "people-members", label: "Members / People", short: "Member records", group: "People", status: "active", kind: "people", peopleView: "members", peopleFilter: "all", peopleTab: "identity", description: "Manage organization people, member records, lifecycle, roster visibility, access links, and qualifications." },
     { key: "people-admins", label: "Administrators & Access", short: "Admin access", group: "People", status: "active", kind: "people", peopleView: "members", peopleFilter: "admins", peopleTab: "access", description: "Manage customer administrators, organization super admins, delegated admin access, invitations, and login links using the same people records." },
-    { key: "people-stages", label: "Application / Onboarding Stages", short: "Workflow stages", group: "People", status: "placeholder", description: "Applicant and onboarding pipeline stages. This will become a real maintenance module in a later pass." },
     { key: "people-groups", label: "Groups / Roles", short: "Permissions", group: "People", status: "placeholder", description: "Member groups, roles, permission bundles, and future mention groups." },
     { key: "people-instructors", label: "Instructors / Qualifications", short: "Qualifications", group: "People", status: "placeholder", description: "Instructor roster, checkouts, and qualification records." },
 

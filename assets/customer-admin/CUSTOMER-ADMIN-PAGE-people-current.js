@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-16-116-B
+// Internal Version: 2026-06-16-116-C
 // Purpose: Organization Admin People workbench. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-B";
+  const VERSION = "2026-06-16-116-C";
   const ROOT_ID = "syncetc-organization-people-root";
   const ROOT_SELECTOR = "#syncetc-organization-people-root, #syncetc-people-admin-root, [data-syncetc-page=\"organization-people\"]";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -14,6 +14,8 @@
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+  const BOOT_STARTED_AT = performance.now();
+  const CONTEXT_CACHE_TTL_MS = 60 * 1000;
 
   const ROLE_ORDER = {
     "organization-super-admin": 10,
@@ -53,11 +55,16 @@
   let filter = "all";
   let message = "";
   let messageKind = "";
+  let messageTarget = "editor";
+  let lastListStatus = "";
+  let lastListStatusKind = "";
   let busy = false;
   let backend = null;
   let debounceTimer = null;
   let fieldErrors = {};
   let dirty = false;
+  let timingMarks = [];
+  const orgContextCache = new Map();
 
   const $ = (id) => document.getElementById(id);
   const esc = (v) => String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#039;");
@@ -117,9 +124,22 @@
   }
 
   async function ensureSupabase() {
+    const started = performance.now();
     if (supabaseClient) return supabaseClient;
+    if (mountOptions.supabaseClient && mountOptions.supabaseClient.auth) {
+      supabaseClient = mountOptions.supabaseClient;
+      markTiming("supabase:reused_from_parent", "", started);
+      return supabaseClient;
+    }
+    if (window.syncetcSupabase && window.syncetcSupabase.auth) {
+      supabaseClient = window.syncetcSupabase;
+      markTiming("supabase:reused_global", "", started);
+      return supabaseClient;
+    }
     if (!window.supabase) await loadScript(SUPABASE_JS);
     supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    try { window.syncetcSupabase = supabaseClient; } catch {}
+    markTiming("supabase:created", "", started);
     return supabaseClient;
   }
 
@@ -146,6 +166,60 @@
   }
   function cssVars(cfg) { return `--people-primary:${cfg.primary};--people-secondary:${cfg.secondary};--people-surface:${cfg.surface};--people-text:${cfg.text};--people-muted:${cfg.muted};--people-border:${cfg.border};--people-soft:${cfg.soft};--people-strong-soft:${cfg.strongSoft};--people-shadow:${cfg.shadow};--people-radius:${cfg.radius};--people-page-width:${cfg.pageWidth};`; }
 
+  function markTiming(label, detail = "", startedAt = null) {
+    try {
+      const now = performance.now();
+      const row = { ms: Math.round(now - BOOT_STARTED_AT), label: clean(label), detail: clean(detail) };
+      if (typeof startedAt === "number") row.duration_ms = Math.max(0, Math.round(now - startedAt));
+      timingMarks.push(row);
+      if (timingMarks.length > 90) timingMarks = timingMarks.slice(-90);
+    } catch {}
+  }
+
+  function cacheKeyForOrg(orgId = selectedOrgId) { return clean(orgId); }
+  function getCachedContext(orgId = selectedOrgId) {
+    const cached = orgContextCache.get(cacheKeyForOrg(orgId));
+    if (!cached) return null;
+    if (Date.now() - Number(cached.saved_at || 0) > CONTEXT_CACHE_TTL_MS) return null;
+    return cached;
+  }
+  function updateCachedContext(partial = {}, orgId = selectedOrgId) {
+    const keyValue = cacheKeyForOrg(orgId);
+    if (!keyValue) return;
+    const previous = orgContextCache.get(keyValue) || {};
+    orgContextCache.set(keyValue, { ...previous, ...partial, saved_at: Date.now() });
+  }
+  function invalidateCachedContext(orgId = selectedOrgId) {
+    const keyValue = cacheKeyForOrg(orgId);
+    if (keyValue) orgContextCache.delete(keyValue);
+  }
+  function cacheSummary() {
+    return Array.from(orgContextCache.entries()).map(([orgId, value]) => ({ orgId, age_ms: Math.max(0, Date.now() - Number(value.saved_at || 0)), people_count: arr(value.people).length, has_vocabulary: Boolean(value.options), has_access: Boolean(value.adminAccess) }));
+  }
+  function applyCachedContext(cached) {
+    if (!cached) return false;
+    if (cached.adminAccess) adminAccess = cached.adminAccess;
+    if (cached.options) options = cached.options;
+    if (cached.pageConfig !== undefined) pageConfig = cached.pageConfig;
+    if (Array.isArray(cached.people)) people = cached.people;
+    if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
+    return true;
+  }
+  function seedAccessFromMountOptions() {
+    const rows = arr(mountOptions.accessRows).filter(Boolean);
+    const row = obj(mountOptions.accessRow);
+    if (rows.length) allAccess = rows;
+    else if (row.organization_id) allAccess = [row];
+    if (mountOptions.platformAdmin !== undefined) platformAdmin = Boolean(mountOptions.platformAdmin);
+    if (mountOptions.email) email = clean(mountOptions.email) || email;
+    if (!selectedOrgId && row.organization_id) selectedOrgId = clean(row.organization_id);
+    if (selectedOrgId) {
+      const seeded = allAccess.find((r) => String(r.organization_id) === selectedOrgId) || (String(row.organization_id || "") === selectedOrgId ? row : null);
+      if (seeded) adminAccess = seeded;
+    }
+    return allAccess.length > 0;
+  }
+
   function setShellState() {
     const row = selectedRow();
     const rows = adminRows();
@@ -164,7 +238,17 @@
     });
   }
 
-  function setMessage(text, kind = "") { message = text || ""; messageKind = kind; render(); }
+  function setMessage(text, kind = "", target = "editor") {
+    message = text || "";
+    messageKind = kind || "";
+    messageTarget = target || "editor";
+    if (messageTarget === "toolbar") {
+      lastListStatus = message;
+      lastListStatusKind = messageKind;
+    }
+    render();
+  }
+  function clearMessage() { message = ""; messageKind = ""; messageTarget = "editor"; }
   async function getStableSession() {
     const attempts = shouldWaitForSession() ? 14 : 3;
     for (let i = 0; i < attempts; i += 1) {
@@ -214,22 +298,53 @@
   }
 
   async function refreshAuth() {
+    const started = performance.now();
+    markTiming("auth:start", embeddedMode ? "embedded" : "standalone");
     await ensureSupabase();
-    const session = await getStableSession();
-    token = session?.access_token || "";
-    email = session?.user?.email || "";
-    if (!token) { allAccess = []; adminAccess = null; selectedOrgId = ""; platformAdmin = false; people = []; selected = null; backend = null; }
-    else { try { await loadAccess(); } catch (e) { backend = { ok:false, message:e.message || String(e) }; authChecked = true; setShellState(); setMessage(e.message || String(e), "warn"); return; } }
+    if (mountOptions.accessToken) {
+      token = clean(mountOptions.accessToken);
+      email = clean(mountOptions.email) || email;
+      markTiming("auth:seeded_from_parent");
+    } else {
+      const sessionStarted = performance.now();
+      const session = await getStableSession();
+      token = session?.access_token || "";
+      email = session?.user?.email || "";
+      markTiming("auth:session", token ? "signed in" : "no session", sessionStarted);
+    }
+    if (!token) {
+      allAccess = []; adminAccess = null; selectedOrgId = ""; platformAdmin = false; people = []; selected = null; backend = null;
+    } else {
+      try {
+        const seeded = seedAccessFromMountOptions();
+        if (seeded && selectedOrgId) {
+          markTiming("access:seeded_from_parent", `${allAccess.length} row(s)`);
+          await loadOrgContext({ force: false, reason: "seeded-access" });
+        } else {
+          await loadAccess();
+        }
+      } catch (e) {
+        backend = { ok:false, message:e.message || String(e) };
+        authChecked = true;
+        setShellState();
+        setMessage(e.message || String(e), "warn", "toolbar");
+        markTiming("auth:error", e.message || String(e), started);
+        return;
+      }
+    }
     authChecked = true;
     setShellState();
+    markTiming("auth:done", `${people.length} people`, started);
     render();
   }
 
   async function call(action, payload = {}) {
     if (!token) throw new Error("Log in first.");
+    const started = performance.now();
     const res = await fetch(EDGE_URL, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ action, ...payload }) });
     const json = await res.json().catch(() => ({}));
     backend = json;
+    markTiming(`edge:${action}`, `HTTP ${res.status}`, started);
     if (!res.ok || json.ok === false) throw new Error(json.message || json.error || `Action failed: ${action}`);
     return json;
   }
@@ -245,19 +360,20 @@
     token = data?.session?.access_token || "";
     email = data?.user?.email || loginEmail;
     await refreshAuth();
-    setMessage("Logged in.", "ok");
+    setMessage("Logged in.", "ok", "toolbar");
   }
   async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; authChecked = true; setShellState(); render(); }
-  async function resetOwnPassword() { await ensureSupabase(); const loginEmail = clean($("people-login-email")?.value || email).toLowerCase(); if (!loginEmail) throw new Error("Enter email first."); const { error } = await supabaseClient.auth.resetPasswordForEmail(loginEmail, { redirectTo: "https://syncetc.webflow.io/password-reset" }); if (error) throw error; setMessage("Password reset email requested.", "ok"); }
+  async function resetOwnPassword() { await ensureSupabase(); const loginEmail = clean($("people-login-email")?.value || email).toLowerCase(); if (!loginEmail) throw new Error("Enter email first."); const { error } = await supabaseClient.auth.resetPasswordForEmail(loginEmail, { redirectTo: "https://syncetc.webflow.io/password-reset" }); if (error) throw error; setMessage("Password reset email requested.", "ok", "toolbar"); }
 
   async function runButton(id, label, fn) {
     const btn = $(id); const old = btn?.textContent || "";
     try { busy = true; if (btn) { btn.disabled = true; btn.textContent = label || "Working…"; } return await fn(); }
-    catch (e) { setMessage(e.message || String(e), "warn"); }
+    catch (e) { setMessage(e.message || String(e), "warn", "toolbar"); }
     finally { busy = false; if (btn) { btn.disabled = false; btn.textContent = old; } render(); }
   }
 
   async function loadAccess() {
+    const started = performance.now();
     const res = await call("get_my_access");
     platformAdmin = Boolean(res.platform_admin);
     allAccess = res.access || [];
@@ -271,27 +387,59 @@
     if (selectedOrgId && !rows.some((r) => String(r.organization_id) === selectedOrgId) && rows[0]) selectedOrgId = String(rows[0].organization_id);
     if (selectedOrgId) {
       try { localStorage.setItem(SELECTED_ORG_KEY, selectedOrgId); } catch {}
-      await loadOrgContext();
+      const seeded = rows.find((r) => String(r.organization_id) === selectedOrgId);
+      if (seeded) adminAccess = seeded;
+      await loadOrgContext({ force: false, reason: "access-loaded" });
     }
     setShellState();
+    markTiming("access:done", `${rows.length} admin org row(s)`, started);
   }
 
-  async function loadOrgContext() {
+  async function loadOrgContext(settings = {}) {
     if (!selectedOrgId) return;
-    const dash = await call("get_organization_admin_dashboard", { organization_id: selectedOrgId });
-    adminAccess = dash.access || null;
-    const vocab = await call("organization_list_access_vocabulary", { organization_id: selectedOrgId });
+    const started = performance.now();
+    const force = Boolean(settings.force);
+    const cached = !force ? getCachedContext(selectedOrgId) : null;
+    if (cached && applyCachedContext(cached)) {
+      setShellState();
+      markTiming("orgContext:cache_hit", `${people.length} people`, started);
+      return;
+    }
+
+    const hasSeededAccess = adminAccess && String(adminAccess.organization_id || "") === String(selectedOrgId);
+    const dashboardPromise = hasSeededAccess
+      ? Promise.resolve({ access: adminAccess, ok: true, seeded: true })
+      : call("get_organization_admin_dashboard", { organization_id: selectedOrgId });
+    const vocabularyPromise = call("organization_list_access_vocabulary", { organization_id: selectedOrgId });
+    const peoplePromise = call("organization_list_people", { organization_id: selectedOrgId, include_archived: true, filter: "all" });
+    const [dash, vocab, peopleRes] = await Promise.all([dashboardPromise, vocabularyPromise, peoplePromise]);
+
+    adminAccess = dash.access || adminAccess || null;
     options = { statuses: vocab.statuses || [], membership_classes: vocab.membership_classes || [], application_stages: vocab.application_stages || [], roles: sortRoles(vocab.roles || []) };
-    await loadPeople();
+    pageConfig = peopleRes.page || null;
+    people = peopleRes.people || [];
+    if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
+    updateCachedContext({ adminAccess, options, pageConfig, people });
     setShellState();
+    markTiming("orgContext:loaded_parallel", `${people.length} people${dash.seeded ? "; seeded access" : ""}`, started);
   }
 
-  async function loadPeople() {
+  async function loadPeople(settings = {}) {
     if (!selectedOrgId) return;
+    const started = performance.now();
+    const force = settings.force !== false;
+    if (force) invalidateCachedContext();
+    const cached = !force ? getCachedContext(selectedOrgId) : null;
+    if (cached && applyCachedContext(cached)) {
+      markTiming("people:list_cache_hit", `${people.length} people`, started);
+      return;
+    }
     const res = await call("organization_list_people", { organization_id: selectedOrgId, include_archived: true, filter: "all" });
     pageConfig = res.page || null;
     people = res.people || [];
     if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
+    updateCachedContext({ pageConfig, people });
+    markTiming("people:list_loaded", `${people.length} people`, started);
   }
 
   async function loadSelectedPerson(personOrMembershipId) {
@@ -308,7 +456,7 @@
     if (!note) throw new Error("Enter a note first.");
     const res = await call("organization_add_person_note", { organization_id: selectedOrgId, person_id: selected.person_id, body: note, note_type: "general" });
     selected.timeline_notes = res.notes || [];
-    setMessage("Note added.", "ok");
+    setMessage("Note added.", "ok", "editor");
   }
 
   function getProfile(row = selected || {}) { return obj(row.profile_json); }
@@ -402,22 +550,22 @@
     const allowed = new Set(["image/jpeg", "image/png", "image/webp"]);
     if (!allowed.has(file.type)) throw new Error("Photo must be a JPG, PNG, or WebP image.");
     if (file.size > 4 * 1024 * 1024) throw new Error("Photo is too large. Use an image under 4 MB.");
-    setMessage("Uploading photo…", "");
+    setMessage("Uploading photo…", "", "editor");
     const dataUrl = await readFileAsDataUrl(file);
     const res = await call("organization_upload_person_photo", { organization_id: selectedOrgId, person_id: selected.person_id, membership_id: selected.membership_id, file_name: file.name, content_type: file.type, data_url: dataUrl });
-    await loadPeople();
+    await loadPeople({ force: true });
     selected = people.find((p) => p.membership_id === (res.person?.membership_id || selected.membership_id)) || res.person || selected;
     setDirty(false);
-    setMessage("Photo updated.", "ok");
+    setMessage("Photo updated.", "ok", "editor");
   }
   async function removeSelectedPhoto() {
     if (!selected?.person_id || !selected?.membership_id) throw new Error("Select a saved person first.");
     if (!confirm("Remove this person's profile photo?")) return;
     const res = await call("organization_remove_person_photo", { organization_id: selectedOrgId, person_id: selected.person_id, membership_id: selected.membership_id });
-    await loadPeople();
+    await loadPeople({ force: true });
     selected = people.find((p) => p.membership_id === (res.person?.membership_id || selected.membership_id)) || res.person || selected;
     setDirty(false);
-    setMessage("Photo removed.", "ok");
+    setMessage("Photo removed.", "ok", "editor");
   }
 
   function sortPersonRows(rows) {
@@ -448,49 +596,54 @@
   function isManagerRole(roleKey) { return ["applicant-manager","asset-manager","content-editor","document-manager","event-manager","gallery-manager"].includes(key(roleKey)); }
   function isPlatformInternal(p) { return bool(p.is_platform_internal) || key(p.title).startsWith("platform-admin"); }
 
+  function personMatchesSearch(p, searchTerm) {
+    if (!searchTerm) return true;
+    const hay = [p.display_name,p.first_name,p.last_name,p.primary_email,p.email,p.phone,p.primary_phone,p.member_number,p.title,p.lifecycle_status_label,p.lifecycle_status_key,p.membership_class_label,p.membership_class_key,p.application_stage_label,p.application_stage_key,...arr(p.role_labels),...arr(p.role_keys),...arr(p.login_emails)].map(clean).join(" ").toLowerCase();
+    return hay.includes(searchTerm);
+  }
+
+  function personMatchesFilter(p, filterKey = filter, searchTerm = lower(search)) {
+    const f = key(filterKey || "all") || "all";
+    if (isPlatformInternal(p) && f !== "platform-internal") return false;
+    const status = key(p.lifecycle_status_key);
+    const stage = key(p.application_stage_key);
+    const stageCat = key(p.application_stage_category);
+    const lifecycle = key(p.lifecycle_category);
+    const classKey = key(p.membership_class_key);
+    const classCat = key(p.membership_class_category);
+    const archived = isArchivedRow(p);
+    const restricted = isRestrictedRow(p);
+    let ok = true;
+    if (f === "archived") ok = archived;
+    else if (f === "all") ok = true;
+    else if (archived) ok = false;
+    else if (f === "active") ok = status === "active";
+    else if (f === "applicants") ok = ["applicant","invited","pending"].includes(status) || ["applicant","prospect"].includes(stageCat);
+    else if (f === "waitlist") ok = stage === "waitlist";
+    else if (f === "onboarding") ok = stage === "onboarding" || stageCat === "onboarding" || ["invited","pending"].includes(status);
+    else if (f === "former") ok = ["former","inactive"].includes(status) || ["former","inactive"].includes(lifecycle);
+    else if (f === "restricted") ok = restricted;
+    else if (f === "admins") ok = hasAnyRole(p, ["organization-super-admin", "organization-admin"]);
+    else if (f === "board") ok = hasRole(p, "board-member");
+    else if (f === "managers") ok = arr(p.role_keys).some(isManagerRole);
+    else if (f === "users") ok = hasRole(p, "member") && !hasAnyRole(p, ["organization-super-admin", "organization-admin"]);
+    else if (f === "non-member") ok = classKey === "non-member" || classCat === "non-member" || classCat === "non_member";
+    else if (f === "no-login") ok = !bool(p.login_linked);
+    else if (f === "platform-internal") ok = isPlatformInternal(p);
+    if (!ok) return false;
+    return personMatchesSearch(p, searchTerm);
+  }
+
   function filteredPeople() {
-    const s = search.toLowerCase();
-    const rows = people.filter((p) => {
-      if (isPlatformInternal(p) && filter !== "platform-internal") return false;
-      const status = key(p.lifecycle_status_key);
-      const stage = key(p.application_stage_key);
-      const stageCat = key(p.application_stage_category);
-      const lifecycle = key(p.lifecycle_category);
-      const classKey = key(p.membership_class_key);
-      const classCat = key(p.membership_class_category);
-      const archived = isArchivedRow(p);
-      const restricted = isRestrictedRow(p);
-      let ok = true;
-      if (filter === "archived") ok = archived;
-      else if (filter === "all") ok = true;
-      else if (archived) ok = false;
-      else if (filter === "active") ok = status === "active";
-      else if (filter === "applicants") ok = ["applicant","invited","pending"].includes(status) || ["applicant","prospect"].includes(stageCat);
-      else if (filter === "waitlist") ok = stage === "waitlist";
-      else if (filter === "onboarding") ok = stage === "onboarding" || stageCat === "onboarding" || ["invited","pending"].includes(status);
-      else if (filter === "former") ok = ["former","inactive"].includes(status) || ["former","inactive"].includes(lifecycle);
-      else if (filter === "restricted") ok = restricted;
-      else if (filter === "admins") ok = hasAnyRole(p, ["organization-super-admin", "organization-admin"]);
-      else if (filter === "board") ok = hasRole(p, "board-member");
-      else if (filter === "managers") ok = arr(p.role_keys).some(isManagerRole);
-      else if (filter === "users") ok = hasRole(p, "member") && !hasAnyRole(p, ["organization-super-admin", "organization-admin"]);
-      else if (filter === "non-member") ok = classKey === "non-member" || classCat === "non-member" || classCat === "non_member";
-      else if (filter === "no-login") ok = !bool(p.login_linked);
-      else if (filter === "platform-internal") ok = isPlatformInternal(p);
-      if (!ok) return false;
-      if (!s) return true;
-      const hay = [p.display_name,p.first_name,p.last_name,p.primary_email,p.email,p.phone,p.primary_phone,p.member_number,p.title,p.lifecycle_status_label,p.lifecycle_status_key,p.membership_class_label,p.membership_class_key,p.application_stage_label,p.application_stage_key,...arr(p.role_labels),...arr(p.role_keys),...arr(p.login_emails)].map(clean).join(" ").toLowerCase();
-      return hay.includes(s);
-    });
-    return sortPersonRows(rows);
+    const s = lower(search);
+    return sortPersonRows(people.filter((p) => personMatchesFilter(p, filter, s)));
   }
 
   function counts() {
-    const oldFilter = filter;
     const keys = ["all","active","applicants","waitlist","onboarding","former","restricted","admins","board","managers","users","non-member","no-login","archived"];
-    const out = {};
-    keys.forEach((f) => { filter = f; out[f] = filteredPeople().length; });
-    filter = oldFilter;
+    const s = lower(search);
+    const out = Object.fromEntries(keys.map((f) => [f, 0]));
+    people.forEach((p) => { keys.forEach((f) => { if (personMatchesFilter(p, f, s)) out[f] += 1; }); });
     return out;
   }
 
@@ -506,6 +659,16 @@
     return `<select id="people-org-select">${rows.map((a) => `<option value="${esc(a.organization_id)}" ${String(a.organization_id) === selectedOrgId ? "selected" : ""}>${esc(a.organization_name)} (${esc(a.organization_key)})</option>`).join("")}</select>`;
   }
 
+  function renderToolbarMessage() {
+    const text = (messageTarget === "toolbar" && message) ? message : lastListStatus;
+    const kind = (messageTarget === "toolbar" && message) ? messageKind : lastListStatusKind;
+    return text ? `<span class="people-inline-status ${esc(kind)}" role="status">${esc(text)}</span>` : "";
+  }
+  function renderActionMessage() {
+    if (!message || messageTarget === "toolbar") return "";
+    return `<small class="people-action-message ${esc(messageKind)}">${esc(message)}</small>`;
+  }
+
   function renderFinder() {
     const c = counts();
     const rows = filteredPeople();
@@ -514,7 +677,7 @@
     ];
     return `<aside class="people-list-panel">
       <div class="people-list-head"><div><h3>People</h3><p>Search and filter organization records.</p></div></div>
-      <div class="people-toolbar-row"><button id="people-export" class="people-btn secondary" type="button">Export</button><button id="people-print" class="people-btn secondary" type="button">Print</button><button id="people-refresh" class="people-btn secondary" type="button">Refresh</button></div>
+      <div class="people-toolbar-row"><button id="people-export" class="people-btn secondary" type="button">Export</button><button id="people-print" class="people-btn secondary" type="button">Print</button><button id="people-refresh" class="people-btn secondary" type="button">Refresh</button>${renderToolbarMessage()}</div>
       <label class="people-field people-status-filter"><span>Status / lens</span><select id="people-filter-select">${filters.map(([f,label]) => `<option value="${esc(f)}" ${filter===f ? "selected" : ""}>${esc(label)} (${c[f] || 0})</option>`).join("")}</select></label>
       <div class="people-search-wrap"><input id="people-search" value="${esc(search)}" placeholder="Search names, emails, phones, roles…"><button id="people-clear-search" class="people-icon-btn" title="Clear" type="button">×</button></div>
       <div class="people-sort-hint">Sorted by last name. Archived rows stay visible in All and are muted at the bottom.</div>
@@ -575,7 +738,7 @@
       <div class="people-tab-panel ${tab === "access" ? "active" : ""}" data-tab-panel="access" ${tab === "access" ? "" : "hidden"}><div class="people-access-callout"><div><strong>Login and access</strong><p>Invite and password reset actions use this person’s saved organization membership and primary email/login link.</p></div><div class="people-inline-actions"><button id="people-invite" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Send invite</button><button id="people-reset-password" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Password reset</button></div></div><p class="muted">Roles control what this person can do. Organization admins can assign ordinary roles and Organization Admin. Organization Super Admin is protected.</p><div class="people-check-grid">${roles.map((role) => { const rk = key(role.role_key); const locked = !mayEditAnyRole || (isSuperAdminRole(rk) && !mayEditSuperAdmin); const hint = locked && isSuperAdminRole(rk) ? "Super Admin locked" : ""; return checkbox(`role-${rk}`, role.label || rk, arr(row.role_keys).map(key).includes(rk), locked, hint); }).join("")}</div>${!mayEditAnyRole ? `<p class="people-warning">Role editing is locked for your account.</p>` : !mayEditSuperAdmin ? `<p class="people-warning">Organization Super Admin is locked. You can manage ordinary roles and Organization Admin.</p>` : ""}</div>
       <div class="people-tab-panel ${tab === "aviation" ? "active" : ""}" data-tab-panel="aviation" ${tab === "aviation" ? "" : "hidden"}><div class="people-check-grid">${checkbox("people-club-cfi","CFI / instructor",aviation.club_cfi)}${checkbox("people-maintenance","Maintenance crew",aviation.on_maintenance_crew)}${checkbox("people-ifr-rated","IFR rated",aviation.ifr_rated)}${checkbox("people-night-checkout","Night checkout",aviation.club_night_checkout)}</div><div class="people-form-grid">${input("people-bfr-expiry","Flight review / BFR expiry",aviation.bfr_expiry_date,"date")}${input("people-last-checkout","Last organization checkout",aviation.last_club_checkout,"date")}${input("people-medical-expiry","Medical expiry",aviation.medical_expiry_date,"date")}${input("people-last-medical","Last medical date",aviation.last_medical_date,"date")}${input("people-medical-class","Medical class",aviation.medical_class)}${input("people-application-date","Application date",aviation.application_date || applicant.application_date,"date")}${input("people-employer","Employer",background.employer)}${input("people-occupation","Occupation",background.occupation)}${input("people-ratings","Ratings",aviation.ratings)}${input("people-pilot-certificate","Pilot certificate #",aviation.pilot_certificate_number)}${input("people-aircraft-types","Aircraft types",aviation.aircraft_types)}${input("people-bfr-aircraft","BFR aircraft",aviation.bfr_aircraft)}${input("people-clubs-fbos","Prior clubs/FBOs",aviation.clubs_fbos)}${input("people-flying-type","Type of flying",aviation.flying_type)}${input("people-total-hours","Total hours",aviation.total_hours,"number")}${input("people-night-hours","Night hours",aviation.total_night_hours,"number")}${input("people-ifr-hours","IFR hours",aviation.total_ifr_hours,"number")}${input("people-complex-hours","Complex hours",aviation.total_complex_hours,"number")}</div></div>
       <div class="people-tab-panel ${tab === "notes" ? "active" : ""}" data-tab-panel="notes" ${tab === "notes" ? "" : "hidden"}><div class="people-form-grid">${input("people-objectives","Objectives",applicant.objectives)}${input("people-how-hear","How they heard about us",applicant.how_hear_us)}${textarea("people-accident-details","Accident / incident details",applicant.accident_details)}${textarea("people-faa-details","FAA / regulatory details",applicant.faa_details)}</div>${renderPersonTimeline(row)}</div>
-      <div class="people-action-row"><div class="people-save-state ${dirty ? "dirty" : ""}">${dirty ? "Unsaved changes" : "Saved"}</div><div class="people-action-buttons"><button id="people-reset" class="people-btn secondary" type="button">Reset</button>${archiveButton}<button id="people-save" class="people-btn" type="button" ${mayEdit ? "" : "disabled"}>Save</button></div></div>
+      <div class="people-action-row"><div class="people-action-status"><div class="people-save-state ${dirty ? "dirty" : ""}">${dirty ? "Unsaved changes" : "Saved"}</div>${renderActionMessage()}</div><div class="people-action-buttons"><button id="people-reset" class="people-btn secondary" type="button">Reset</button>${archiveButton}<button id="people-save" class="people-btn" type="button" ${mayEdit ? "" : "disabled"}>Save</button></div></div>
     </section>`;
   }
 
@@ -594,7 +757,7 @@
       .people-wrap *{box-sizing:border-box}.people-card,.people-module-header,.people-list-panel,.people-editor-panel{background:rgba(255,255,255,.98);border:1px solid var(--people-border);border-radius:14px;box-shadow:0 6px 18px rgba(16,24,40,.07)}
       .people-card{padding:18px;margin:12px 0}.people-hero{display:${embeddedMode ? "none" : "block"};background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.78)});color:#fff}.people-hero h1{margin:8px 0;color:#fff;font-size:clamp(28px,4vw,42px);letter-spacing:-.035em}.people-hero p{color:rgba(255,255,255,.9);max-width:900px}.people-eyebrow,.people-kicker{display:inline-flex;padding:5px 10px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:11px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.people-hero .people-eyebrow{background:rgba(255,255,255,.16);color:#fff}
       .people-module-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:15px 17px;margin:0 0 10px;border-top:3px solid var(--people-primary)}.people-module-header h2{margin:6px 0 4px;font-size:25px;line-height:1.1;color:#101828}.people-module-header p{margin:0;color:var(--people-muted);font-weight:650}.people-header-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
-      .people-workbench{display:grid;grid-template-columns:330px minmax(0,1fr);gap:10px;align-items:start}.people-list-panel{padding:12px;position:sticky;top:10px;max-height:calc(100vh - 24px);overflow:auto}.people-list-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}.people-list-head h3,.people-editor-head h3{margin:0;font-size:21px;color:#101828}.people-list-head p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-toolbar-row,.people-inline-actions,.people-action-buttons,.people-pill-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.people-toolbar-row{margin:8px 0 10px}.people-btn,.people-icon-btn,.people-link-btn{border:0;border-radius:999px;background:var(--people-primary);color:#fff;font-weight:900;padding:10px 14px;cursor:pointer;text-decoration:none;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}.people-btn:hover,.people-person-card:hover{transform:translateY(-1px)}.people-btn.secondary,.people-btn.outline{background:#fff;color:var(--people-primary);border:1px solid var(--people-primary)}.people-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-btn:disabled{opacity:.55;cursor:not-allowed;transform:none}.people-link-btn{background:transparent;color:var(--people-primary);text-decoration:underline;padding:8px}.people-message{margin-top:12px;padding:10px 12px;border-radius:12px;background:var(--people-soft);color:var(--people-primary);font-weight:850}.people-message:empty{display:none}.people-message.ok{background:#ecfdf5;color:#047857}.people-message.warn,.people-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:12px;padding:10px 12px}.people-context-single{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);padding:9px 12px;border-radius:999px;font-weight:900}.muted{color:var(--people-muted)}
+      .people-workbench{display:grid;grid-template-columns:330px minmax(0,1fr);gap:10px;align-items:start}.people-list-panel{padding:12px;position:sticky;top:10px;max-height:calc(100vh - 24px);overflow:auto}.people-list-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}.people-list-head h3,.people-editor-head h3{margin:0;font-size:21px;color:#101828}.people-list-head p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-toolbar-row,.people-inline-actions,.people-action-buttons,.people-pill-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.people-toolbar-row{margin:8px 0 10px}.people-btn,.people-icon-btn,.people-link-btn{border:0;border-radius:999px;background:var(--people-primary);color:#fff;font-weight:900;padding:10px 14px;cursor:pointer;text-decoration:none;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}.people-btn:hover,.people-person-card:hover{transform:translateY(-1px)}.people-btn.secondary,.people-btn.outline{background:#fff;color:var(--people-primary);border:1px solid var(--people-primary)}.people-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-btn:disabled{opacity:.55;cursor:not-allowed;transform:none}.people-link-btn{background:transparent;color:var(--people-primary);text-decoration:underline;padding:8px}.people-message{margin-top:12px;padding:10px 12px;border-radius:12px;background:var(--people-soft);color:var(--people-primary);font-weight:850}.people-message:empty{display:none}.people-message.ok{background:#ecfdf5;color:#047857}.people-message.warn,.people-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:12px;padding:10px 12px}.people-inline-status{display:inline-flex;align-items:center;max-width:360px;border-radius:999px;border:1px solid var(--people-border);background:#fff;color:var(--people-primary);padding:7px 10px;font-size:12px;font-weight:900;line-height:1.2}.people-inline-status.ok{background:#ecfdf5;color:#047857;border-color:#bbf7d0}.people-inline-status.warn{background:#fff7ed;color:#9a3412;border-color:#fed7aa}.people-action-status{display:grid;gap:3px}.people-action-message{display:inline-flex;width:max-content;max-width:100%;padding:4px 8px;border-radius:999px;color:var(--people-primary);background:var(--people-soft);font-size:12px;font-weight:850}.people-action-message.ok{background:#ecfdf5;color:#047857}.people-action-message.warn{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-context-single{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);padding:9px 12px;border-radius:999px;font-weight:900}.muted{color:var(--people-muted)}
       .people-field{display:grid;gap:6px;font-weight:850}.people-field span{font-size:13px}.people-field small{font-weight:600;color:var(--people-muted);line-height:1.35}.people-field input,.people-field select,.people-field textarea,.people-search-wrap input,#people-org-select{width:100%;border:1px solid var(--people-border);border-radius:12px;background:#fff;color:var(--people-text);padding:10px 12px;font:inherit;min-height:42px}.people-field textarea{min-height:104px;resize:vertical}.people-field input[readonly],.people-field input:disabled,.people-field select:disabled{background:#f8fafc;color:var(--people-muted);cursor:not-allowed}.people-field-wide{grid-column:1/-1}.field-error{color:#b91c1c!important;font-weight:900!important}.people-field.disabled-field{opacity:.72}.people-status-filter{margin:10px 0}.people-search-wrap{position:relative;margin:10px 0}.people-search-wrap input{padding-right:44px}.people-icon-btn{position:absolute;right:6px;top:5px;width:32px;height:32px;padding:0;background:var(--people-soft);color:var(--people-primary)}.people-sort-hint{font-size:12px;color:var(--people-muted);font-weight:750;margin:8px 0 10px}.people-compact-list{display:grid;gap:7px;max-height:calc(100vh - 320px);min-height:240px;overflow:auto;padding:3px 2px 8px;overscroll-behavior:contain}.people-person-card{text-align:left;border:1px solid var(--people-border);border-radius:13px;background:#fff;color:var(--people-text);padding:10px;display:grid;gap:8px;cursor:pointer;box-shadow:0 3px 11px ${rgba(cfg.primary,.04)}}.people-person-card.selected{border-color:var(--people-primary);box-shadow:0 0 0 3px var(--people-strong-soft)}.people-person-card.archived{opacity:.58;background:#f8fafc}.people-person-card.restricted:not(.archived){border-color:#fed7aa;background:#fff7ed}.person-main{display:grid;gap:3px;min-width:0}.person-main strong{font-weight:950;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-main small{color:var(--people-muted);font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-badges{display:flex;gap:4px;flex-wrap:wrap}.person-badges em{font-style:normal;font-size:10px;font-weight:900;border-radius:999px;padding:3px 6px;background:var(--people-soft);color:var(--people-primary)}.people-empty-row{border:1px dashed var(--people-border);border-radius:13px;padding:18px;text-align:center;color:var(--people-muted);background:#fff}.people-empty{min-height:380px;display:grid;align-content:center;text-align:center;padding:24px}
       .people-editor-panel{min-width:0;padding:0;overflow:hidden}.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:15px 17px;border-bottom:1px solid var(--people-border)}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}.people-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--people-border);background:#fcfcfd}.people-tab{border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-weight:900;padding:8px 11px;cursor:pointer}.people-tab.active{background:var(--people-primary);color:#fff;border-color:var(--people-primary)}.people-tab-panel{padding:16px}.people-tab-panel[hidden]{display:none!important}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}.people-access-status-grid{padding-bottom:8px}.people-affiliation-grid{padding-top:8px;border-top:1px solid var(--people-border)}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;margin:10px 0 14px}.primary-pick{min-height:42px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:12px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border:1px solid var(--people-border);border-radius:12px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-access-callout{display:flex;justify-content:space-between;gap:14px;align-items:center;border:1px solid var(--people-border);border-radius:13px;background:var(--people-soft);padding:12px;margin-bottom:14px}.people-access-callout p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-inline-actions{margin:10px 0}.people-action-row{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid var(--people-border);padding:12px 14px;background:#fcfcfd}.people-save-state{font-weight:900;color:var(--people-muted)}.people-save-state.dirty{color:#9a3412}.people-photo-panel{grid-column:1/-1;display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;align-items:center;border:1px dashed var(--people-border);border-radius:14px;background:var(--people-soft);padding:14px}.people-photo-panel.dragover{box-shadow:0 0 0 3px var(--people-strong-soft);border-color:var(--people-primary)}.people-photo-preview{width:132px;height:132px;border-radius:18px;background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--people-border);box-shadow:0 10px 26px ${rgba(cfg.primary,.16)}}.people-photo-preview img{width:100%;height:100%;object-fit:cover;display:block}.people-photo-preview span{font-size:38px;font-weight:950;letter-spacing:.03em}.people-photo-copy strong{display:block;color:var(--people-primary);font-size:15px;margin-bottom:4px}.people-photo-copy p{margin:0 0 8px;color:var(--people-muted);font-weight:750}.people-photo-copy small{display:block;color:var(--people-muted);font-weight:750;margin-bottom:10px}.people-photo-actions{display:flex;gap:8px;flex-wrap:wrap}.people-timeline-list{display:grid;gap:10px;margin-top:10px}.people-note-card{border-left:4px solid var(--people-primary);background:#f8fafc;border-radius:12px;padding:10px}.people-note-card strong{display:block;color:var(--people-primary)}.people-note-card span{font-size:12px;color:#64748b;font-weight:800}.people-note-card p{margin:6px 0;white-space:pre-wrap}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:12px;padding:14px;font-size:12px;max-height:260px;overflow:auto}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}
       @media(max-width:1100px){.people-workbench{grid-template-columns:1fr}.people-list-panel{position:static;max-height:none}.people-compact-list{max-height:320px;min-height:0}.people-form-grid,.people-check-grid{grid-template-columns:1fr 1fr}.people-module-header,.people-action-row,.people-access-callout{display:grid}.people-header-actions,.people-action-buttons{justify-content:flex-start}.phone-grid{grid-template-columns:1fr}.primary-pick{justify-content:flex-start;padding:0 12px}}
@@ -608,11 +771,14 @@
     const el = ensureRoot();
     if (!el) return;
     const cfg = styleConfig(selectedRow());
-    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, backend: backend || {} }, null, 2))}</pre></details>` : "";
-    el.innerHTML = `<style>${peopleStyles(cfg)}</style><div class="people-wrap"><section class="people-card people-hero"><div class="people-eyebrow">Organization Admin</div><h1>${esc(clean(pageConfig?.title) || "People & Access")}</h1><p>${esc(clean(pageConfig?.intro_text) || "Search the full people pool, manage members and applicants, keep contact information current, and handle safe access updates from one place.")}</p><div class="people-message ${esc(messageKind)}">${esc(message)}</div></section>${message && embeddedMode ? `<div class="people-message ${esc(messageKind)}">${esc(message)}</div>` : ""}${renderContent()}${diagnostics}</div>`;
+    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, people_count: people.length, cache: cacheSummary(), timings: timingMarks, backend: backend || {} }, null, 2))}</pre></details>` : "";
+    const renderStarted = performance.now();
+    const standaloneMessage = !embeddedMode && message ? `<div class="people-message ${esc(messageKind)}">${esc(message)}</div>` : "";
+    el.innerHTML = `<style>${peopleStyles(cfg)}</style><div class="people-wrap"><section class="people-card people-hero"><div class="people-eyebrow">Organization Admin</div><h1>${esc(clean(pageConfig?.title) || "People & Access")}</h1><p>${esc(clean(pageConfig?.intro_text) || "Search the full people pool, manage members and applicants, keep contact information current, and handle safe access updates from one place.")}</p>${standaloneMessage}</section>${renderContent()}${diagnostics}</div>`;
     bindEvents();
     restorePeopleSearchFocus();
     activateTab(activeTab);
+    if (currentDebugEnabled()) markTiming("render", `${people.length} people`, renderStarted);
   }
 
 
@@ -620,13 +786,13 @@
     $("people-login")?.addEventListener("click", () => runButton("people-login", "Logging in…", login));
     $("people-logout")?.addEventListener("click", () => runButton("people-logout", "Logging out…", logout));
     $("people-reset-own")?.addEventListener("click", () => runButton("people-reset-own", "Sending…", resetOwnPassword));
-    $("people-org-select")?.addEventListener("change", async (e) => { if (!confirmDiscard()) { e.target.value = selectedOrgId; return; } setDirty(false); selectedOrgId = e.target.value; try { localStorage.setItem(SELECTED_ORG_KEY, selectedOrgId); } catch {} adminAccess = null; selected = null; try { await loadOrgContext(); setMessage("Organization loaded.", "ok"); } catch (err) { setMessage(err.message || String(err), "warn"); } render(); });
+    $("people-org-select")?.addEventListener("change", async (e) => { if (!confirmDiscard()) { e.target.value = selectedOrgId; return; } setDirty(false); selectedOrgId = e.target.value; try { localStorage.setItem(SELECTED_ORG_KEY, selectedOrgId); } catch {} adminAccess = null; selected = null; try { await loadOrgContext({ force: true, reason: "organization-change" }); setMessage("Organization loaded.", "ok", "toolbar"); } catch (err) { setMessage(err.message || String(err), "warn", "toolbar"); } render(); });
     $("people-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = filter; return; } setDirty(false); filter = e.target.value || "all"; render(); });
     $("people-search")?.addEventListener("input", (e) => { clearTimeout(debounceTimer); peopleSearchRestore = { start: e.target.selectionStart, end: e.target.selectionEnd }; debounceTimer = setTimeout(() => { search = e.target.value || ""; render(); }, 300); });
     $("people-clear-search")?.addEventListener("click", () => { search = ""; render(); });
     document.querySelectorAll("[data-open]").forEach((btn) => btn.addEventListener("click", () => runButton("people-refresh", "Opening…", async () => { if (!confirmDiscard()) return; setDirty(false); const id = btn.getAttribute("data-open"); await loadSelectedPerson(id); fieldErrors = {}; render(); })));
-    $("people-new")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); activeTab = "identity"; selected = blankPerson(); fieldErrors = {}; message = ""; render(); });
-    $("people-refresh")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); runButton("people-refresh", "Refreshing…", async () => { await loadOrgContext(); setMessage("Refreshed.", "ok"); }); });
+    $("people-new")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); activeTab = "identity"; selected = blankPerson(); fieldErrors = {}; clearMessage(); render(); });
+    $("people-refresh")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); runButton("people-refresh", "Refreshing…", async () => { await loadOrgContext({ force: true, reason: "manual-refresh" }); setMessage("Updated now", "ok", "toolbar"); }); });
     $("people-export")?.addEventListener("click", exportForExcel);
     $("people-print")?.addEventListener("click", printPeopleList);
     $("people-save")?.addEventListener("click", () => runButton("people-save", "Saving…", saveSelected));
@@ -717,12 +883,12 @@
     setDirty(false);
     if (selected?.membership_id) await loadSelectedPerson(selected.membership_id);
     else selected = blankPerson();
-    setMessage("Changes reset.", "ok");
+    setMessage("Changes reset.", "ok", "editor");
   }
 
 
   async function saveSelected() {
-    if (!validateForm()) { setMessage("Fix the highlighted fields before saving.", "warn"); return; }
+    if (!validateForm()) { setMessage("Fix the highlighted fields before saving.", "warn", "editor"); return; }
     const payload = readForm();
     const restrictive = ["suspended","expelled","archived","blocked"].includes(key(payload.status_key));
     if (restrictive && !confirm("This status blocks or restricts access. Save anyway?")) return;
@@ -730,23 +896,23 @@
     const res = await call("organization_save_person", payload);
     selected = res.person || selected;
     setDirty(false);
-    await loadPeople();
+    await loadPeople({ force: true });
     if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
     fieldErrors = {};
-    setMessage("Person saved.", "ok");
+    setMessage("Person saved.", "ok", "editor");
   }
 
   async function sendInvite() {
     if (!selected?.membership_id) throw new Error("Select a person first.");
     const res = await call("organization_send_invite", { organization_id: selectedOrgId, membership_id: selected.membership_id, person_id: selected.person_id });
-    await loadPeople();
-    setMessage(res.message || "Invite requested.", "ok");
+    await loadPeople({ force: true });
+    setMessage(res.message || "Invite requested.", "ok", "editor");
   }
 
   async function sendPasswordReset() {
     if (!selected?.membership_id) throw new Error("Select a person first.");
     const res = await call("organization_send_password_reset", { organization_id: selectedOrgId, membership_id: selected.membership_id, person_id: selected.person_id });
-    setMessage(res.message || "Password reset requested.", res.sent === false ? "warn" : "ok");
+    setMessage(res.message || "Password reset requested.", res.sent === false ? "warn" : "ok", "editor");
   }
 
   async function archiveSelected() {
@@ -754,18 +920,18 @@
     if (!confirm("Archive this person's organization affiliation? They will disappear from normal People views, but can be restored from the Archived filter.")) return;
     const res = await call("organization_archive_membership", { organization_id: selectedOrgId, membership_id: selected.membership_id, person_id: selected.person_id });
     setDirty(false);
-    await loadPeople();
+    await loadPeople({ force: true });
     selected = null;
-    setMessage("Membership archived.", "ok");
+    setMessage("Membership archived.", "ok", "editor");
   }
 
   async function restoreSelected() {
     if (!selected?.membership_id) throw new Error("Select a person first.");
     const res = await call("organization_restore_membership", { organization_id: selectedOrgId, membership_id: selected.membership_id, person_id: selected.person_id });
     setDirty(false);
-    await loadPeople();
+    await loadPeople({ force: true });
     selected = res.person || people.find((p) => p.membership_id === selected.membership_id) || null;
-    setMessage("Membership restored.", "ok");
+    setMessage("Membership restored.", "ok", "editor");
   }
 
   function printPeopleList() {
@@ -777,7 +943,7 @@
     const win = window.open("", "_blank");
     if (!win) { window.print(); return; }
     win.document.open(); win.document.write(html); win.document.close();
-    setMessage("Printable People list opened.", "ok");
+    setMessage("Printable People list opened.", "ok", "toolbar");
   }
 
   function tsvCell(v) { return String(v ?? "").replace(/\t/g, " ").replace(/\r?\n/g, " ").trim(); }
@@ -796,12 +962,12 @@
     a.href = url;
     a.download = `people-${selectedRow()?.organization_key || "organization"}.tsv`;
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-    setMessage("Excel export created. The file is tab-separated so it pastes cleanly into spreadsheets.", "ok");
+    setMessage("Excel export created. The file is tab-separated so it pastes cleanly into spreadsheets.", "ok", "toolbar");
   }
 
   window.addEventListener("syncetc:portal-logout-request", () => {
     if (!token) return;
-    logout().catch((e) => { backend = { ok:false, message:e.message || String(e) }; setMessage(e.message || String(e), "warn"); });
+    logout().catch((e) => { backend = { ok:false, message:e.message || String(e) }; setMessage(e.message || String(e), "warn", "toolbar"); });
   });
 
   window.addEventListener("syncetc:portal-login-request", () => {
@@ -818,8 +984,8 @@
     adminAccess = null;
     selected = null;
     pageConfig = null;
-    try { await loadOrgContext(); setMessage("Organization loaded.", "ok"); }
-    catch (err) { setMessage(err.message || String(err), "warn"); }
+    try { await loadOrgContext({ force: true, reason: "organization-change" }); setMessage("Organization loaded.", "ok", "toolbar"); }
+    catch (err) { setMessage(err.message || String(err), "warn", "toolbar"); }
     render();
   });
 
@@ -832,11 +998,11 @@
       selectedOrgId = organizationId;
       adminAccess = null;
       selected = null;
-      await loadOrgContext();
-      setMessage("Organization loaded.", "ok");
+      await loadOrgContext({ force: true, reason: "organization-change-request" });
+      setMessage("Organization loaded.", "ok", "toolbar");
     } catch (e) {
       backend = { ok:false, message:e.message || String(e) };
-      setMessage(e.message || String(e), "warn");
+      setMessage(e.message || String(e), "warn", "toolbar");
     }
   });
 
@@ -850,6 +1016,7 @@
     refreshAuth().catch((e) => { backend = { ok:false, message:e.message || String(e) }; render(); });
   });
   function bootOrganizationPeople(options = {}) {
+    markTiming("boot:start", obj(options).embedded ? "embedded" : "standalone");
     mountOptions = { ...mountOptions, ...obj(options) };
     embeddedMode = Boolean(mountOptions.embedded);
     if (mountOptions.organizationId) selectedOrgId = clean(mountOptions.organizationId);
@@ -865,6 +1032,7 @@
   }
 
   function mount(target, options = {}) {
+    markTiming("mount:start", `${clean(options.initialFilter || "all")} / ${clean(options.initialTab || "identity")}`);
     const el = typeof target === "string" ? document.querySelector(target) : target;
     if (!el) throw new Error("People workbench mount target was not found.");
     externalRoot = el;
@@ -876,6 +1044,8 @@
     if (options.initialTab) activeTab = key(options.initialTab) || activeTab;
     authChecked = false;
     backend = null;
+    clearMessage();
+    if (applyCachedContext(getCachedContext(selectedOrgId))) render();
     return refreshAuth().catch((e) => {
       backend = { ok:false, message:e?.message || String(e) };
       authChecked = true;
@@ -890,7 +1060,8 @@
     isDirty,
     hasUnsavedChanges: isDirty,
     confirmDiscard,
-    reload: () => refreshAuth()
+    reload: () => refreshAuth(),
+    getDiagnostics: () => ({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, people_count: people.length, timings: timingMarks.slice(), cache: cacheSummary(), backend })
   };
 
   window.SyncEtcPeopleAdminPage = window.SyncEtcPeopleAdmin;

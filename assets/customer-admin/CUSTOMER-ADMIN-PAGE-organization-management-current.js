@@ -1,18 +1,18 @@
 // CUSTOMER-ADMIN-PAGE-organization-management-current.js
-// Internal Version: 2026-06-16-116-B
+// Internal Version: 2026-06-16-116-C
 // Purpose: Customer/organization-side Organization Management console runtime. Immutable admin workbench shell with left navigation and right-panel module loading.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-B";
+  const VERSION = "2026-06-16-116-C";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
   const SUPABASE_JS_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
   const AIRCRAFT_ADMIN_EXPECTED_VERSION = "2026-06-15-115-G";
   const AIRCRAFT_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js?v=${encodeURIComponent(AIRCRAFT_ADMIN_EXPECTED_VERSION)}`;
-  const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-16-116-B";
+  const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-16-116-C";
   const PEOPLE_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-people-current.js?v=${encodeURIComponent(PEOPLE_ADMIN_EXPECTED_VERSION)}`;
   const ROOT_SELECTOR = "#syncetc-organization-management-root, #syncetc-organization-admin-console-root, [data-syncetc-page='organization-management']";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -539,29 +539,42 @@
       const host = document.getElementById("syncetc-organization-people-root");
       if (!host) return;
       window.SyncEtcOrganizationManagementModuleContext = window.SyncEtcOrganizationManagementModuleContext || {};
-      window.SyncEtcOrganizationManagementModuleContext.people = {
+      const peopleContext = {
         embedded: true,
         initialFilter: active.peopleFilter || "all",
         initialTab: active.peopleTab || "identity",
         organizationId: state.orgId,
         selectedOrganizationId: state.orgId,
-        parentVersion: VERSION
+        parentVersion: VERSION,
+        accessToken: state.token,
+        email: state.email,
+        accessRows: state.accessRows,
+        accessRow: state.accessRow || selectedRow(),
+        platformAdmin: Boolean(selectedRow()?.platform_admin || selectedRow()?.platformAdmin),
+        supabaseClient
       };
+      window.SyncEtcOrganizationManagementModuleContext.people = peopleContext;
       host.innerHTML = `<div class="omg-module-loading">Loading People Workbench…</div>`;
       ensureLegacyGlobalTextHelpers();
       window.SyncEtcPeopleAdminSuppressAutoBoot = true;
       const mountFn = () => window.SyncEtcPeopleAdmin?.mount || window.SyncEtcPeopleAdminPage?.mount;
       const loadedPeopleVersion = () => clean(window.SyncEtcPeopleAdmin?.version || window.SyncEtcPeopleAdminPage?.version || "");
+      const scriptStarted = Date.now();
       if (!mountFn() || loadedPeopleVersion() !== PEOPLE_ADMIN_EXPECTED_VERSION) {
         peopleScriptLoading = loadScript(PEOPLE_ADMIN_SCRIPT_URL, `syncetc-people-admin-module-script-${PEOPLE_ADMIN_EXPECTED_VERSION.replace(/[^A-Za-z0-9_-]/g, "-")}`);
         await peopleScriptLoading;
+        mark("people:script-loaded", `${Date.now() - scriptStarted}ms`);
+      } else {
+        mark("people:script-reused", loadedPeopleVersion());
       }
       const started = Date.now();
       while (!mountFn()) {
         if (Date.now() - started > 8000) throw new Error("People Workbench module did not become ready.");
         await wait(50);
       }
-      await mountFn()(host, { embedded: true, organizationId: state.orgId, selectedOrganizationId: state.orgId, initialFilter: active.peopleFilter || "all", initialTab: active.peopleTab || "identity", parentVersion: VERSION });
+      const mountStarted = Date.now();
+      await mountFn()(host, peopleContext);
+      mark("people:mounted", `${Date.now() - mountStarted}ms`);
     }
   }
 

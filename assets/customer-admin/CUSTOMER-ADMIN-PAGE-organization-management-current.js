@@ -1,18 +1,18 @@
 // CUSTOMER-ADMIN-PAGE-organization-management-current.js
-// Internal Version: 2026-06-16-116-C
+// Internal Version: 2026-06-16-116-D
 // Purpose: Customer/organization-side Organization Management console runtime. Immutable admin workbench shell with left navigation and right-panel module loading.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-C";
+  const VERSION = "2026-06-16-116-D";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
   const SUPABASE_JS_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
   const AIRCRAFT_ADMIN_EXPECTED_VERSION = "2026-06-15-115-G";
   const AIRCRAFT_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js?v=${encodeURIComponent(AIRCRAFT_ADMIN_EXPECTED_VERSION)}`;
-  const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-16-116-C";
+  const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-16-116-D";
   const PEOPLE_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-people-current.js?v=${encodeURIComponent(PEOPLE_ADMIN_EXPECTED_VERSION)}`;
   const ROOT_SELECTOR = "#syncetc-organization-management-root, #syncetc-organization-admin-console-root, [data-syncetc-page='organization-management']";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -226,8 +226,11 @@
   const MODULES = [
     { key: "overview", label: "Overview", short: "Console home", group: "Home", status: "active", kind: "overview", description: "Organization management home, module status map, and setup shortcuts." },
 
-    { key: "people-members", label: "Members / People", short: "Member records", group: "People", status: "active", kind: "people", peopleFilter: "all", peopleTab: "identity", description: "Manage organization people, member records, lifecycle, roster visibility, access links, and qualifications." },
-    { key: "people-admins", label: "Administrators & Access", short: "Admin access", group: "People", status: "active", kind: "people", peopleFilter: "admins", peopleTab: "access", description: "Manage customer administrators, organization super admins, delegated admin access, invitations, and login links using the same people records." },
+    { key: "people-lifecycle-statuses", label: "Lifecycle Statuses", short: "Status vocabulary", group: "People", status: "active", kind: "people", peopleView: "lifecycle-statuses", description: "Define the customer vocabulary and safe behavior mapping for applicants, active members, inactive/former people, and restricted lifecycle statuses." },
+    { key: "people-membership-classes", label: "Membership Classes", short: "Class vocabulary", group: "People", status: "active", kind: "people", peopleView: "membership-classes", description: "Define membership/user classes such as full, probationary, family, honorary, social, student, or non-member classes." },
+    { key: "people-members", label: "Members / People", short: "Member records", group: "People", status: "active", kind: "people", peopleView: "members", peopleFilter: "all", peopleTab: "identity", description: "Manage organization people, member records, lifecycle, roster visibility, access links, and qualifications." },
+    { key: "people-admins", label: "Administrators & Access", short: "Admin access", group: "People", status: "active", kind: "people", peopleView: "members", peopleFilter: "admins", peopleTab: "access", description: "Manage customer administrators, organization super admins, delegated admin access, invitations, and login links using the same people records." },
+    { key: "people-stages", label: "Application / Onboarding Stages", short: "Workflow stages", group: "People", status: "placeholder", description: "Applicant and onboarding pipeline stages. This will become a real maintenance module in a later pass." },
     { key: "people-groups", label: "Groups / Roles", short: "Permissions", group: "People", status: "placeholder", description: "Member groups, roles, permission bundles, and future mention groups." },
     { key: "people-instructors", label: "Instructors / Qualifications", short: "Qualifications", group: "People", status: "placeholder", description: "Instructor roster, checkouts, and qualification records." },
 
@@ -413,7 +416,7 @@
     }
     if (active.kind === "people") {
       return `<section class="omg-embedded-panel">
-        <div id="syncetc-organization-people-root" class="omg-module-host" data-syncetc-embedded-module="organization-management" data-syncetc-embedded-view="${attr(active.peopleFilter || "all")}" data-syncetc-embedded-tab="${attr(active.peopleTab || "identity")}"></div>
+        <div id="syncetc-organization-people-root" class="omg-module-host" data-syncetc-embedded-module="organization-management" data-syncetc-embedded-view="${attr(active.peopleView || "members")}" data-syncetc-embedded-filter="${attr(active.peopleFilter || "all")}" data-syncetc-embedded-tab="${attr(active.peopleTab || "identity")}"></div>
       </section>`;
     }
     if (active.status === "existing") return renderExistingPanel(active);
@@ -539,42 +542,45 @@
       const host = document.getElementById("syncetc-organization-people-root");
       if (!host) return;
       window.SyncEtcOrganizationManagementModuleContext = window.SyncEtcOrganizationManagementModuleContext || {};
-      const peopleContext = {
+      window.SyncEtcOrganizationManagementModuleContext.people = {
         embedded: true,
+        initialView: active.peopleView || "members",
         initialFilter: active.peopleFilter || "all",
         initialTab: active.peopleTab || "identity",
         organizationId: state.orgId,
         selectedOrganizationId: state.orgId,
         parentVersion: VERSION,
-        accessToken: state.token,
+        token: state.token,
         email: state.email,
         accessRows: state.accessRows,
-        accessRow: state.accessRow || selectedRow(),
-        platformAdmin: Boolean(selectedRow()?.platform_admin || selectedRow()?.platformAdmin),
+        accessRow: selectedRow(),
+        platformAdmin: Boolean(selectedRow()?.platform_admin),
         supabaseClient
       };
-      window.SyncEtcOrganizationManagementModuleContext.people = peopleContext;
       host.innerHTML = `<div class="omg-module-loading">Loading People Workbench…</div>`;
       ensureLegacyGlobalTextHelpers();
       window.SyncEtcPeopleAdminSuppressAutoBoot = true;
       const mountFn = () => window.SyncEtcPeopleAdmin?.mount || window.SyncEtcPeopleAdminPage?.mount;
       const loadedPeopleVersion = () => clean(window.SyncEtcPeopleAdmin?.version || window.SyncEtcPeopleAdminPage?.version || "");
-      const scriptStarted = Date.now();
+      let scriptLoadMs = 0;
       if (!mountFn() || loadedPeopleVersion() !== PEOPLE_ADMIN_EXPECTED_VERSION) {
+        const scriptStartedAt = performance.now();
+        mark("people-module:script-load-start", PEOPLE_ADMIN_EXPECTED_VERSION);
         peopleScriptLoading = loadScript(PEOPLE_ADMIN_SCRIPT_URL, `syncetc-people-admin-module-script-${PEOPLE_ADMIN_EXPECTED_VERSION.replace(/[^A-Za-z0-9_-]/g, "-")}`);
         await peopleScriptLoading;
-        mark("people:script-loaded", `${Date.now() - scriptStarted}ms`);
+        scriptLoadMs = Math.round(performance.now() - scriptStartedAt);
+        mark("people-module:script-load-done", `${scriptLoadMs}ms`);
       } else {
-        mark("people:script-reused", loadedPeopleVersion());
+        mark("people-module:script-reused", loadedPeopleVersion() || "already loaded");
       }
       const started = Date.now();
       while (!mountFn()) {
         if (Date.now() - started > 8000) throw new Error("People Workbench module did not become ready.");
         await wait(50);
       }
-      const mountStarted = Date.now();
-      await mountFn()(host, peopleContext);
-      mark("people:mounted", `${Date.now() - mountStarted}ms`);
+      const mountStartedAt = performance.now();
+      await mountFn()(host, { embedded: true, organizationId: state.orgId, selectedOrganizationId: state.orgId, initialView: active.peopleView || "members", initialDefinition: active.peopleView || "", initialFilter: active.peopleFilter || "all", initialTab: active.peopleTab || "identity", parentVersion: VERSION, token: state.token, email: state.email, accessRows: state.accessRows, accessRow: selectedRow(), platformAdmin: Boolean(selectedRow()?.platform_admin), supabaseClient, scriptLoadMs });
+      mark("people-module:mount-done", `${Math.round(performance.now() - mountStartedAt)}ms`);
     }
   }
 

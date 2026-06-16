@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-16-116-C
+// Internal Version: 2026-06-16-116-D
 // Purpose: Organization Admin People workbench. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-C";
+  const VERSION = "2026-06-16-116-D";
   const ROOT_ID = "syncetc-organization-people-root";
   const ROOT_SELECTOR = "#syncetc-organization-people-root, #syncetc-people-admin-root, [data-syncetc-page=\"organization-people\"]";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -14,8 +14,6 @@
   const SUPABASE_ANON_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const EDGE_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
   const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
-  const BOOT_STARTED_AT = performance.now();
-  const CONTEXT_CACHE_TTL_MS = 60 * 1000;
 
   const ROLE_ORDER = {
     "organization-super-admin": 10,
@@ -51,20 +49,29 @@
   let people = [];
   let pageConfig = null;
   let selected = null;
+  let activeDefinitionKind = "";
+  let definitionLists = { statuses: [], membership_classes: [] };
+  let selectedDefinition = null;
+  let definitionSearch = "";
+  let definitionFilter = "all";
+  let definitionSearchRestore = null;
+  let definitionDragId = "";
+  let definitionRpcAvailable = true;
   let search = "";
   let filter = "all";
   let message = "";
   let messageKind = "";
-  let messageTarget = "editor";
-  let lastListStatus = "";
-  let lastListStatusKind = "";
   let busy = false;
   let backend = null;
   let debounceTimer = null;
   let fieldErrors = {};
   let dirty = false;
-  let timingMarks = [];
-  const orgContextCache = new Map();
+  let loadRunCounter = 0;
+  let activeLoadRun = null;
+  let loadTimings = [];
+
+  const PEOPLE_CACHE_TTL_MS = 45000;
+  const peopleCacheByOrg = {};
 
   const $ = (id) => document.getElementById(id);
   const esc = (v) => String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#039;");
@@ -76,7 +83,72 @@
   function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
   function shouldWaitForSession() { try { return window.sessionStorage.getItem("syncetc_just_logged_in") === "1"; } catch { return false; } }
   function clearJustLoggedIn() { try { window.sessionStorage.removeItem("syncetc_just_logged_in"); } catch {} }
+  function nowMs() { try { return performance.now(); } catch { return Date.now(); } }
+  function beginLoadTrace(label) {
+    const run = { id: ++loadRunCounter, label: label || "load", started_at: new Date().toISOString(), started_ms: nowMs(), duration_ms: 0, status: "running", steps: [] };
+    activeLoadRun = run;
+    loadTimings.unshift(run);
+    loadTimings = loadTimings.slice(0, 5);
+    return run;
+  }
+  function markLoad(label, detail = "", run = activeLoadRun) {
+    if (!run) return;
+    run.steps.push({ ms: Math.round(nowMs() - run.started_ms), label: clean(label), detail: detail ? clean(detail) : "" });
+  }
+  function finishLoad(status = "ok", run = activeLoadRun) {
+    if (!run) return;
+    run.status = status;
+    run.duration_ms = Math.round(nowMs() - run.started_ms);
+  }
+  async function timedLoad(label, fn, run = activeLoadRun) {
+    const started = nowMs();
+    try {
+      const result = await fn();
+      markLoad(label, `${Math.round(nowMs() - started)}ms`, run);
+      return result;
+    } catch (error) {
+      markLoad(label, `failed after ${Math.round(nowMs() - started)}ms: ${error?.message || error}`, run);
+      throw error;
+    }
+  }
+  function getCachedOrgContext(orgId) {
+    const cached = peopleCacheByOrg[clean(orgId)];
+    if (!cached) return null;
+    const age = Date.now() - Number(cached.cached_at_ms || 0);
+    return age >= 0 && age < PEOPLE_CACHE_TTL_MS ? cached : null;
+  }
+  function saveOrgContextCache(orgId) {
+    if (!orgId) return;
+    peopleCacheByOrg[clean(orgId)] = { cached_at_ms: Date.now(), adminAccess, options, pageConfig, people: arr(people).slice(), definitionLists: { statuses: arr(definitionLists.statuses).slice(), membership_classes: arr(definitionLists.membership_classes).slice() } };
+  }
+  function hydrateFromMountOptions() {
+    if (!embeddedMode) return false;
+    const ctx = obj(window.SyncEtcOrganizationManagementModuleContext?.people);
+    const parentToken = clean(mountOptions.token || mountOptions.authToken || ctx.token || ctx.authToken);
+    if (parentToken) token = parentToken;
+    const parentEmail = clean(mountOptions.email || mountOptions.authEmail || ctx.email || ctx.authEmail);
+    if (parentEmail) email = parentEmail;
+    const parentAccessRows = arr(mountOptions.accessRows).length ? arr(mountOptions.accessRows) : arr(ctx.accessRows);
+    if (parentAccessRows.length) allAccess = parentAccessRows;
+    const parentAccessRow = obj(mountOptions.accessRow).organization_id ? obj(mountOptions.accessRow) : obj(ctx.accessRow);
+    if (parentAccessRow.organization_id) {
+      adminAccess = parentAccessRow;
+      if (!allAccess.length) allAccess = [parentAccessRow];
+      if (!selectedOrgId) selectedOrgId = clean(parentAccessRow.organization_id);
+    }
+    if (mountOptions.platformAdmin !== undefined || ctx.platformAdmin !== undefined) platformAdmin = Boolean(mountOptions.platformAdmin ?? ctx.platformAdmin);
+    const requestedDefinition = normalizeDefinitionKind(mountOptions.initialDefinition || mountOptions.definitionKind || mountOptions.initialView || mountOptions.view || ctx.initialDefinition || ctx.definitionKind || ctx.initialView || ctx.view || "");
+    if (requestedDefinition) activeDefinitionKind = requestedDefinition;
+    return Boolean(token);
+  }
   const bool = (v) => v === true;
+  function normalizeDefinitionKind(value) {
+    const k = key(value);
+    if (["lifecycle-statuses", "lifecycle-status", "statuses", "status", "membership-statuses"].includes(k)) return "lifecycle-statuses";
+    if (["membership-classes", "membership-class", "classes", "class"].includes(k)) return "membership-classes";
+    return "";
+  }
+  function isDefinitionMode() { return Boolean(activeDefinitionKind); }
   try {
     if (typeof window !== "undefined" && typeof window.lower !== "function") {
       Object.defineProperty(window, "lower", { value: lower, configurable: true });
@@ -124,22 +196,18 @@
   }
 
   async function ensureSupabase() {
-    const started = performance.now();
     if (supabaseClient) return supabaseClient;
     if (mountOptions.supabaseClient && mountOptions.supabaseClient.auth) {
       supabaseClient = mountOptions.supabaseClient;
-      markTiming("supabase:reused_from_parent", "", started);
       return supabaseClient;
     }
     if (window.syncetcSupabase && window.syncetcSupabase.auth) {
       supabaseClient = window.syncetcSupabase;
-      markTiming("supabase:reused_global", "", started);
       return supabaseClient;
     }
     if (!window.supabase) await loadScript(SUPABASE_JS);
     supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    try { window.syncetcSupabase = supabaseClient; } catch {}
-    markTiming("supabase:created", "", started);
+    try { window.syncetcSupabase = window.syncetcSupabase || supabaseClient; } catch {}
     return supabaseClient;
   }
 
@@ -166,60 +234,6 @@
   }
   function cssVars(cfg) { return `--people-primary:${cfg.primary};--people-secondary:${cfg.secondary};--people-surface:${cfg.surface};--people-text:${cfg.text};--people-muted:${cfg.muted};--people-border:${cfg.border};--people-soft:${cfg.soft};--people-strong-soft:${cfg.strongSoft};--people-shadow:${cfg.shadow};--people-radius:${cfg.radius};--people-page-width:${cfg.pageWidth};`; }
 
-  function markTiming(label, detail = "", startedAt = null) {
-    try {
-      const now = performance.now();
-      const row = { ms: Math.round(now - BOOT_STARTED_AT), label: clean(label), detail: clean(detail) };
-      if (typeof startedAt === "number") row.duration_ms = Math.max(0, Math.round(now - startedAt));
-      timingMarks.push(row);
-      if (timingMarks.length > 90) timingMarks = timingMarks.slice(-90);
-    } catch {}
-  }
-
-  function cacheKeyForOrg(orgId = selectedOrgId) { return clean(orgId); }
-  function getCachedContext(orgId = selectedOrgId) {
-    const cached = orgContextCache.get(cacheKeyForOrg(orgId));
-    if (!cached) return null;
-    if (Date.now() - Number(cached.saved_at || 0) > CONTEXT_CACHE_TTL_MS) return null;
-    return cached;
-  }
-  function updateCachedContext(partial = {}, orgId = selectedOrgId) {
-    const keyValue = cacheKeyForOrg(orgId);
-    if (!keyValue) return;
-    const previous = orgContextCache.get(keyValue) || {};
-    orgContextCache.set(keyValue, { ...previous, ...partial, saved_at: Date.now() });
-  }
-  function invalidateCachedContext(orgId = selectedOrgId) {
-    const keyValue = cacheKeyForOrg(orgId);
-    if (keyValue) orgContextCache.delete(keyValue);
-  }
-  function cacheSummary() {
-    return Array.from(orgContextCache.entries()).map(([orgId, value]) => ({ orgId, age_ms: Math.max(0, Date.now() - Number(value.saved_at || 0)), people_count: arr(value.people).length, has_vocabulary: Boolean(value.options), has_access: Boolean(value.adminAccess) }));
-  }
-  function applyCachedContext(cached) {
-    if (!cached) return false;
-    if (cached.adminAccess) adminAccess = cached.adminAccess;
-    if (cached.options) options = cached.options;
-    if (cached.pageConfig !== undefined) pageConfig = cached.pageConfig;
-    if (Array.isArray(cached.people)) people = cached.people;
-    if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
-    return true;
-  }
-  function seedAccessFromMountOptions() {
-    const rows = arr(mountOptions.accessRows).filter(Boolean);
-    const row = obj(mountOptions.accessRow);
-    if (rows.length) allAccess = rows;
-    else if (row.organization_id) allAccess = [row];
-    if (mountOptions.platformAdmin !== undefined) platformAdmin = Boolean(mountOptions.platformAdmin);
-    if (mountOptions.email) email = clean(mountOptions.email) || email;
-    if (!selectedOrgId && row.organization_id) selectedOrgId = clean(row.organization_id);
-    if (selectedOrgId) {
-      const seeded = allAccess.find((r) => String(r.organization_id) === selectedOrgId) || (String(row.organization_id || "") === selectedOrgId ? row : null);
-      if (seeded) adminAccess = seeded;
-    }
-    return allAccess.length > 0;
-  }
-
   function setShellState() {
     const row = selectedRow();
     const rows = adminRows();
@@ -238,17 +252,7 @@
     });
   }
 
-  function setMessage(text, kind = "", target = "editor") {
-    message = text || "";
-    messageKind = kind || "";
-    messageTarget = target || "editor";
-    if (messageTarget === "toolbar") {
-      lastListStatus = message;
-      lastListStatusKind = messageKind;
-    }
-    render();
-  }
-  function clearMessage() { message = ""; messageKind = ""; messageTarget = "editor"; }
+  function setMessage(text, kind = "") { message = text || ""; messageKind = kind; render(); }
   async function getStableSession() {
     const attempts = shouldWaitForSession() ? 14 : 3;
     for (let i = 0; i < attempts; i += 1) {
@@ -282,6 +286,22 @@
     }, 0);
   }
 
+  function restoreDefinitionSearchFocus() {
+    const restore = definitionSearchRestore;
+    if (!restore) return;
+    definitionSearchRestore = null;
+    window.setTimeout(() => {
+      const inputEl = $("people-def-search");
+      if (!inputEl) return;
+      try { inputEl.focus({ preventScroll: true }); } catch { inputEl.focus(); }
+      try {
+        const start = Number.isFinite(restore.start) ? Math.min(restore.start, inputEl.value.length) : inputEl.value.length;
+        const end = Number.isFinite(restore.end) ? Math.min(restore.end, inputEl.value.length) : start;
+        inputEl.setSelectionRange(start, end);
+      } catch {}
+    }, 0);
+  }
+
   function activateTab(tabKey) {
     const next = key(tabKey || "identity") || "identity";
     activeTab = next;
@@ -297,57 +317,49 @@
     });
   }
 
-  async function refreshAuth() {
-    const started = performance.now();
-    markTiming("auth:start", embeddedMode ? "embedded" : "standalone");
-    await ensureSupabase();
-    if (mountOptions.accessToken) {
-      token = clean(mountOptions.accessToken);
-      email = clean(mountOptions.email) || email;
-      markTiming("auth:seeded_from_parent");
-    } else {
-      const sessionStarted = performance.now();
-      const session = await getStableSession();
-      token = session?.access_token || "";
-      email = session?.user?.email || "";
-      markTiming("auth:session", token ? "signed in" : "no session", sessionStarted);
-    }
-    if (!token) {
-      allAccess = []; adminAccess = null; selectedOrgId = ""; platformAdmin = false; people = []; selected = null; backend = null;
-    } else {
-      try {
-        const seeded = seedAccessFromMountOptions();
-        if (seeded && selectedOrgId) {
-          markTiming("access:seeded_from_parent", `${allAccess.length} row(s)`);
-          await loadOrgContext({ force: false, reason: "seeded-access" });
-        } else {
-          await loadAccess();
-        }
-      } catch (e) {
-        backend = { ok:false, message:e.message || String(e) };
-        authChecked = true;
-        setShellState();
-        setMessage(e.message || String(e), "warn", "toolbar");
-        markTiming("auth:error", e.message || String(e), started);
-        return;
+  async function refreshAuth(loadOptions = {}) {
+    const run = beginLoadTrace(loadOptions.force ? "force refresh" : "initial refresh");
+    try {
+      await timedLoad("ensure Supabase", ensureSupabase, run);
+      const hydrated = hydrateFromMountOptions();
+      if (hydrated) {
+        markLoad("parent context", "token/access reused from Organization Management", run);
+      } else {
+        const session = await timedLoad("session check", getStableSession, run);
+        token = session?.access_token || "";
+        email = session?.user?.email || "";
       }
+      if (!token) {
+        allAccess = []; adminAccess = null; selectedOrgId = ""; platformAdmin = false; people = []; selected = null; selectedDefinition = null; backend = null;
+      } else {
+        await loadAccess({ ...obj(loadOptions), run });
+      }
+      authChecked = true;
+      setShellState();
+      markLoad("render", `${arr(people).length} people`, run);
+      finishLoad("ok", run);
+      render();
+    } catch (e) {
+      backend = { ok:false, message:e.message || String(e) };
+      authChecked = true;
+      try { setShellState(); } catch {}
+      markLoad("error", e.message || String(e), run);
+      finishLoad("error", run);
+      throw e;
     }
-    authChecked = true;
-    setShellState();
-    markTiming("auth:done", `${people.length} people`, started);
-    render();
   }
 
   async function call(action, payload = {}) {
     if (!token) throw new Error("Log in first.");
-    const started = performance.now();
+    const started = nowMs();
     const res = await fetch(EDGE_URL, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ action, ...payload }) });
     const json = await res.json().catch(() => ({}));
     backend = json;
-    markTiming(`edge:${action}`, `HTTP ${res.status}`, started);
+    markLoad(`edge ${action}`, `${Math.round(nowMs() - started)}ms • HTTP ${res.status}`);
     if (!res.ok || json.ok === false) throw new Error(json.message || json.error || `Action failed: ${action}`);
     return json;
   }
+
 
   async function login() {
     await ensureSupabase();
@@ -360,86 +372,433 @@
     token = data?.session?.access_token || "";
     email = data?.user?.email || loginEmail;
     await refreshAuth();
-    setMessage("Logged in.", "ok", "toolbar");
+    setMessage("Logged in.", "ok");
   }
-  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; authChecked = true; setShellState(); render(); }
-  async function resetOwnPassword() { await ensureSupabase(); const loginEmail = clean($("people-login-email")?.value || email).toLowerCase(); if (!loginEmail) throw new Error("Enter email first."); const { error } = await supabaseClient.auth.resetPasswordForEmail(loginEmail, { redirectTo: "https://syncetc.webflow.io/password-reset" }); if (error) throw error; setMessage("Password reset email requested.", "ok", "toolbar"); }
+  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; definitionLists = { statuses: [], membership_classes: [] }; selectedDefinition = null; authChecked = true; setShellState(); render(); }
+  async function resetOwnPassword() { await ensureSupabase(); const loginEmail = clean($("people-login-email")?.value || email).toLowerCase(); if (!loginEmail) throw new Error("Enter email first."); const { error } = await supabaseClient.auth.resetPasswordForEmail(loginEmail, { redirectTo: "https://syncetc.webflow.io/password-reset" }); if (error) throw error; setMessage("Password reset email requested.", "ok"); }
 
   async function runButton(id, label, fn) {
     const btn = $(id); const old = btn?.textContent || "";
     try { busy = true; if (btn) { btn.disabled = true; btn.textContent = label || "Working…"; } return await fn(); }
-    catch (e) { setMessage(e.message || String(e), "warn", "toolbar"); }
+    catch (e) { setMessage(e.message || String(e), "warn"); }
     finally { busy = false; if (btn) { btn.disabled = false; btn.textContent = old; } render(); }
   }
 
-  async function loadAccess() {
-    const started = performance.now();
-    const res = await call("get_my_access");
-    platformAdmin = Boolean(res.platform_admin);
-    allAccess = res.access || [];
+  async function loadAccess(loadOptions = {}) {
+    hydrateFromMountOptions();
+    const run = loadOptions.run || activeLoadRun;
+    const parentHasAccess = embeddedMode && (obj(mountOptions.accessRow).organization_id || arr(mountOptions.accessRows).length || obj(window.SyncEtcOrganizationManagementModuleContext?.people?.accessRow).organization_id);
+    if (!parentHasAccess) {
+      const res = await timedLoad("get_my_access", () => call("get_my_access"), run);
+      platformAdmin = Boolean(res.platform_admin);
+      allAccess = res.access || [];
+    }
     const rows = adminRows();
     if (!selectedOrgId) {
       let stored = "";
       try { stored = localStorage.getItem(SELECTED_ORG_KEY) || ""; } catch {}
-      const preferred = rows.find((r) => clean(r.organization_id) === stored || clean(r.organization_key) === stored) || rows[0] || null;
+      const preferred = rows.find((r) => clean(r.organization_id) === stored || clean(r.organization_key) === stored) || adminAccess || rows[0] || null;
       if (preferred) selectedOrgId = String(preferred.organization_id);
     }
-    if (selectedOrgId && !rows.some((r) => String(r.organization_id) === selectedOrgId) && rows[0]) selectedOrgId = String(rows[0].organization_id);
+    if (selectedOrgId && rows.length && !rows.some((r) => String(r.organization_id) === selectedOrgId) && rows[0]) selectedOrgId = String(rows[0].organization_id);
     if (selectedOrgId) {
       try { localStorage.setItem(SELECTED_ORG_KEY, selectedOrgId); } catch {}
-      const seeded = rows.find((r) => String(r.organization_id) === selectedOrgId);
-      if (seeded) adminAccess = seeded;
-      await loadOrgContext({ force: false, reason: "access-loaded" });
+      await loadOrgContext({ ...obj(loadOptions), run });
     }
     setShellState();
-    markTiming("access:done", `${rows.length} admin org row(s)`, started);
   }
 
-  async function loadOrgContext(settings = {}) {
+  function applyPeopleListResult(res) {
+    pageConfig = res?.page || null;
+    people = res?.people || [];
+    if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
+  }
+
+  async function fetchPeopleList(run = activeLoadRun) {
+    return timedLoad("people list", () => call("organization_list_people", { organization_id: selectedOrgId, include_archived: true, filter: "all" }), run);
+  }
+
+  async function loadOrgContext(loadOptions = {}) {
     if (!selectedOrgId) return;
-    const started = performance.now();
-    const force = Boolean(settings.force);
-    const cached = !force ? getCachedContext(selectedOrgId) : null;
-    if (cached && applyCachedContext(cached)) {
-      setShellState();
-      markTiming("orgContext:cache_hit", `${people.length} people`, started);
-      return;
+    const run = loadOptions.run || activeLoadRun;
+    if (!loadOptions.force) {
+      const cached = getCachedOrgContext(selectedOrgId);
+      if (cached) {
+        adminAccess = adminAccess || cached.adminAccess || null;
+        options = cached.options || { statuses: [], membership_classes: [], application_stages: [], roles: [] };
+        pageConfig = cached.pageConfig || null;
+        people = arr(cached.people).slice();
+        definitionLists = cached.definitionLists || definitionLists;
+        if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
+        markLoad("people context cache", `${people.length} people`, run);
+        if (isDefinitionMode() && (!arr(definitionLists.statuses).length && !arr(definitionLists.membership_classes).length)) {
+          await loadPeopleDefinitionLists(run);
+          saveOrgContextCache(selectedOrgId);
+        }
+        setShellState();
+        return;
+      }
     }
-
-    const hasSeededAccess = adminAccess && String(adminAccess.organization_id || "") === String(selectedOrgId);
-    const dashboardPromise = hasSeededAccess
-      ? Promise.resolve({ access: adminAccess, ok: true, seeded: true })
-      : call("get_organization_admin_dashboard", { organization_id: selectedOrgId });
-    const vocabularyPromise = call("organization_list_access_vocabulary", { organization_id: selectedOrgId });
-    const peoplePromise = call("organization_list_people", { organization_id: selectedOrgId, include_archived: true, filter: "all" });
-    const [dash, vocab, peopleRes] = await Promise.all([dashboardPromise, vocabularyPromise, peoplePromise]);
-
+    const dashboardPromise = (embeddedMode && (adminAccess || obj(mountOptions.accessRow).organization_id))
+      ? Promise.resolve({ access: adminAccess || obj(mountOptions.accessRow) })
+      : timedLoad("admin dashboard", () => call("get_organization_admin_dashboard", { organization_id: selectedOrgId }), run);
+    const vocabularyPromise = timedLoad("access vocabulary", () => call("organization_list_access_vocabulary", { organization_id: selectedOrgId }), run);
+    const shouldLoadPeopleList = !isDefinitionMode();
+    const peoplePromise = shouldLoadPeopleList ? fetchPeopleList(run) : Promise.resolve(null);
+    const [dash, vocab, peopleResult] = await Promise.all([dashboardPromise, vocabularyPromise, peoplePromise]);
     adminAccess = dash.access || adminAccess || null;
     options = { statuses: vocab.statuses || [], membership_classes: vocab.membership_classes || [], application_stages: vocab.application_stages || [], roles: sortRoles(vocab.roles || []) };
-    pageConfig = peopleRes.page || null;
-    people = peopleRes.people || [];
-    if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
-    updateCachedContext({ adminAccess, options, pageConfig, people });
+    if (peopleResult) applyPeopleListResult(peopleResult);
+    if (isDefinitionMode()) await loadPeopleDefinitionLists(run);
+    saveOrgContextCache(selectedOrgId);
     setShellState();
-    markTiming("orgContext:loaded_parallel", `${people.length} people${dash.seeded ? "; seeded access" : ""}`, started);
   }
 
-  async function loadPeople(settings = {}) {
+  async function loadPeople(loadOptions = {}) {
     if (!selectedOrgId) return;
-    const started = performance.now();
-    const force = settings.force !== false;
-    if (force) invalidateCachedContext();
-    const cached = !force ? getCachedContext(selectedOrgId) : null;
-    if (cached && applyCachedContext(cached)) {
-      markTiming("people:list_cache_hit", `${people.length} people`, started);
-      return;
+    const res = await fetchPeopleList(loadOptions.run || activeLoadRun);
+    applyPeopleListResult(res);
+    saveOrgContextCache(selectedOrgId);
+  }
+
+
+  function normalizeDefinitionRow(row, type) {
+    const r = { ...obj(row) };
+    if (type === "lifecycle-statuses") {
+      r.definition_type = "lifecycle-statuses";
+      r.definition_id = clean(r.status_definition_id);
+      r.definition_key = clean(r.status_key);
+      r.label = clean(r.label || r.status_key || "Untitled status");
+      r.description = clean(r.description || obj(r.settings_json).description || obj(r.settings_json).notes || "");
+      r.ui_status = definitionUiStatus(r);
+      r.sort_order = Number(r.sort_order || 100);
+    } else {
+      r.definition_type = "membership-classes";
+      r.definition_id = clean(r.membership_class_definition_id);
+      r.definition_key = clean(r.class_key);
+      r.label = clean(r.label || r.class_key || "Untitled class");
+      r.description = clean(r.description || "");
+      r.ui_status = definitionUiStatus(r);
+      r.sort_order = Number(r.sort_order || 100);
     }
-    const res = await call("organization_list_people", { organization_id: selectedOrgId, include_archived: true, filter: "all" });
-    pageConfig = res.page || null;
-    people = res.people || [];
-    if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
-    updateCachedContext({ pageConfig, people });
-    markTiming("people:list_loaded", `${people.length} people`, started);
+    return r;
+  }
+
+  function definitionUiStatus(row) {
+    const status = key(row?.ui_status || row?.status || "active");
+    if (row?.archived_at || status === "archived") return "archived";
+    if (["inactive", "paused"].includes(status)) return "inactive";
+    return "active";
+  }
+
+  function setDefinitionListsFromPayload(payload) {
+    const data = obj(payload);
+    const statuses = arr(data.lifecycle_statuses || data.statuses).map((r) => normalizeDefinitionRow(r, "lifecycle-statuses"));
+    const classes = arr(data.membership_classes).map((r) => normalizeDefinitionRow(r, "membership-classes"));
+    if (statuses.length || classes.length) definitionLists = { statuses, membership_classes: classes };
+  }
+
+  async function loadPeopleDefinitionLists(run = activeLoadRun) {
+    if (!selectedOrgId) return;
+    try {
+      const data = await timedLoad("people definitions", () => call("organization_list_people_definitions", { organization_id: selectedOrgId, include_archived: true }), run);
+      definitionRpcAvailable = true;
+      setDefinitionListsFromPayload(data);
+    } catch (e) {
+      definitionRpcAvailable = false;
+      definitionLists = {
+        statuses: arr(options.statuses).map((r) => normalizeDefinitionRow(r, "lifecycle-statuses")),
+        membership_classes: arr(options.membership_classes).map((r) => normalizeDefinitionRow(r, "membership-classes"))
+      };
+      if (isDefinitionMode()) {
+        message = e.message || "People definitions could not be loaded.";
+        messageKind = "warn";
+      }
+      markLoad("people definitions fallback", e.message || String(e), run);
+    }
+  }
+
+  function definitionConfig(kind = activeDefinitionKind) {
+    const k = normalizeDefinitionKind(kind) || "lifecycle-statuses";
+    if (k === "membership-classes") {
+      return {
+        kind: k, title: "Membership Classes", kicker: "People",
+        helper: "Define customer-specific membership or user classes before assigning them to people.",
+        listTitle: "Classes", newLabel: "New class", itemLabel: "class", rowsKey: "membership_classes",
+        idField: "membership_class_definition_id", keyField: "class_key", categoryField: "class_category", categoryLabel: "Class category",
+        categories: [["member","Member"],["probationary","Probationary"],["family","Family / household"],["honorary","Honorary"],["student","Student"],["non_member","Non-member / limited user"],["user","Generic user"],["external","External / vendor"],["other","Other"]]
+      };
+    }
+    return {
+      kind: "lifecycle-statuses", title: "Lifecycle Statuses", kicker: "People",
+      helper: "Define customer-specific lifecycle statuses while keeping each one mapped to a safe internal category.",
+      listTitle: "Statuses", newLabel: "New status", itemLabel: "status", rowsKey: "statuses",
+      idField: "status_definition_id", keyField: "status_key", categoryField: "lifecycle_category", categoryLabel: "Lifecycle category",
+      categories: [["prospect","Prospect"],["applicant","Applicant"],["onboarding","Onboarding"],["invited","Invited"],["pending","Pending review"],["active","Active"],["inactive","Inactive"],["suspended","Suspended"],["expelled","Expelled"],["former","Former"],["archived","Archived"],["blocked","Blocked"]]
+    };
+  }
+
+  function allDefinitionRows(kind = activeDefinitionKind) {
+    const cfg = definitionConfig(kind);
+    return arr(definitionLists[cfg.rowsKey]).map((r) => normalizeDefinitionRow(r, cfg.kind));
+  }
+
+  function sortedDefinitionRows(rows) {
+    const rank = { active: 0, inactive: 1, archived: 2 };
+    return arr(rows).slice().sort((a,b) => {
+      const as = definitionUiStatus(a), bs = definitionUiStatus(b);
+      const ar = rank[as] ?? 9, br = rank[bs] ?? 9;
+      if (ar !== br) return ar - br;
+      const ao = Number(a.sort_order || (as === "archived" ? 999 : 100));
+      const bo = Number(b.sort_order || (bs === "archived" ? 999 : 100));
+      if (ao !== bo) return ao - bo;
+      return clean(a.label).localeCompare(clean(b.label));
+    });
+  }
+
+  function definitionMatchesSearch(row) {
+    const q = lower(definitionSearch);
+    if (!q) return true;
+    const hay = [row.label, row.definition_key, row.description, row.lifecycle_category, row.class_category, row.dues_behavior].map(clean).join(" ").toLowerCase();
+    return hay.includes(q);
+  }
+
+  function definitionMatchesFilter(row) {
+    const f = key(definitionFilter || "all");
+    const status = definitionUiStatus(row);
+    return f === "all" || f === status;
+  }
+
+  function visibleDefinitionRows() {
+    return sortedDefinitionRows(allDefinitionRows()).filter((r) => definitionMatchesSearch(r) && definitionMatchesFilter(r));
+  }
+
+  function nextDefinitionSortOrder() {
+    const rows = allDefinitionRows().filter((r) => definitionUiStatus(r) !== "archived");
+    const max = rows.reduce((m, r) => Math.max(m, Number(r.sort_order || 0)), 0);
+    return Math.max(10, max + 10);
+  }
+
+  function blankDefinition(kind = activeDefinitionKind) {
+    const cfg = definitionConfig(kind);
+    if (cfg.kind === "membership-classes") {
+      return { membership_class_definition_id: "", class_key: "", label: "", description: "", class_category: "member", dues_behavior: "standard", billing_notes: "", privilege_notes: "", default_can_reserve_assets: false, default_can_view_member_documents: true, requires_admin_review: false, is_default: false, status: "active", ui_status: "active", sort_order: nextDefinitionSortOrder() };
+    }
+    return { status_definition_id: "", status_key: "", label: "", description: "", lifecycle_category: "active", is_active_member: true, can_login: true, can_view_member_portal: true, can_reserve_assets: true, requires_admin_review: false, is_default: false, status: "active", ui_status: "active", sort_order: nextDefinitionSortOrder() };
+  }
+
+  function selectedDefinitionId(row = selectedDefinition) {
+    const cfg = definitionConfig();
+    return clean(row?.[cfg.idField] || row?.definition_id || row?.[cfg.keyField] || row?.definition_key);
+  }
+
+  function slugFromLabel(label, fallback = "item") {
+    const raw = lower(label || fallback).replace(/[^a-z0-9]+/g,"-").replace(/-+/g,"-").replace(/^-|-$/g,"");
+    return raw || fallback;
+  }
+
+  function definitionStatusOptions(value) {
+    const v = definitionUiStatus({ status: value });
+    const rows = [["active","Active","active"],["paused","Inactive","inactive"],["archived","Archived","archived"]];
+    return rows.map(([optionValue, label, uiKey]) => `<option value="${esc(optionValue)}" ${v === uiKey ? "selected" : ""}>${esc(label)}</option>`).join("");
+  }
+
+  function definitionCategoryOptions(cfg, value) {
+    const current = key(value) || (cfg.kind === "membership-classes" ? "member" : "active");
+    return cfg.categories.map(([k,label]) => `<option value="${esc(k)}" ${current === k ? "selected" : ""}>${esc(label)}</option>`).join("");
+  }
+
+  function duesBehaviorOptions(value) {
+    const current = key(value || "standard");
+    const rows = [["standard","Standard"],["included_family","Included family"],["honorary_conditional","Honorary / conditional"],["reduced","Reduced"],["none","None"],["custom","Custom"]];
+    return rows.map(([k,label]) => `<option value="${esc(k)}" ${current === k ? "selected" : ""}>${esc(label)}</option>`).join("");
+  }
+
+  function renderDefinitionList() {
+    const cfg = definitionConfig();
+    const rows = visibleDefinitionRows();
+    const allRows = allDefinitionRows();
+    const counts = { all: 0, active: 0, inactive: 0, archived: 0 };
+    allRows.forEach((r) => { if (!definitionMatchesSearch(r)) return; counts.all += 1; counts[definitionUiStatus(r)] = (counts[definitionUiStatus(r)] || 0) + 1; });
+    const filters = [["all","All"],["active","Active"],["inactive","Inactive"],["archived","Archived"]];
+    return `<aside class="people-list-panel">
+      <div class="people-list-head"><div><h3>${esc(cfg.listTitle)}</h3><p>Search, filter, and reorder ${esc(cfg.itemLabel)} definitions.</p></div></div>
+      <div class="people-toolbar-row"><button id="people-def-refresh" class="people-btn secondary" type="button">Refresh</button></div>
+      <label class="people-field people-status-filter"><span>Status filter</span><select id="people-def-filter">${filters.map(([f,label]) => `<option value="${esc(f)}" ${definitionFilter===f ? "selected" : ""}>${esc(label)} (${counts[f] || 0})</option>`).join("")}</select></label>
+      <div class="people-search-wrap"><input id="people-def-search" value="${esc(definitionSearch)}" placeholder="Search labels, notes, categories…"><button id="people-def-clear-search" class="people-icon-btn" title="Clear" type="button">×</button></div>
+      <div class="people-sort-hint">Sorted by display order. Archived rows are muted and stay at the bottom.</div>
+      <div class="people-compact-list people-def-list">${rows.length ? rows.map(renderDefinitionRow).join("") : `<div class="people-empty-row">No ${esc(cfg.itemLabel)} definitions match this search.</div>`}</div>
+    </aside>`;
+  }
+
+  function renderDefinitionRow(row) {
+    const cfg = definitionConfig();
+    const id = selectedDefinitionId(row);
+    const selectedClass = selectedDefinitionId() === id ? "selected" : "";
+    const status = definitionUiStatus(row);
+    const muted = status === "archived" ? "archived" : status === "inactive" ? "restricted" : "";
+    const category = clean(row[cfg.categoryField]);
+    const meta = [category, row.description].filter(Boolean).join(" • ");
+    const canMove = status !== "archived";
+    return `<div class="people-def-row people-person-card ${selectedClass} ${muted}" data-def-row data-def-id="${esc(id)}" draggable="${canMove ? "true" : "false"}">
+      <button class="people-def-main" data-def-open="${esc(id)}" type="button"><span class="person-main"><strong>${esc(row.label || "Untitled")}</strong><small>${esc(meta || row.definition_key || "No notes")}</small></span><span class="person-badges"><em>${esc(status === "inactive" ? "Inactive" : status === "archived" ? "Archived" : "Active")}</em>${row.is_default ? `<em>Default</em>` : ""}</span></button>
+      <span class="people-def-order"><button class="people-order-button" data-def-move="up" data-def-id="${esc(id)}" type="button" ${canMove ? "" : "disabled"}>↑</button><button class="people-order-button" data-def-move="down" data-def-id="${esc(id)}" type="button" ${canMove ? "" : "disabled"}>↓</button></span>
+    </div>`;
+  }
+
+  function renderDefinitionEditor() {
+    const cfg = definitionConfig();
+    const row = selectedDefinition;
+    const mayEdit = canManagePeople(selectedRow());
+    if (!row) return `<section class="people-editor-panel people-empty"><h3>Select a ${esc(cfg.itemLabel)}</h3><p>Choose a definition on the left, or create a new one. These definitions control vocabulary used by the Members / People editor.</p>${!definitionRpcAvailable ? `<p class="people-warning">Definition editing is temporarily unavailable.</p>` : ""}</section>`;
+    const status = definitionUiStatus(row);
+    const archiveButton = status === "archived" ? `<button id="people-def-restore" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Restore</button>` : `<button id="people-def-archive" class="people-btn danger" type="button" ${mayEdit ? "" : "disabled"}>Archive</button>`;
+    const debugKey = currentDebugEnabled() ? `<label class="people-field"><span>Key</span><input value="${esc(row.definition_key || row[cfg.keyField] || "Will be generated")}" readonly><small>Debug only. Keys stay stable after creation.</small></label>` : "";
+    const commonTop = `${input("people-def-label", "Display name", row.label)}<label class="people-field"><span>Status</span><select id="people-def-ui-status">${definitionStatusOptions(status)}</select><small>Use Archive instead of deleting definitions that may be referenced by people.</small></label><label class="people-field"><span>${esc(cfg.categoryLabel)}</span><select id="people-def-category">${definitionCategoryOptions(cfg, row[cfg.categoryField])}</select><small>Safe internal mapping used by access and future workflow logic.</small></label>${debugKey}${textarea("people-def-description", "Description / notes", row.description || obj(row.settings_json).description || "")}`;
+    const body = cfg.kind === "membership-classes"
+      ? `${commonTop}<div class="people-form-grid"><label class="people-field"><span>Dues behavior</span><select id="people-def-dues-behavior">${duesBehaviorOptions(row.dues_behavior)}</select><small>For future billing rules. No billing automation is added here.</small></label>${textarea("people-def-privilege-notes", "Privilege notes", row.privilege_notes || "")}${textarea("people-def-billing-notes", "Billing notes", row.billing_notes || "")}</div><div class="people-check-grid">${checkbox("people-def-can-reserve", "Default can reserve/use assets", row.default_can_reserve_assets)}${checkbox("people-def-view-docs", "Default can view member documents", row.default_can_view_member_documents)}${checkbox("people-def-review", "Requires admin review", row.requires_admin_review)}${checkbox("people-def-default", "Default class", row.is_default)}</div>`
+      : `${commonTop}<div class="people-check-grid">${checkbox("people-def-active-member", "Counts as active member", row.is_active_member)}${checkbox("people-def-can-login", "Can log in", row.can_login)}${checkbox("people-def-view-portal", "Can view member portal", row.can_view_member_portal)}${checkbox("people-def-can-reserve", "Can reserve/use assets", row.can_reserve_assets)}${checkbox("people-def-review", "Requires admin review", row.requires_admin_review)}${checkbox("people-def-default", "Default status", row.is_default)}</div>`;
+    return `<section class="people-editor-panel people-editor people-def-editor">
+      <div class="people-editor-head"><div><h3>${esc(row.label || `New ${cfg.itemLabel}`)}</h3><div class="people-pill-row">${pill(status === "inactive" ? "Inactive" : status === "archived" ? "Archived" : "Active", status === "archived" || status === "inactive" ? "warn" : "ok")}${pill(row[cfg.categoryField])}${row.is_default ? pill("Default") : ""}</div></div></div>
+      ${!mayEdit ? `<p class="people-warning">You can view these definitions, but you do not have permission to edit them.</p>` : ""}
+      <div class="people-tab-panel active"><div class="people-form-grid">${body}</div></div>
+      <div class="people-action-row"><div class="people-save-state ${dirty ? "dirty" : ""}"><span>${dirty ? "Unsaved changes" : "Saved"}</span>${message ? `<small class="people-action-status ${esc(messageKind)}">${esc(message)}</small>` : ""}</div><div class="people-action-buttons"><button id="people-def-reset" class="people-btn secondary" type="button">Reset</button>${archiveButton}<button id="people-def-save" class="people-btn" type="button" ${mayEdit ? "" : "disabled"}>Save</button></div></div>
+    </section>`;
+  }
+
+  function renderDefinitionModule(warningMessage = "") {
+    const cfg = definitionConfig();
+    return `<section class="people-module-header"><div><span class="people-kicker">${esc(cfg.kicker)}</span><h2>${esc(cfg.title)}</h2><p>${esc(cfg.helper)}</p></div><div class="people-header-actions">${!embeddedMode ? renderOrgSelector() : ""}<button id="people-def-new" class="people-btn outline" type="button">${esc(cfg.newLabel)}</button></div></section>${warningMessage}<section class="people-workbench">${renderDefinitionList()}${renderDefinitionEditor()}</section>`;
+  }
+
+  function collectDefinitionPayload() {
+    const cfg = definitionConfig();
+    const original = obj(selectedDefinition);
+    const label = clean($("people-def-label")?.value);
+    if (!label) throw new Error(`Enter a display name for this ${cfg.itemLabel}.`);
+    const uiStatus = key($("people-def-ui-status")?.value || "active");
+    const base = {
+      [cfg.idField]: clean(original[cfg.idField] || original.definition_id),
+      [cfg.keyField]: clean(original[cfg.keyField] || original.definition_key) || slugFromLabel(label, cfg.itemLabel),
+      label, description: clean($("people-def-description")?.value), status: uiStatus, ui_status: uiStatus,
+      is_default: bool($("people-def-default")?.checked), requires_admin_review: bool($("people-def-review")?.checked),
+      sort_order: Number(original.sort_order || nextDefinitionSortOrder() || 100)
+    };
+    if (cfg.kind === "membership-classes") {
+      base.class_category = clean($("people-def-category")?.value) || "member";
+      base.dues_behavior = clean($("people-def-dues-behavior")?.value) || "standard";
+      base.billing_notes = clean($("people-def-billing-notes")?.value);
+      base.privilege_notes = clean($("people-def-privilege-notes")?.value);
+      base.default_can_reserve_assets = bool($("people-def-can-reserve")?.checked);
+      base.default_can_view_member_documents = bool($("people-def-view-docs")?.checked);
+    } else {
+      base.lifecycle_category = clean($("people-def-category")?.value) || "active";
+      base.is_active_member = bool($("people-def-active-member")?.checked);
+      base.can_login = bool($("people-def-can-login")?.checked);
+      base.can_view_member_portal = bool($("people-def-view-portal")?.checked);
+      base.can_reserve_assets = bool($("people-def-can-reserve")?.checked);
+    }
+    return base;
+  }
+
+  async function refreshAccessVocabularyAfterDefinitionSave() {
+    try {
+      const vocab = await call("organization_list_access_vocabulary", { organization_id: selectedOrgId });
+      options = { statuses: vocab.statuses || [], membership_classes: vocab.membership_classes || [], application_stages: vocab.application_stages || [], roles: sortRoles(vocab.roles || []) };
+      saveOrgContextCache(selectedOrgId);
+    } catch {}
+  }
+
+  async function saveDefinitionPayload(payload) {
+    const cfg = definitionConfig();
+    const action = cfg.kind === "membership-classes" ? "organization_save_membership_class" : "organization_save_lifecycle_status";
+    const data = await call(action, { organization_id: selectedOrgId, ...obj(payload) });
+    setDefinitionListsFromPayload(data);
+    await refreshAccessVocabularyAfterDefinitionSave();
+    return data;
+  }
+
+  async function saveDefinition() {
+    const payload = collectDefinitionPayload();
+    const data = await saveDefinitionPayload(payload);
+    const cfg = definitionConfig();
+    const saved = cfg.kind === "membership-classes" ? obj(data.membership_class || data.saved_definition) : obj(data.lifecycle_status || data.saved_definition);
+    selectedDefinition = normalizeDefinitionRow(saved[cfg.idField] || saved[cfg.keyField] ? saved : payload, cfg.kind);
+    const match = allDefinitionRows().find((r) => selectedDefinitionId(r) === selectedDefinitionId(selectedDefinition));
+    if (match) selectedDefinition = { ...match };
+    setDirty(false);
+    setMessage(`${cfg.itemLabel.charAt(0).toUpperCase() + cfg.itemLabel.slice(1)} saved.`, "ok");
+  }
+
+  async function resetDefinition() {
+    if (!confirmDiscard("Reset unsaved definition changes?")) return;
+    const id = selectedDefinitionId();
+    selectedDefinition = id ? (allDefinitionRows().find((r) => selectedDefinitionId(r) === id) || selectedDefinition) : blankDefinition();
+    setDirty(false);
+    setMessage("Changes reset.", "ok");
+  }
+
+  async function archiveDefinition(restore = false) {
+    if (!selectedDefinition) throw new Error("Select a definition first.");
+    const cfg = definitionConfig();
+    if (!restore && !confirm(`Archive this ${cfg.itemLabel}? Existing people can keep their current value, but it should no longer be assigned to new records.`)) return;
+    const id = clean(selectedDefinition[cfg.idField] || selectedDefinition.definition_id);
+    if (!id) throw new Error("Save this definition before archiving it.");
+    const action = cfg.kind === "membership-classes"
+      ? (restore ? "organization_restore_membership_class" : "organization_archive_membership_class")
+      : (restore ? "organization_restore_lifecycle_status" : "organization_archive_lifecycle_status");
+    const payload = cfg.kind === "membership-classes"
+      ? { organization_id: selectedOrgId, membership_class_definition_id: id }
+      : { organization_id: selectedOrgId, status_definition_id: id };
+    const data = await call(action, payload);
+    setDefinitionListsFromPayload(data);
+    await refreshAccessVocabularyAfterDefinitionSave();
+    const match = allDefinitionRows().find((r) => selectedDefinitionId(r) === id);
+    selectedDefinition = match ? { ...match } : null;
+    setDirty(false);
+    setMessage(restore ? `${cfg.itemLabel.charAt(0).toUpperCase() + cfg.itemLabel.slice(1)} restored.` : `${cfg.itemLabel.charAt(0).toUpperCase() + cfg.itemLabel.slice(1)} archived.`, "ok");
+  }
+
+  async function moveDefinitionTo(sourceId, targetId, placeAfter = false) {
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    if (dirty && !confirmDiscard("Save or discard changes before reordering definitions.")) return;
+    setDirty(false);
+    const cfg = definitionConfig();
+    const allRows = allDefinitionRows();
+    const movable = sortedDefinitionRows(allRows).filter((r) => definitionUiStatus(r) !== "archived");
+    const sourceIndex = movable.findIndex((r) => selectedDefinitionId(r) === sourceId);
+    if (sourceIndex < 0) return;
+    const [sourceRow] = movable.splice(sourceIndex, 1);
+    let insertAt = movable.findIndex((r) => selectedDefinitionId(r) === targetId);
+    if (insertAt < 0) return;
+    if (placeAfter) insertAt += 1;
+    movable.splice(Math.max(0, insertAt), 0, sourceRow);
+    const reordered = movable.map((r, index) => ({ ...r, sort_order: (index + 1) * 10 }));
+    const byId = new Map(reordered.map((r) => [selectedDefinitionId(r), r]));
+    definitionLists[cfg.rowsKey] = allRows.map((r) => byId.get(selectedDefinitionId(r)) || r);
+    render();
+    try {
+      const action = cfg.kind === "membership-classes" ? "organization_reorder_membership_classes" : "organization_reorder_lifecycle_statuses";
+      const payload = cfg.kind === "membership-classes"
+        ? { organization_id: selectedOrgId, membership_class_definition_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) }
+        : { organization_id: selectedOrgId, status_definition_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) };
+      const data = await call(action, payload);
+      setDefinitionListsFromPayload(data);
+      saveOrgContextCache(selectedOrgId);
+      setMessage("Order saved.", "ok");
+    } catch (e) {
+      setMessage(e.message || String(e), "warn");
+      await loadPeopleDefinitionLists();
+    }
+  }
+
+  async function moveDefinitionByButton(id, direction) {
+    const rows = sortedDefinitionRows(allDefinitionRows()).filter((r) => definitionUiStatus(r) !== "archived");
+    const index = rows.findIndex((r) => selectedDefinitionId(r) === id);
+    if (index < 0) return;
+    const target = direction === "up" ? rows[index - 1] : rows[index + 1];
+    if (!target) return;
+    await moveDefinitionTo(id, selectedDefinitionId(target), direction === "down");
   }
 
   async function loadSelectedPerson(personOrMembershipId) {
@@ -456,7 +815,7 @@
     if (!note) throw new Error("Enter a note first.");
     const res = await call("organization_add_person_note", { organization_id: selectedOrgId, person_id: selected.person_id, body: note, note_type: "general" });
     selected.timeline_notes = res.notes || [];
-    setMessage("Note added.", "ok", "editor");
+    setMessage("Note added.", "ok");
   }
 
   function getProfile(row = selected || {}) { return obj(row.profile_json); }
@@ -550,22 +909,22 @@
     const allowed = new Set(["image/jpeg", "image/png", "image/webp"]);
     if (!allowed.has(file.type)) throw new Error("Photo must be a JPG, PNG, or WebP image.");
     if (file.size > 4 * 1024 * 1024) throw new Error("Photo is too large. Use an image under 4 MB.");
-    setMessage("Uploading photo…", "", "editor");
+    setMessage("Uploading photo…", "");
     const dataUrl = await readFileAsDataUrl(file);
     const res = await call("organization_upload_person_photo", { organization_id: selectedOrgId, person_id: selected.person_id, membership_id: selected.membership_id, file_name: file.name, content_type: file.type, data_url: dataUrl });
-    await loadPeople({ force: true });
+    await loadPeople();
     selected = people.find((p) => p.membership_id === (res.person?.membership_id || selected.membership_id)) || res.person || selected;
     setDirty(false);
-    setMessage("Photo updated.", "ok", "editor");
+    setMessage("Photo updated.", "ok");
   }
   async function removeSelectedPhoto() {
     if (!selected?.person_id || !selected?.membership_id) throw new Error("Select a saved person first.");
     if (!confirm("Remove this person's profile photo?")) return;
     const res = await call("organization_remove_person_photo", { organization_id: selectedOrgId, person_id: selected.person_id, membership_id: selected.membership_id });
-    await loadPeople({ force: true });
+    await loadPeople();
     selected = people.find((p) => p.membership_id === (res.person?.membership_id || selected.membership_id)) || res.person || selected;
     setDirty(false);
-    setMessage("Photo removed.", "ok", "editor");
+    setMessage("Photo removed.", "ok");
   }
 
   function sortPersonRows(rows) {
@@ -596,14 +955,15 @@
   function isManagerRole(roleKey) { return ["applicant-manager","asset-manager","content-editor","document-manager","event-manager","gallery-manager"].includes(key(roleKey)); }
   function isPlatformInternal(p) { return bool(p.is_platform_internal) || key(p.title).startsWith("platform-admin"); }
 
-  function personMatchesSearch(p, searchTerm) {
-    if (!searchTerm) return true;
+  function personMatchesSearch(p, searchText) {
+    const s = lower(searchText);
+    if (!s) return true;
     const hay = [p.display_name,p.first_name,p.last_name,p.primary_email,p.email,p.phone,p.primary_phone,p.member_number,p.title,p.lifecycle_status_label,p.lifecycle_status_key,p.membership_class_label,p.membership_class_key,p.application_stage_label,p.application_stage_key,...arr(p.role_labels),...arr(p.role_keys),...arr(p.login_emails)].map(clean).join(" ").toLowerCase();
-    return hay.includes(searchTerm);
+    return hay.includes(s);
   }
 
-  function personMatchesFilter(p, filterKey = filter, searchTerm = lower(search)) {
-    const f = key(filterKey || "all") || "all";
+  function personMatchesLens(p, lens) {
+    const f = key(lens || "all") || "all";
     if (isPlatformInternal(p) && f !== "platform-internal") return false;
     const status = key(p.lifecycle_status_key);
     const stage = key(p.application_stage_key);
@@ -613,37 +973,37 @@
     const classCat = key(p.membership_class_category);
     const archived = isArchivedRow(p);
     const restricted = isRestrictedRow(p);
-    let ok = true;
-    if (f === "archived") ok = archived;
-    else if (f === "all") ok = true;
-    else if (archived) ok = false;
-    else if (f === "active") ok = status === "active";
-    else if (f === "applicants") ok = ["applicant","invited","pending"].includes(status) || ["applicant","prospect"].includes(stageCat);
-    else if (f === "waitlist") ok = stage === "waitlist";
-    else if (f === "onboarding") ok = stage === "onboarding" || stageCat === "onboarding" || ["invited","pending"].includes(status);
-    else if (f === "former") ok = ["former","inactive"].includes(status) || ["former","inactive"].includes(lifecycle);
-    else if (f === "restricted") ok = restricted;
-    else if (f === "admins") ok = hasAnyRole(p, ["organization-super-admin", "organization-admin"]);
-    else if (f === "board") ok = hasRole(p, "board-member");
-    else if (f === "managers") ok = arr(p.role_keys).some(isManagerRole);
-    else if (f === "users") ok = hasRole(p, "member") && !hasAnyRole(p, ["organization-super-admin", "organization-admin"]);
-    else if (f === "non-member") ok = classKey === "non-member" || classCat === "non-member" || classCat === "non_member";
-    else if (f === "no-login") ok = !bool(p.login_linked);
-    else if (f === "platform-internal") ok = isPlatformInternal(p);
-    if (!ok) return false;
-    return personMatchesSearch(p, searchTerm);
+    if (f === "archived") return archived;
+    if (f === "all") return true;
+    if (archived) return false;
+    if (f === "active") return status === "active";
+    if (f === "applicants") return ["applicant","invited","pending"].includes(status) || ["applicant","prospect"].includes(stageCat);
+    if (f === "waitlist") return stage === "waitlist";
+    if (f === "onboarding") return stage === "onboarding" || stageCat === "onboarding" || ["invited","pending"].includes(status);
+    if (f === "former") return ["former","inactive"].includes(status) || ["former","inactive"].includes(lifecycle);
+    if (f === "restricted") return restricted;
+    if (f === "admins") return hasAnyRole(p, ["organization-super-admin", "organization-admin"]);
+    if (f === "board") return hasRole(p, "board-member");
+    if (f === "managers") return arr(p.role_keys).some(isManagerRole);
+    if (f === "users") return hasRole(p, "member") && !hasAnyRole(p, ["organization-super-admin", "organization-admin"]);
+    if (f === "non-member") return classKey === "non-member" || classCat === "non-member" || classCat === "non_member";
+    if (f === "no-login") return !bool(p.login_linked);
+    if (f === "platform-internal") return isPlatformInternal(p);
+    return true;
   }
 
   function filteredPeople() {
-    const s = lower(search);
-    return sortPersonRows(people.filter((p) => personMatchesFilter(p, filter, s)));
+    const rows = people.filter((p) => personMatchesLens(p, filter) && personMatchesSearch(p, search));
+    return sortPersonRows(rows);
   }
 
   function counts() {
     const keys = ["all","active","applicants","waitlist","onboarding","former","restricted","admins","board","managers","users","non-member","no-login","archived"];
-    const s = lower(search);
     const out = Object.fromEntries(keys.map((f) => [f, 0]));
-    people.forEach((p) => { keys.forEach((f) => { if (personMatchesFilter(p, f, s)) out[f] += 1; }); });
+    people.forEach((p) => {
+      if (!personMatchesSearch(p, search)) return;
+      keys.forEach((f) => { if (personMatchesLens(p, f)) out[f] += 1; });
+    });
     return out;
   }
 
@@ -659,16 +1019,6 @@
     return `<select id="people-org-select">${rows.map((a) => `<option value="${esc(a.organization_id)}" ${String(a.organization_id) === selectedOrgId ? "selected" : ""}>${esc(a.organization_name)} (${esc(a.organization_key)})</option>`).join("")}</select>`;
   }
 
-  function renderToolbarMessage() {
-    const text = (messageTarget === "toolbar" && message) ? message : lastListStatus;
-    const kind = (messageTarget === "toolbar" && message) ? messageKind : lastListStatusKind;
-    return text ? `<span class="people-inline-status ${esc(kind)}" role="status">${esc(text)}</span>` : "";
-  }
-  function renderActionMessage() {
-    if (!message || messageTarget === "toolbar") return "";
-    return `<small class="people-action-message ${esc(messageKind)}">${esc(message)}</small>`;
-  }
-
   function renderFinder() {
     const c = counts();
     const rows = filteredPeople();
@@ -677,7 +1027,7 @@
     ];
     return `<aside class="people-list-panel">
       <div class="people-list-head"><div><h3>People</h3><p>Search and filter organization records.</p></div></div>
-      <div class="people-toolbar-row"><button id="people-export" class="people-btn secondary" type="button">Export</button><button id="people-print" class="people-btn secondary" type="button">Print</button><button id="people-refresh" class="people-btn secondary" type="button">Refresh</button>${renderToolbarMessage()}</div>
+      <div class="people-toolbar-row"><button id="people-export" class="people-btn secondary" type="button">Export</button><button id="people-print" class="people-btn secondary" type="button">Print</button><button id="people-refresh" class="people-btn secondary" type="button">Refresh</button></div>
       <label class="people-field people-status-filter"><span>Status / lens</span><select id="people-filter-select">${filters.map(([f,label]) => `<option value="${esc(f)}" ${filter===f ? "selected" : ""}>${esc(label)} (${c[f] || 0})</option>`).join("")}</select></label>
       <div class="people-search-wrap"><input id="people-search" value="${esc(search)}" placeholder="Search names, emails, phones, roles…"><button id="people-clear-search" class="people-icon-btn" title="Clear" type="button">×</button></div>
       <div class="people-sort-hint">Sorted by last name. Archived rows stay visible in All and are muted at the bottom.</div>
@@ -738,7 +1088,7 @@
       <div class="people-tab-panel ${tab === "access" ? "active" : ""}" data-tab-panel="access" ${tab === "access" ? "" : "hidden"}><div class="people-access-callout"><div><strong>Login and access</strong><p>Invite and password reset actions use this person’s saved organization membership and primary email/login link.</p></div><div class="people-inline-actions"><button id="people-invite" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Send invite</button><button id="people-reset-password" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Password reset</button></div></div><p class="muted">Roles control what this person can do. Organization admins can assign ordinary roles and Organization Admin. Organization Super Admin is protected.</p><div class="people-check-grid">${roles.map((role) => { const rk = key(role.role_key); const locked = !mayEditAnyRole || (isSuperAdminRole(rk) && !mayEditSuperAdmin); const hint = locked && isSuperAdminRole(rk) ? "Super Admin locked" : ""; return checkbox(`role-${rk}`, role.label || rk, arr(row.role_keys).map(key).includes(rk), locked, hint); }).join("")}</div>${!mayEditAnyRole ? `<p class="people-warning">Role editing is locked for your account.</p>` : !mayEditSuperAdmin ? `<p class="people-warning">Organization Super Admin is locked. You can manage ordinary roles and Organization Admin.</p>` : ""}</div>
       <div class="people-tab-panel ${tab === "aviation" ? "active" : ""}" data-tab-panel="aviation" ${tab === "aviation" ? "" : "hidden"}><div class="people-check-grid">${checkbox("people-club-cfi","CFI / instructor",aviation.club_cfi)}${checkbox("people-maintenance","Maintenance crew",aviation.on_maintenance_crew)}${checkbox("people-ifr-rated","IFR rated",aviation.ifr_rated)}${checkbox("people-night-checkout","Night checkout",aviation.club_night_checkout)}</div><div class="people-form-grid">${input("people-bfr-expiry","Flight review / BFR expiry",aviation.bfr_expiry_date,"date")}${input("people-last-checkout","Last organization checkout",aviation.last_club_checkout,"date")}${input("people-medical-expiry","Medical expiry",aviation.medical_expiry_date,"date")}${input("people-last-medical","Last medical date",aviation.last_medical_date,"date")}${input("people-medical-class","Medical class",aviation.medical_class)}${input("people-application-date","Application date",aviation.application_date || applicant.application_date,"date")}${input("people-employer","Employer",background.employer)}${input("people-occupation","Occupation",background.occupation)}${input("people-ratings","Ratings",aviation.ratings)}${input("people-pilot-certificate","Pilot certificate #",aviation.pilot_certificate_number)}${input("people-aircraft-types","Aircraft types",aviation.aircraft_types)}${input("people-bfr-aircraft","BFR aircraft",aviation.bfr_aircraft)}${input("people-clubs-fbos","Prior clubs/FBOs",aviation.clubs_fbos)}${input("people-flying-type","Type of flying",aviation.flying_type)}${input("people-total-hours","Total hours",aviation.total_hours,"number")}${input("people-night-hours","Night hours",aviation.total_night_hours,"number")}${input("people-ifr-hours","IFR hours",aviation.total_ifr_hours,"number")}${input("people-complex-hours","Complex hours",aviation.total_complex_hours,"number")}</div></div>
       <div class="people-tab-panel ${tab === "notes" ? "active" : ""}" data-tab-panel="notes" ${tab === "notes" ? "" : "hidden"}><div class="people-form-grid">${input("people-objectives","Objectives",applicant.objectives)}${input("people-how-hear","How they heard about us",applicant.how_hear_us)}${textarea("people-accident-details","Accident / incident details",applicant.accident_details)}${textarea("people-faa-details","FAA / regulatory details",applicant.faa_details)}</div>${renderPersonTimeline(row)}</div>
-      <div class="people-action-row"><div class="people-action-status"><div class="people-save-state ${dirty ? "dirty" : ""}">${dirty ? "Unsaved changes" : "Saved"}</div>${renderActionMessage()}</div><div class="people-action-buttons"><button id="people-reset" class="people-btn secondary" type="button">Reset</button>${archiveButton}<button id="people-save" class="people-btn" type="button" ${mayEdit ? "" : "disabled"}>Save</button></div></div>
+      <div class="people-action-row"><div class="people-save-state ${dirty ? "dirty" : ""}"><span>${dirty ? "Unsaved changes" : "Saved"}</span>${message ? `<small class="people-action-status ${esc(messageKind)}">${esc(message)}</small>` : ""}</div><div class="people-action-buttons"><button id="people-reset" class="people-btn secondary" type="button">Reset</button>${archiveButton}<button id="people-save" class="people-btn" type="button" ${mayEdit ? "" : "disabled"}>Save</button></div></div>
     </section>`;
   }
 
@@ -747,8 +1097,10 @@
     if (!authChecked) return `<section class="people-card"><h2>Checking login…</h2><p>Please wait while SyncEtc confirms your session.</p></section>`;
     if (!token) return `<section class="people-card"><h2>Login required</h2><p>This page uses the same login as the User Dashboard.</p>${renderLogin()}</section>`;
     const rows = adminRows();
-    if (!rows.length) return `<section class="people-card"><h2>No organization admin access</h2><p>Your account is signed in, but it does not have organization-admin permission.</p></section>`;
-    return `<section class="people-module-header"><div><span class="people-kicker">People</span><h2>${esc(clean(pageConfig?.title) || "Members / People")}</h2><p>${esc(clean(pageConfig?.intro_text) || "Manage people, member lifecycle, contact details, access roles, and administrator flags from one workbench.")}</p></div><div class="people-header-actions">${!embeddedMode ? renderOrgSelector() : ""}<button id="people-new" class="people-btn outline" type="button">New person</button></div></section><section class="people-workbench">${renderFinder()}${renderEditor()}</section>`;
+    if (!rows.length && !adminAccess) return `<section class="people-card"><h2>No organization admin access</h2><p>Your account is signed in, but it does not have organization-admin permission.</p></section>`;
+    const warningMessage = message && messageKind === "warn" ? `<div class="people-message warn">${esc(message)}</div>` : "";
+    if (isDefinitionMode()) return renderDefinitionModule(warningMessage);
+    return `<section class="people-module-header"><div><span class="people-kicker">People</span><h2>${esc(clean(pageConfig?.title) || "Members / People")}</h2><p>${esc(clean(pageConfig?.intro_text) || "Manage people, member lifecycle, contact details, access roles, and administrator flags from one workbench.")}</p></div><div class="people-header-actions">${!embeddedMode ? renderOrgSelector() : ""}<button id="people-new" class="people-btn outline" type="button">New person</button></div></section>${warningMessage}<section class="people-workbench">${renderFinder()}${renderEditor()}</section>`;
   }
 
   function peopleStyles(cfg) {
@@ -757,9 +1109,9 @@
       .people-wrap *{box-sizing:border-box}.people-card,.people-module-header,.people-list-panel,.people-editor-panel{background:rgba(255,255,255,.98);border:1px solid var(--people-border);border-radius:14px;box-shadow:0 6px 18px rgba(16,24,40,.07)}
       .people-card{padding:18px;margin:12px 0}.people-hero{display:${embeddedMode ? "none" : "block"};background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.78)});color:#fff}.people-hero h1{margin:8px 0;color:#fff;font-size:clamp(28px,4vw,42px);letter-spacing:-.035em}.people-hero p{color:rgba(255,255,255,.9);max-width:900px}.people-eyebrow,.people-kicker{display:inline-flex;padding:5px 10px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:11px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.people-hero .people-eyebrow{background:rgba(255,255,255,.16);color:#fff}
       .people-module-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:15px 17px;margin:0 0 10px;border-top:3px solid var(--people-primary)}.people-module-header h2{margin:6px 0 4px;font-size:25px;line-height:1.1;color:#101828}.people-module-header p{margin:0;color:var(--people-muted);font-weight:650}.people-header-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
-      .people-workbench{display:grid;grid-template-columns:330px minmax(0,1fr);gap:10px;align-items:start}.people-list-panel{padding:12px;position:sticky;top:10px;max-height:calc(100vh - 24px);overflow:auto}.people-list-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}.people-list-head h3,.people-editor-head h3{margin:0;font-size:21px;color:#101828}.people-list-head p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-toolbar-row,.people-inline-actions,.people-action-buttons,.people-pill-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.people-toolbar-row{margin:8px 0 10px}.people-btn,.people-icon-btn,.people-link-btn{border:0;border-radius:999px;background:var(--people-primary);color:#fff;font-weight:900;padding:10px 14px;cursor:pointer;text-decoration:none;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}.people-btn:hover,.people-person-card:hover{transform:translateY(-1px)}.people-btn.secondary,.people-btn.outline{background:#fff;color:var(--people-primary);border:1px solid var(--people-primary)}.people-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-btn:disabled{opacity:.55;cursor:not-allowed;transform:none}.people-link-btn{background:transparent;color:var(--people-primary);text-decoration:underline;padding:8px}.people-message{margin-top:12px;padding:10px 12px;border-radius:12px;background:var(--people-soft);color:var(--people-primary);font-weight:850}.people-message:empty{display:none}.people-message.ok{background:#ecfdf5;color:#047857}.people-message.warn,.people-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:12px;padding:10px 12px}.people-inline-status{display:inline-flex;align-items:center;max-width:360px;border-radius:999px;border:1px solid var(--people-border);background:#fff;color:var(--people-primary);padding:7px 10px;font-size:12px;font-weight:900;line-height:1.2}.people-inline-status.ok{background:#ecfdf5;color:#047857;border-color:#bbf7d0}.people-inline-status.warn{background:#fff7ed;color:#9a3412;border-color:#fed7aa}.people-action-status{display:grid;gap:3px}.people-action-message{display:inline-flex;width:max-content;max-width:100%;padding:4px 8px;border-radius:999px;color:var(--people-primary);background:var(--people-soft);font-size:12px;font-weight:850}.people-action-message.ok{background:#ecfdf5;color:#047857}.people-action-message.warn{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-context-single{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);padding:9px 12px;border-radius:999px;font-weight:900}.muted{color:var(--people-muted)}
+      .people-workbench{display:grid;grid-template-columns:330px minmax(0,1fr);gap:10px;align-items:start}.people-list-panel{padding:12px;position:sticky;top:10px;max-height:calc(100vh - 24px);overflow:auto}.people-list-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}.people-list-head h3,.people-editor-head h3{margin:0;font-size:21px;color:#101828}.people-list-head p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-toolbar-row,.people-inline-actions,.people-action-buttons,.people-pill-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.people-toolbar-row{margin:8px 0 10px}.people-btn,.people-icon-btn,.people-link-btn{border:0;border-radius:999px;background:var(--people-primary);color:#fff;font-weight:900;padding:10px 14px;cursor:pointer;text-decoration:none;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}.people-btn:hover,.people-person-card:hover{transform:translateY(-1px)}.people-btn.secondary,.people-btn.outline{background:#fff;color:var(--people-primary);border:1px solid var(--people-primary)}.people-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-btn:disabled{opacity:.55;cursor:not-allowed;transform:none}.people-link-btn{background:transparent;color:var(--people-primary);text-decoration:underline;padding:8px}.people-message{margin-top:12px;padding:10px 12px;border-radius:12px;background:var(--people-soft);color:var(--people-primary);font-weight:850}.people-message:empty{display:none}.people-message.ok{background:#ecfdf5;color:#047857}.people-message.warn,.people-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:12px;padding:10px 12px}.people-action-status{display:block;margin-top:3px;color:var(--people-muted);font-size:12px;line-height:1.25}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}.people-context-single{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);padding:9px 12px;border-radius:999px;font-weight:900}.muted{color:var(--people-muted)}
       .people-field{display:grid;gap:6px;font-weight:850}.people-field span{font-size:13px}.people-field small{font-weight:600;color:var(--people-muted);line-height:1.35}.people-field input,.people-field select,.people-field textarea,.people-search-wrap input,#people-org-select{width:100%;border:1px solid var(--people-border);border-radius:12px;background:#fff;color:var(--people-text);padding:10px 12px;font:inherit;min-height:42px}.people-field textarea{min-height:104px;resize:vertical}.people-field input[readonly],.people-field input:disabled,.people-field select:disabled{background:#f8fafc;color:var(--people-muted);cursor:not-allowed}.people-field-wide{grid-column:1/-1}.field-error{color:#b91c1c!important;font-weight:900!important}.people-field.disabled-field{opacity:.72}.people-status-filter{margin:10px 0}.people-search-wrap{position:relative;margin:10px 0}.people-search-wrap input{padding-right:44px}.people-icon-btn{position:absolute;right:6px;top:5px;width:32px;height:32px;padding:0;background:var(--people-soft);color:var(--people-primary)}.people-sort-hint{font-size:12px;color:var(--people-muted);font-weight:750;margin:8px 0 10px}.people-compact-list{display:grid;gap:7px;max-height:calc(100vh - 320px);min-height:240px;overflow:auto;padding:3px 2px 8px;overscroll-behavior:contain}.people-person-card{text-align:left;border:1px solid var(--people-border);border-radius:13px;background:#fff;color:var(--people-text);padding:10px;display:grid;gap:8px;cursor:pointer;box-shadow:0 3px 11px ${rgba(cfg.primary,.04)}}.people-person-card.selected{border-color:var(--people-primary);box-shadow:0 0 0 3px var(--people-strong-soft)}.people-person-card.archived{opacity:.58;background:#f8fafc}.people-person-card.restricted:not(.archived){border-color:#fed7aa;background:#fff7ed}.person-main{display:grid;gap:3px;min-width:0}.person-main strong{font-weight:950;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-main small{color:var(--people-muted);font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-badges{display:flex;gap:4px;flex-wrap:wrap}.person-badges em{font-style:normal;font-size:10px;font-weight:900;border-radius:999px;padding:3px 6px;background:var(--people-soft);color:var(--people-primary)}.people-empty-row{border:1px dashed var(--people-border);border-radius:13px;padding:18px;text-align:center;color:var(--people-muted);background:#fff}.people-empty{min-height:380px;display:grid;align-content:center;text-align:center;padding:24px}
-      .people-editor-panel{min-width:0;padding:0;overflow:hidden}.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:15px 17px;border-bottom:1px solid var(--people-border)}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}.people-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--people-border);background:#fcfcfd}.people-tab{border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-weight:900;padding:8px 11px;cursor:pointer}.people-tab.active{background:var(--people-primary);color:#fff;border-color:var(--people-primary)}.people-tab-panel{padding:16px}.people-tab-panel[hidden]{display:none!important}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}.people-access-status-grid{padding-bottom:8px}.people-affiliation-grid{padding-top:8px;border-top:1px solid var(--people-border)}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;margin:10px 0 14px}.primary-pick{min-height:42px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:12px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border:1px solid var(--people-border);border-radius:12px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-access-callout{display:flex;justify-content:space-between;gap:14px;align-items:center;border:1px solid var(--people-border);border-radius:13px;background:var(--people-soft);padding:12px;margin-bottom:14px}.people-access-callout p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-inline-actions{margin:10px 0}.people-action-row{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid var(--people-border);padding:12px 14px;background:#fcfcfd}.people-save-state{font-weight:900;color:var(--people-muted)}.people-save-state.dirty{color:#9a3412}.people-photo-panel{grid-column:1/-1;display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;align-items:center;border:1px dashed var(--people-border);border-radius:14px;background:var(--people-soft);padding:14px}.people-photo-panel.dragover{box-shadow:0 0 0 3px var(--people-strong-soft);border-color:var(--people-primary)}.people-photo-preview{width:132px;height:132px;border-radius:18px;background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--people-border);box-shadow:0 10px 26px ${rgba(cfg.primary,.16)}}.people-photo-preview img{width:100%;height:100%;object-fit:cover;display:block}.people-photo-preview span{font-size:38px;font-weight:950;letter-spacing:.03em}.people-photo-copy strong{display:block;color:var(--people-primary);font-size:15px;margin-bottom:4px}.people-photo-copy p{margin:0 0 8px;color:var(--people-muted);font-weight:750}.people-photo-copy small{display:block;color:var(--people-muted);font-weight:750;margin-bottom:10px}.people-photo-actions{display:flex;gap:8px;flex-wrap:wrap}.people-timeline-list{display:grid;gap:10px;margin-top:10px}.people-note-card{border-left:4px solid var(--people-primary);background:#f8fafc;border-radius:12px;padding:10px}.people-note-card strong{display:block;color:var(--people-primary)}.people-note-card span{font-size:12px;color:#64748b;font-weight:800}.people-note-card p{margin:6px 0;white-space:pre-wrap}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:12px;padding:14px;font-size:12px;max-height:260px;overflow:auto}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}
+      .people-editor-panel{min-width:0;padding:0;overflow:hidden}.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:15px 17px;border-bottom:1px solid var(--people-border)}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}.people-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--people-border);background:#fcfcfd}.people-tab{border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-weight:900;padding:8px 11px;cursor:pointer}.people-tab.active{background:var(--people-primary);color:#fff;border-color:var(--people-primary)}.people-tab-panel{padding:16px}.people-tab-panel[hidden]{display:none!important}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}.people-access-status-grid{padding-bottom:8px}.people-affiliation-grid{padding-top:8px;border-top:1px solid var(--people-border)}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;margin:10px 0 14px}.primary-pick{min-height:42px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:12px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border:1px solid var(--people-border);border-radius:12px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-access-callout{display:flex;justify-content:space-between;gap:14px;align-items:center;border:1px solid var(--people-border);border-radius:13px;background:var(--people-soft);padding:12px;margin-bottom:14px}.people-access-callout p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-inline-actions{margin:10px 0}.people-action-row{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid var(--people-border);padding:12px 14px;background:#fcfcfd}.people-save-state{display:grid;gap:2px;font-weight:900;color:var(--people-muted)}.people-save-state.dirty{color:#9a3412}.people-photo-panel{grid-column:1/-1;display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;align-items:center;border:1px dashed var(--people-border);border-radius:14px;background:var(--people-soft);padding:14px}.people-photo-panel.dragover{box-shadow:0 0 0 3px var(--people-strong-soft);border-color:var(--people-primary)}.people-photo-preview{width:132px;height:132px;border-radius:18px;background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--people-border);box-shadow:0 10px 26px ${rgba(cfg.primary,.16)}}.people-photo-preview img{width:100%;height:100%;object-fit:cover;display:block}.people-photo-preview span{font-size:38px;font-weight:950;letter-spacing:.03em}.people-photo-copy strong{display:block;color:var(--people-primary);font-size:15px;margin-bottom:4px}.people-photo-copy p{margin:0 0 8px;color:var(--people-muted);font-weight:750}.people-photo-copy small{display:block;color:var(--people-muted);font-weight:750;margin-bottom:10px}.people-photo-actions{display:flex;gap:8px;flex-wrap:wrap}.people-timeline-list{display:grid;gap:10px;margin-top:10px}.people-note-card{border-left:4px solid var(--people-primary);background:#f8fafc;border-radius:12px;padding:10px}.people-note-card strong{display:block;color:var(--people-primary)}.people-note-card span{font-size:12px;color:#64748b;font-weight:800}.people-note-card p{margin:6px 0;white-space:pre-wrap}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:12px;padding:14px;font-size:12px;max-height:260px;overflow:auto}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}.people-def-row{padding:0;display:grid;grid-template-columns:minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab}.people-def-row.dragging{opacity:.55}.people-def-row.drag-over{outline:2px dashed var(--people-primary);outline-offset:2px}.people-def-row .people-def-main{border:0;background:transparent;text-align:left;padding:10px;display:grid;gap:7px;cursor:pointer;color:inherit}.people-def-order{display:flex;flex-direction:column;border-left:1px solid var(--people-border)}.people-order-button{border:0;border-bottom:1px solid var(--people-border);background:#f8fafc;color:var(--people-primary);font-weight:950;width:34px;min-height:29px;cursor:pointer}.people-order-button:last-child{border-bottom:0}.people-order-button:disabled{opacity:.35;cursor:not-allowed}.people-def-editor .people-tab-panel>.people-form-grid{grid-template-columns:1fr}.people-def-editor .people-form-grid .people-form-grid{grid-template-columns:repeat(3,minmax(0,1fr));}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}
       @media(max-width:1100px){.people-workbench{grid-template-columns:1fr}.people-list-panel{position:static;max-height:none}.people-compact-list{max-height:320px;min-height:0}.people-form-grid,.people-check-grid{grid-template-columns:1fr 1fr}.people-module-header,.people-action-row,.people-access-callout{display:grid}.people-header-actions,.people-action-buttons{justify-content:flex-start}.phone-grid{grid-template-columns:1fr}.primary-pick{justify-content:flex-start;padding:0 12px}}
       @media(max-width:640px){.people-form-grid,.people-check-grid{grid-template-columns:1fr}.people-photo-panel{grid-template-columns:1fr}.people-photo-preview{margin:auto}.people-btn{width:100%}.people-action-buttons{width:100%}}
       @media print{#syncetc-portal-shell,.people-hero,.people-list-panel,.people-editor-panel,.people-message,.people-module-header{display:none!important}.people-wrap{max-width:none;margin:0;padding:0}.people-card{box-shadow:none;border:none}}
@@ -771,28 +1123,53 @@
     const el = ensureRoot();
     if (!el) return;
     const cfg = styleConfig(selectedRow());
-    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, people_count: people.length, cache: cacheSummary(), timings: timingMarks, backend: backend || {} }, null, 2))}</pre></details>` : "";
-    const renderStarted = performance.now();
-    const standaloneMessage = !embeddedMode && message ? `<div class="people-message ${esc(messageKind)}">${esc(message)}</div>` : "";
-    el.innerHTML = `<style>${peopleStyles(cfg)}</style><div class="people-wrap"><section class="people-card people-hero"><div class="people-eyebrow">Organization Admin</div><h1>${esc(clean(pageConfig?.title) || "People & Access")}</h1><p>${esc(clean(pageConfig?.intro_text) || "Search the full people pool, manage members and applicants, keep contact information current, and handle safe access updates from one place.")}</p>${standaloneMessage}</section>${renderContent()}${diagnostics}</div>`;
+    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, active_definition_kind: activeDefinitionKind, people_count: people.length, definition_counts: { statuses: arr(definitionLists.statuses).length, membership_classes: arr(definitionLists.membership_classes).length }, cache_ttl_ms: PEOPLE_CACHE_TTL_MS, parent_script_load_ms: mountOptions.scriptLoadMs || null, load_timings: loadTimings, backend: backend || {} }, null, 2))}</pre></details>` : "";
+    el.innerHTML = `<style>${peopleStyles(cfg)}</style><div class="people-wrap"><section class="people-card people-hero"><div class="people-eyebrow">Organization Admin</div><h1>${esc(clean(pageConfig?.title) || "People & Access")}</h1><p>${esc(clean(pageConfig?.intro_text) || "Search the full people pool, manage members and applicants, keep contact information current, and handle safe access updates from one place.")}</p><div class="people-message ${esc(messageKind)}">${esc(message)}</div></section>${renderContent()}${diagnostics}</div>`;
     bindEvents();
     restorePeopleSearchFocus();
-    activateTab(activeTab);
-    if (currentDebugEnabled()) markTiming("render", `${people.length} people`, renderStarted);
+    restoreDefinitionSearchFocus();
+    if (!isDefinitionMode()) activateTab(activeTab);
   }
 
+
+
+  function bindDefinitionEvents() {
+    $("people-def-filter")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = definitionFilter; return; } setDirty(false); definitionFilter = e.target.value || "all"; render(); });
+    $("people-def-search")?.addEventListener("input", (e) => { clearTimeout(debounceTimer); definitionSearchRestore = { start: e.target.selectionStart, end: e.target.selectionEnd }; debounceTimer = setTimeout(() => { definitionSearch = e.target.value || ""; render(); }, 300); });
+    $("people-def-clear-search")?.addEventListener("click", () => { definitionSearch = ""; render(); });
+    $("people-def-new")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); selectedDefinition = blankDefinition(); message = ""; messageKind = ""; render(); });
+    $("people-def-refresh")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); runButton("people-def-refresh", "Refreshing…", async () => { const run = beginLoadTrace("definition refresh"); await loadPeopleDefinitionLists(run); finishLoad("ok", run); setMessage("Updated.", "ok"); }); });
+    document.querySelectorAll("[data-def-open]").forEach((btn) => btn.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); const id = clean(btn.getAttribute("data-def-open")); selectedDefinition = allDefinitionRows().find((r) => selectedDefinitionId(r) === id) || null; message = ""; messageKind = ""; render(); }));
+    document.querySelectorAll("[data-def-move]").forEach((btn) => btn.addEventListener("click", () => runButton("people-def-refresh", "Saving order…", () => moveDefinitionByButton(clean(btn.getAttribute("data-def-id")), clean(btn.getAttribute("data-def-move"))))));
+    document.querySelectorAll("[data-def-row]").forEach((row) => {
+      row.addEventListener("dragstart", (event) => { definitionDragId = clean(row.getAttribute("data-def-id")); row.classList.add("dragging"); try { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", definitionDragId); } catch {} });
+      row.addEventListener("dragend", () => { row.classList.remove("dragging"); document.querySelectorAll(".people-def-row.drag-over").forEach((el) => el.classList.remove("drag-over")); });
+      row.addEventListener("dragover", (event) => { if (!definitionDragId) return; event.preventDefault(); row.classList.add("drag-over"); });
+      row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+      row.addEventListener("drop", (event) => { event.preventDefault(); row.classList.remove("drag-over"); const targetId = clean(row.getAttribute("data-def-id")); const after = event.offsetY > row.getBoundingClientRect().height / 2; runButton("people-def-refresh", "Saving order…", () => moveDefinitionTo(definitionDragId, targetId, after)); });
+    });
+    $("people-def-save")?.addEventListener("click", () => runButton("people-def-save", "Saving…", saveDefinition));
+    $("people-def-reset")?.addEventListener("click", () => runButton("people-def-reset", "Resetting…", resetDefinition));
+    $("people-def-archive")?.addEventListener("click", () => runButton("people-def-archive", "Archiving…", () => archiveDefinition(false)));
+    $("people-def-restore")?.addEventListener("click", () => runButton("people-def-restore", "Restoring…", () => archiveDefinition(true)));
+    document.querySelectorAll(".people-def-editor input, .people-def-editor select, .people-def-editor textarea").forEach((el) => {
+      el.addEventListener("input", () => setDirty(true));
+      el.addEventListener("change", () => setDirty(true));
+    });
+  }
 
   function bindEvents() {
     $("people-login")?.addEventListener("click", () => runButton("people-login", "Logging in…", login));
     $("people-logout")?.addEventListener("click", () => runButton("people-logout", "Logging out…", logout));
     $("people-reset-own")?.addEventListener("click", () => runButton("people-reset-own", "Sending…", resetOwnPassword));
-    $("people-org-select")?.addEventListener("change", async (e) => { if (!confirmDiscard()) { e.target.value = selectedOrgId; return; } setDirty(false); selectedOrgId = e.target.value; try { localStorage.setItem(SELECTED_ORG_KEY, selectedOrgId); } catch {} adminAccess = null; selected = null; try { await loadOrgContext({ force: true, reason: "organization-change" }); setMessage("Organization loaded.", "ok", "toolbar"); } catch (err) { setMessage(err.message || String(err), "warn", "toolbar"); } render(); });
+    $("people-org-select")?.addEventListener("change", async (e) => { if (!confirmDiscard()) { e.target.value = selectedOrgId; return; } setDirty(false); selectedOrgId = e.target.value; try { localStorage.setItem(SELECTED_ORG_KEY, selectedOrgId); } catch {} adminAccess = null; selected = null; selectedDefinition = null; try { await loadOrgContext({ force: true }); setMessage("Organization loaded.", "ok"); } catch (err) { setMessage(err.message || String(err), "warn"); } render(); });
+    bindDefinitionEvents();
     $("people-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = filter; return; } setDirty(false); filter = e.target.value || "all"; render(); });
     $("people-search")?.addEventListener("input", (e) => { clearTimeout(debounceTimer); peopleSearchRestore = { start: e.target.selectionStart, end: e.target.selectionEnd }; debounceTimer = setTimeout(() => { search = e.target.value || ""; render(); }, 300); });
     $("people-clear-search")?.addEventListener("click", () => { search = ""; render(); });
-    document.querySelectorAll("[data-open]").forEach((btn) => btn.addEventListener("click", () => runButton("people-refresh", "Opening…", async () => { if (!confirmDiscard()) return; setDirty(false); const id = btn.getAttribute("data-open"); await loadSelectedPerson(id); fieldErrors = {}; render(); })));
-    $("people-new")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); activeTab = "identity"; selected = blankPerson(); fieldErrors = {}; clearMessage(); render(); });
-    $("people-refresh")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); runButton("people-refresh", "Refreshing…", async () => { await loadOrgContext({ force: true, reason: "manual-refresh" }); setMessage("Updated now", "ok", "toolbar"); }); });
+    document.querySelectorAll("[data-open]").forEach((btn) => btn.addEventListener("click", () => runButton("people-refresh", "Opening…", async () => { if (!confirmDiscard()) return; setDirty(false); message = ""; messageKind = ""; const id = btn.getAttribute("data-open"); await loadSelectedPerson(id); fieldErrors = {}; render(); })));
+    $("people-new")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); activeTab = "identity"; selected = blankPerson(); fieldErrors = {}; message = ""; render(); });
+    $("people-refresh")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); runButton("people-refresh", "Refreshing…", async () => { const run = beginLoadTrace("manual refresh"); await loadOrgContext({ force: true, run }); finishLoad("ok", run); setMessage("Updated.", "ok"); }); });
     $("people-export")?.addEventListener("click", exportForExcel);
     $("people-print")?.addEventListener("click", printPeopleList);
     $("people-save")?.addEventListener("click", () => runButton("people-save", "Saving…", saveSelected));
@@ -883,12 +1260,12 @@
     setDirty(false);
     if (selected?.membership_id) await loadSelectedPerson(selected.membership_id);
     else selected = blankPerson();
-    setMessage("Changes reset.", "ok", "editor");
+    setMessage("Changes reset.", "ok");
   }
 
 
   async function saveSelected() {
-    if (!validateForm()) { setMessage("Fix the highlighted fields before saving.", "warn", "editor"); return; }
+    if (!validateForm()) { setMessage("Fix the highlighted fields before saving.", "warn"); return; }
     const payload = readForm();
     const restrictive = ["suspended","expelled","archived","blocked"].includes(key(payload.status_key));
     if (restrictive && !confirm("This status blocks or restricts access. Save anyway?")) return;
@@ -896,23 +1273,23 @@
     const res = await call("organization_save_person", payload);
     selected = res.person || selected;
     setDirty(false);
-    await loadPeople({ force: true });
+    await loadPeople();
     if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
     fieldErrors = {};
-    setMessage("Person saved.", "ok", "editor");
+    setMessage("Person saved.", "ok");
   }
 
   async function sendInvite() {
     if (!selected?.membership_id) throw new Error("Select a person first.");
     const res = await call("organization_send_invite", { organization_id: selectedOrgId, membership_id: selected.membership_id, person_id: selected.person_id });
-    await loadPeople({ force: true });
-    setMessage(res.message || "Invite requested.", "ok", "editor");
+    await loadPeople();
+    setMessage(res.message || "Invite requested.", "ok");
   }
 
   async function sendPasswordReset() {
     if (!selected?.membership_id) throw new Error("Select a person first.");
     const res = await call("organization_send_password_reset", { organization_id: selectedOrgId, membership_id: selected.membership_id, person_id: selected.person_id });
-    setMessage(res.message || "Password reset requested.", res.sent === false ? "warn" : "ok", "editor");
+    setMessage(res.message || "Password reset requested.", res.sent === false ? "warn" : "ok");
   }
 
   async function archiveSelected() {
@@ -920,18 +1297,18 @@
     if (!confirm("Archive this person's organization affiliation? They will disappear from normal People views, but can be restored from the Archived filter.")) return;
     const res = await call("organization_archive_membership", { organization_id: selectedOrgId, membership_id: selected.membership_id, person_id: selected.person_id });
     setDirty(false);
-    await loadPeople({ force: true });
+    await loadPeople();
     selected = null;
-    setMessage("Membership archived.", "ok", "editor");
+    setMessage("Membership archived.", "ok");
   }
 
   async function restoreSelected() {
     if (!selected?.membership_id) throw new Error("Select a person first.");
     const res = await call("organization_restore_membership", { organization_id: selectedOrgId, membership_id: selected.membership_id, person_id: selected.person_id });
     setDirty(false);
-    await loadPeople({ force: true });
+    await loadPeople();
     selected = res.person || people.find((p) => p.membership_id === selected.membership_id) || null;
-    setMessage("Membership restored.", "ok", "editor");
+    setMessage("Membership restored.", "ok");
   }
 
   function printPeopleList() {
@@ -943,7 +1320,7 @@
     const win = window.open("", "_blank");
     if (!win) { window.print(); return; }
     win.document.open(); win.document.write(html); win.document.close();
-    setMessage("Printable People list opened.", "ok", "toolbar");
+    setMessage("Printable People list opened.", "ok");
   }
 
   function tsvCell(v) { return String(v ?? "").replace(/\t/g, " ").replace(/\r?\n/g, " ").trim(); }
@@ -962,12 +1339,12 @@
     a.href = url;
     a.download = `people-${selectedRow()?.organization_key || "organization"}.tsv`;
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-    setMessage("Excel export created. The file is tab-separated so it pastes cleanly into spreadsheets.", "ok", "toolbar");
+    setMessage("Excel export created. The file is tab-separated so it pastes cleanly into spreadsheets.", "ok");
   }
 
   window.addEventListener("syncetc:portal-logout-request", () => {
     if (!token) return;
-    logout().catch((e) => { backend = { ok:false, message:e.message || String(e) }; setMessage(e.message || String(e), "warn", "toolbar"); });
+    logout().catch((e) => { backend = { ok:false, message:e.message || String(e) }; setMessage(e.message || String(e), "warn"); });
   });
 
   window.addEventListener("syncetc:portal-login-request", () => {
@@ -984,8 +1361,8 @@
     adminAccess = null;
     selected = null;
     pageConfig = null;
-    try { await loadOrgContext({ force: true, reason: "organization-change" }); setMessage("Organization loaded.", "ok", "toolbar"); }
-    catch (err) { setMessage(err.message || String(err), "warn", "toolbar"); }
+    try { await loadOrgContext(); setMessage("Organization loaded.", "ok"); }
+    catch (err) { setMessage(err.message || String(err), "warn"); }
     render();
   });
 
@@ -998,11 +1375,11 @@
       selectedOrgId = organizationId;
       adminAccess = null;
       selected = null;
-      await loadOrgContext({ force: true, reason: "organization-change-request" });
-      setMessage("Organization loaded.", "ok", "toolbar");
+      await loadOrgContext();
+      setMessage("Organization loaded.", "ok");
     } catch (e) {
       backend = { ok:false, message:e.message || String(e) };
-      setMessage(e.message || String(e), "warn", "toolbar");
+      setMessage(e.message || String(e), "warn");
     }
   });
 
@@ -1013,18 +1390,21 @@
   });
 
   window.addEventListener("syncetc:portal-auth-changed", () => {
-    refreshAuth().catch((e) => { backend = { ok:false, message:e.message || String(e) }; render(); });
+    refreshAuth().catch((e) => { backend = { ok:false, message:e.message || String(e) }; message = e.message || String(e); messageKind = "warn"; render(); });
   });
   function bootOrganizationPeople(options = {}) {
-    markTiming("boot:start", obj(options).embedded ? "embedded" : "standalone");
     mountOptions = { ...mountOptions, ...obj(options) };
     embeddedMode = Boolean(mountOptions.embedded);
     if (mountOptions.organizationId) selectedOrgId = clean(mountOptions.organizationId);
     if (mountOptions.selectedOrganizationId) selectedOrgId = clean(mountOptions.selectedOrganizationId);
     if (mountOptions.initialFilter) filter = clean(mountOptions.initialFilter) || filter;
     if (mountOptions.initialTab) activeTab = key(mountOptions.initialTab) || activeTab;
+    activeDefinitionKind = normalizeDefinitionKind(mountOptions.initialDefinition || mountOptions.definitionKind || mountOptions.initialView || mountOptions.view || activeDefinitionKind || "");
+    if (activeDefinitionKind) { selectedDefinition = null; message = ""; messageKind = ""; }
     refreshAuth().catch((e) => {
       backend = { ok:false, message:e?.message || String(e) };
+      message = e?.message || String(e);
+      messageKind = "warn";
       authChecked = true;
       try { setShellState(); } catch {}
       render();
@@ -1032,7 +1412,6 @@
   }
 
   function mount(target, options = {}) {
-    markTiming("mount:start", `${clean(options.initialFilter || "all")} / ${clean(options.initialTab || "identity")}`);
     const el = typeof target === "string" ? document.querySelector(target) : target;
     if (!el) throw new Error("People workbench mount target was not found.");
     externalRoot = el;
@@ -1042,12 +1421,14 @@
     if (options.selectedOrganizationId) selectedOrgId = clean(options.selectedOrganizationId);
     if (options.initialFilter) filter = clean(options.initialFilter) || filter;
     if (options.initialTab) activeTab = key(options.initialTab) || activeTab;
+    activeDefinitionKind = normalizeDefinitionKind(options.initialDefinition || options.definitionKind || options.initialView || options.view || "");
+    if (activeDefinitionKind) { selectedDefinition = null; message = ""; messageKind = ""; }
     authChecked = false;
     backend = null;
-    clearMessage();
-    if (applyCachedContext(getCachedContext(selectedOrgId))) render();
     return refreshAuth().catch((e) => {
       backend = { ok:false, message:e?.message || String(e) };
+      message = e?.message || String(e);
+      messageKind = "warn";
       authChecked = true;
       render();
     });
@@ -1060,8 +1441,7 @@
     isDirty,
     hasUnsavedChanges: isDirty,
     confirmDiscard,
-    reload: () => refreshAuth(),
-    getDiagnostics: () => ({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, people_count: people.length, timings: timingMarks.slice(), cache: cacheSummary(), backend })
+    reload: () => refreshAuth()
   };
 
   window.SyncEtcPeopleAdminPage = window.SyncEtcPeopleAdmin;

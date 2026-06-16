@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-16-116-L
+// Internal Version: 2026-06-16-116-M
 // Purpose: Organization Admin People workbench. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-L";
+  const VERSION = "2026-06-16-116-M";
   const ROOT_ID = "syncetc-organization-people-root";
   const ROOT_SELECTOR = "#syncetc-organization-people-root, #syncetc-people-admin-root, [data-syncetc-page=\"organization-people\"]";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -46,12 +46,12 @@
   let adminAccess = null;
   let selectedOrgId = "";
   let platformAdmin = false;
-  let options = { statuses: [], membership_classes: [], application_stages: [], roles: [], permissions: [] };
+  let options = { statuses: [], membership_classes: [], application_stages: [], roles: [], permissions: [], qualifications: [] };
   let people = [];
   let pageConfig = null;
   let selected = null;
   let activeDefinitionKind = "";
-  let definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [], permissions: [] };
+  let definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [], permissions: [], qualifications: [] };
   let selectedDefinition = null;
   let definitionSearch = "";
   let definitionFilter = "all";
@@ -127,7 +127,7 @@
   }
   function saveOrgContextCache(orgId) {
     if (!orgId) return;
-    peopleCacheByOrg[clean(orgId)] = { cached_at_ms: Date.now(), adminAccess, options, pageConfig, people: arr(people).slice(), definitionLists: { statuses: arr(definitionLists.statuses).slice(), membership_classes: arr(definitionLists.membership_classes).slice(), application_stages: arr(definitionLists.application_stages).slice(), groups_roles: arr(definitionLists.groups_roles).slice(), permissions: arr(definitionLists.permissions).slice() } };
+    peopleCacheByOrg[clean(orgId)] = { cached_at_ms: Date.now(), adminAccess, options, pageConfig, people: arr(people).slice(), definitionLists: { statuses: arr(definitionLists.statuses).slice(), membership_classes: arr(definitionLists.membership_classes).slice(), application_stages: arr(definitionLists.application_stages).slice(), groups_roles: arr(definitionLists.groups_roles).slice(), permissions: arr(definitionLists.permissions).slice(), qualifications: arr(definitionLists.qualifications).slice() } };
   }
   function hydrateFromMountOptions() {
     if (!embeddedMode) return false;
@@ -159,6 +159,7 @@
     if (["application-stages", "application-stage", "applicant-stages", "onboarding-stages", "stages", "stage", "people-stages"].includes(k)) return "application-stages";
     if (["groups-roles", "group-roles", "groups", "group", "roles", "role", "groups-and-roles", "people-groups", "people-roles", "organization-roles"].includes(k)) return "groups-roles";
     if (["permissions", "permission", "capabilities", "capability", "people-permissions", "access-permissions", "role-permissions"].includes(k)) return "permissions";
+    if (["qualifications", "qualification", "checkouts", "checkout", "qualification-checkouts", "people-qualifications", "people-instructors", "instructors", "instructor-qualifications"].includes(k)) return "qualifications";
     return "";
   }
   function normalizePeopleLens(value) {
@@ -449,7 +450,7 @@
     await refreshAuth();
     setMessage("Logged in.", "ok");
   }
-  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; roleFilter = "all"; loginFilter = "all"; options = { statuses: [], membership_classes: [], application_stages: [], roles: [], permissions: [] }; definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [], permissions: [] }; selectedDefinition = null; selectedPermissionRoleId = ""; permissionDraftKeys = null; authChecked = true; setShellState(); render(); }
+  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; roleFilter = "all"; loginFilter = "all"; options = { statuses: [], membership_classes: [], application_stages: [], roles: [], permissions: [], qualifications: [] }; definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [], permissions: [], qualifications: [] }; selectedDefinition = null; selectedPermissionRoleId = ""; permissionDraftKeys = null; authChecked = true; setShellState(); render(); }
   async function resetOwnPassword() { await ensureSupabase(); const loginEmail = clean($("people-login-email")?.value || email).toLowerCase(); if (!loginEmail) throw new Error("Enter email first."); const { error } = await supabaseClient.auth.resetPasswordForEmail(loginEmail, { redirectTo: "https://syncetc.webflow.io/password-reset" }); if (error) throw error; setMessage("Password reset email requested.", "ok"); }
 
   async function runButton(id, label, fn) {
@@ -500,7 +501,7 @@
       const cached = getCachedOrgContext(selectedOrgId);
       if (cached) {
         adminAccess = adminAccess || cached.adminAccess || null;
-        options = cached.options || { statuses: [], membership_classes: [], application_stages: [], roles: [], permissions: [] };
+        options = cached.options || { statuses: [], membership_classes: [], application_stages: [], roles: [], permissions: [], qualifications: [] };
         pageConfig = cached.pageConfig || null;
         people = arr(cached.people).slice();
         definitionLists = cached.definitionLists || definitionLists;
@@ -522,7 +523,7 @@
     const peoplePromise = shouldLoadPeopleList ? fetchPeopleList(run) : Promise.resolve(null);
     const [dash, vocab, peopleResult] = await Promise.all([dashboardPromise, vocabularyPromise, peoplePromise]);
     adminAccess = dash.access || adminAccess || null;
-    options = { statuses: vocab.statuses || [], membership_classes: vocab.membership_classes || [], application_stages: vocab.application_stages || [], roles: sortRoles(vocab.roles || []), permissions: vocab.permissions || [] };
+    options = { statuses: vocab.statuses || [], membership_classes: vocab.membership_classes || [], application_stages: vocab.application_stages || [], roles: sortRoles(vocab.roles || []), permissions: vocab.permissions || [], qualifications: vocab.qualifications || [] };
     if (peopleResult) applyPeopleListResult(peopleResult);
     if (isDefinitionMode() || isPermissionsMode()) await loadPeopleDefinitionLists(run);
     saveOrgContextCache(selectedOrgId);
@@ -561,6 +562,17 @@
       r.definition_key = clean(r.stage_key);
       r.label = clean(r.label || r.stage_key || "Untitled stage");
       r.description = clean(r.description || "");
+      r.ui_status = definitionUiStatus(r);
+      r.sort_order = Number(r.sort_order || 100);
+    } else if (type === "qualifications") {
+      const settings = obj(r.settings_json);
+      r.definition_type = "qualifications";
+      r.definition_id = clean(r.qualification_definition_id);
+      r.definition_key = clean(r.qualification_key);
+      r.qualification_type = clean(r.qualification_type || settings.qualification_type || "other");
+      r.applies_to = clean(r.applies_to || settings.applies_to || "member");
+      r.label = clean(r.label || r.qualification_key || "Untitled qualification");
+      r.description = clean(r.description || settings.description || settings.notes || "");
       r.ui_status = definitionUiStatus(r);
       r.sort_order = Number(r.sort_order || 100);
     } else {
@@ -605,7 +617,8 @@
     const stages = arr(data.application_stages || data.stages).map((r) => normalizeDefinitionRow(r, "application-stages"));
     const roles = arr(data.groups_roles || data.organization_roles || data.roles).map((r) => normalizeDefinitionRow(r, "groups-roles"));
     const permissions = arr(data.permissions || data.permission_definitions).slice();
-    if (statuses.length || classes.length || stages.length || roles.length || permissions.length) definitionLists = { statuses, membership_classes: classes, application_stages: stages, groups_roles: roles, permissions };
+    const qualifications = arr(data.qualifications || data.qualification_definitions).map((r) => normalizeDefinitionRow(r, "qualifications"));
+    if (statuses.length || classes.length || stages.length || roles.length || permissions.length || qualifications.length) definitionLists = { statuses, membership_classes: classes, application_stages: stages, groups_roles: roles, permissions, qualifications };
   }
 
   async function loadPeopleDefinitionLists(run = activeLoadRun) {
@@ -621,7 +634,8 @@
         membership_classes: arr(options.membership_classes).map((r) => normalizeDefinitionRow(r, "membership-classes")),
         application_stages: arr(options.application_stages).map((r) => normalizeDefinitionRow(r, "application-stages")),
         groups_roles: arr(options.roles).map((r) => normalizeDefinitionRow(r, "groups-roles")),
-        permissions: arr(options.permissions).slice()
+        permissions: arr(options.permissions).slice(),
+        qualifications: arr(options.qualifications).map((r) => normalizeDefinitionRow(r, "qualifications"))
       };
       if (isDefinitionMode()) {
         message = e.message || "People definitions could not be loaded.";
@@ -649,6 +663,16 @@
         listTitle: "Roles", newLabel: "New role", itemLabel: "role", rowsKey: "groups_roles",
         idField: "role_id", keyField: "role_key", categoryField: "role_type", categoryLabel: "Role type", categoryTip: "Choose how this role is used in your organization.",
         categories: [["member","Member"],["board","Board"],["officer","Officer"],["committee","Committee"],["instructor","Instructor"],["manager","Manager"],["staff","Staff"],["access","Admin / access"],["group","Group"],["custom","Custom"]]
+      };
+    }
+
+    if (k === "qualifications") {
+      return {
+        kind: k, title: "Qualifications & Checkouts", kicker: "People",
+        helper: "Define certificates, checkouts, currency items, and other qualifications before assigning them to people.",
+        listTitle: "Qualifications", newLabel: "New qualification", itemLabel: "qualification", rowsKey: "qualifications",
+        idField: "qualification_definition_id", keyField: "qualification_key", categoryField: "qualification_type", categoryLabel: "Qualification type", categoryTip: "Choose the kind of qualification or checkout this is.",
+        categories: [["certificate","Certificate"],["rating","Rating"],["checkout","Checkout"],["currency","Currency"],["medical","Medical"],["training","Training"],["endorsement","Endorsement"],["instructor","Instructor"],["other","Other"]]
       };
     }
     if (k === "application-stages") {
@@ -690,7 +714,7 @@
   function definitionMatchesSearch(row) {
     const q = lower(definitionSearch);
     if (!q) return true;
-    const hay = [row.label, row.description, row.lifecycle_category, row.class_category, row.stage_category, row.role_type, row.role_key, row.dues_behavior, row.default_lifecycle_status_key].map(clean).join(" ").toLowerCase();
+    const hay = [row.label, row.description, row.lifecycle_category, row.class_category, row.stage_category, row.role_type, row.role_key, row.qualification_type, row.applies_to, row.dues_behavior, row.default_lifecycle_status_key].map(clean).join(" ").toLowerCase();
     return hay.includes(q);
   }
 
@@ -718,6 +742,9 @@
     if (cfg.kind === "application-stages") {
       return { application_stage_definition_id: "", stage_key: "", label: "", description: "", stage_category: "application", default_lifecycle_status_key: "applicant", default_can_login: false, default_can_view_portal: false, default_requires_admin_review: true, is_terminal: false, is_default: false, status: "active", ui_status: "active", sort_order: nextDefinitionSortOrder() };
     }
+    if (cfg.kind === "qualifications") {
+      return { qualification_definition_id: "", qualification_key: "", label: "", description: "", qualification_type: "checkout", applies_to: "member", requires_expiration_date: false, requires_document: false, requires_approval: false, is_default: false, status: "active", ui_status: "active", sort_order: nextDefinitionSortOrder() };
+    }
     if (cfg.kind === "groups-roles") {
       return { role_id: "", role_key: "", label: "", description: "", role_type: "custom", permission_keys: [], is_system_role: false, settings_json: { is_group: true }, status: "active", ui_status: "active", sort_order: nextDefinitionSortOrder() };
     }
@@ -742,13 +769,19 @@
   }
 
   function definitionCategoryOptions(cfg, value) {
-    const current = key(value) || (cfg.kind === "membership-classes" ? "member" : "active");
+    const current = key(value) || (cfg.kind === "membership-classes" ? "member" : cfg.kind === "groups-roles" ? "custom" : cfg.kind === "application-stages" ? "application" : cfg.kind === "qualifications" ? "checkout" : "active");
     return cfg.categories.map(([k,label]) => `<option value="${esc(k)}" ${current === k ? "selected" : ""}>${esc(label)}</option>`).join("");
   }
 
   function duesBehaviorOptions(value) {
     const current = key(value || "standard");
     const rows = [["standard","Standard"],["included_family","Included family"],["honorary_conditional","Honorary / conditional"],["reduced","Reduced"],["none","None"],["custom","Custom"]];
+    return rows.map(([k,label]) => `<option value="${esc(k)}" ${current === k ? "selected" : ""}>${esc(label)}</option>`).join("");
+  }
+
+  function qualificationAppliesToOptions(value) {
+    const current = key(value || "member");
+    const rows = [["member","Member"],["instructor","Instructor"],["asset","Asset / aircraft"],["general","General"],["other","Other"]];
     return rows.map(([k,label]) => `<option value="${esc(k)}" ${current === k ? "selected" : ""}>${esc(label)}</option>`).join("");
   }
 
@@ -817,6 +850,8 @@
       body = `${commonTop}<div class="people-form-grid"><label class="people-field"><span>${definitionFieldLabel("Dues behavior", "Choose the broad dues treatment for this class.")}</span><select id="people-def-dues-behavior" ${archived ? "disabled" : ""}>${duesBehaviorOptions(row.dues_behavior)}</select></label>${textarea("people-def-privilege-notes", "Privilege notes", row.privilege_notes || "")}${textarea("people-def-billing-notes", "Billing notes", row.billing_notes || "")}</div><div class="people-check-grid">${checkbox("people-def-can-reserve", "Default can reserve/use assets", row.default_can_reserve_assets)}${checkbox("people-def-view-docs", "Default can view member documents", row.default_can_view_member_documents)}${checkbox("people-def-review", "Requires admin review", row.requires_admin_review)}${checkbox("people-def-default", "Default class", row.is_default)}</div>`;
     } else if (cfg.kind === "application-stages") {
       body = `${commonTop}<div class="people-form-grid"><label class="people-field"><span>${definitionFieldLabel("Suggested lifecycle status", "Choose the lifecycle status normally associated with this stage.")}</span><select id="people-def-lifecycle-status" ${archived ? "disabled" : ""}>${lifecycleStatusOptions(row.default_lifecycle_status_key)}</select></label></div><div class="people-check-grid">${checkbox("people-def-stage-login", "Allow login during this stage", row.default_can_login)}${checkbox("people-def-stage-portal", "Allow portal during this stage", row.default_can_view_portal)}${checkbox("people-def-stage-review", "Requires admin review", row.default_requires_admin_review)}${checkbox("people-def-stage-terminal", "Final step", row.is_terminal)}${checkbox("people-def-default", "Default stage", row.is_default)}</div>`;
+    } else if (cfg.kind === "qualifications") {
+      body = `${commonTop}<div class="people-form-grid"><label class="people-field"><span>${definitionFieldLabel("Applies to", "Choose where this qualification is normally used.")}</span><select id="people-def-applies-to" ${archived ? "disabled" : ""}>${qualificationAppliesToOptions(row.applies_to)}</select></label></div><div class="people-check-grid">${checkbox("people-def-requires-expiration", "Track expiration date", row.requires_expiration_date)}${checkbox("people-def-requires-document", "Attach document when assigned", row.requires_document)}${checkbox("people-def-requires-approval", "Requires admin approval", row.requires_approval)}${checkbox("people-def-default", "Default qualification", row.is_default)}</div>`;
     } else if (cfg.kind === "groups-roles") {
       body = `${commonTop}<div class="people-check-grid">${checkbox("people-def-show-public", "Show on public information pages", settingsBool(row, "show_on_public_info", false))}${checkbox("people-def-is-group", "Available as a group", settingsBool(row, "is_group", true))}</div>`;
     } else {
@@ -945,6 +980,12 @@
       base.default_can_view_portal = bool($("people-def-stage-portal")?.checked);
       base.default_requires_admin_review = bool($("people-def-stage-review")?.checked);
       base.is_terminal = bool($("people-def-stage-terminal")?.checked);
+    } else if (cfg.kind === "qualifications") {
+      base.qualification_type = clean($("people-def-category")?.value) || "checkout";
+      base.applies_to = clean($("people-def-applies-to")?.value) || "member";
+      base.requires_expiration_date = bool($("people-def-requires-expiration")?.checked);
+      base.requires_document = bool($("people-def-requires-document")?.checked);
+      base.requires_approval = bool($("people-def-requires-approval")?.checked);
     } else if (cfg.kind === "groups-roles") {
       base.role_type = clean($("people-def-category")?.value) || "custom";
       base.show_on_public_info = bool($("people-def-show-public")?.checked);
@@ -964,14 +1005,14 @@
   async function refreshAccessVocabularyAfterDefinitionSave() {
     try {
       const vocab = await call("organization_list_access_vocabulary", { organization_id: selectedOrgId });
-      options = { statuses: vocab.statuses || [], membership_classes: vocab.membership_classes || [], application_stages: vocab.application_stages || [], roles: sortRoles(vocab.roles || []), permissions: vocab.permissions || [] };
+      options = { statuses: vocab.statuses || [], membership_classes: vocab.membership_classes || [], application_stages: vocab.application_stages || [], roles: sortRoles(vocab.roles || []), permissions: vocab.permissions || [], qualifications: vocab.qualifications || [] };
       saveOrgContextCache(selectedOrgId);
     } catch {}
   }
 
   async function saveDefinitionPayload(payload) {
     const cfg = definitionConfig();
-    const action = cfg.kind === "membership-classes" ? "organization_save_membership_class" : cfg.kind === "application-stages" ? "organization_save_application_stage" : cfg.kind === "groups-roles" ? "organization_save_role_definition" : "organization_save_lifecycle_status";
+    const action = cfg.kind === "membership-classes" ? "organization_save_membership_class" : cfg.kind === "application-stages" ? "organization_save_application_stage" : cfg.kind === "groups-roles" ? "organization_save_role_definition" : cfg.kind === "qualifications" ? "organization_save_qualification_definition" : "organization_save_lifecycle_status";
     const data = await call(action, { organization_id: selectedOrgId, ...obj(payload) });
     setDefinitionListsFromPayload(data);
     await refreshAccessVocabularyAfterDefinitionSave();
@@ -982,7 +1023,7 @@
     const payload = collectDefinitionPayload();
     const data = await saveDefinitionPayload(payload);
     const cfg = definitionConfig();
-    const saved = cfg.kind === "membership-classes" ? obj(data.membership_class || data.saved_definition) : cfg.kind === "application-stages" ? obj(data.application_stage || data.saved_definition) : cfg.kind === "groups-roles" ? obj(data.role_definition || data.organization_role || data.saved_definition) : obj(data.lifecycle_status || data.saved_definition);
+    const saved = cfg.kind === "membership-classes" ? obj(data.membership_class || data.saved_definition) : cfg.kind === "application-stages" ? obj(data.application_stage || data.saved_definition) : cfg.kind === "groups-roles" ? obj(data.role_definition || data.organization_role || data.saved_definition) : cfg.kind === "qualifications" ? obj(data.qualification_definition || data.qualification || data.saved_definition) : obj(data.lifecycle_status || data.saved_definition);
     selectedDefinition = normalizeDefinitionRow(saved[cfg.idField] || saved[cfg.keyField] ? saved : payload, cfg.kind);
     const match = allDefinitionRows().find((r) => selectedDefinitionId(r) === selectedDefinitionId(selectedDefinition));
     if (match) selectedDefinition = { ...match };
@@ -1015,6 +1056,9 @@
     } else if (cfg.kind === "groups-roles") {
       action = restore ? "organization_restore_role_definition" : "organization_archive_role_definition";
       payload = { organization_id: selectedOrgId, role_id: id };
+    } else if (cfg.kind === "qualifications") {
+      action = restore ? "organization_restore_qualification_definition" : "organization_archive_qualification_definition";
+      payload = { organization_id: selectedOrgId, qualification_definition_id: id };
     } else {
       action = restore ? "organization_restore_lifecycle_status" : "organization_archive_lifecycle_status";
       payload = { organization_id: selectedOrgId, status_definition_id: id };
@@ -1047,14 +1091,16 @@
     definitionLists[cfg.rowsKey] = allRows.map((r) => byId.get(selectedDefinitionId(r)) || r);
     render();
     try {
-      const action = cfg.kind === "membership-classes" ? "organization_reorder_membership_classes" : cfg.kind === "application-stages" ? "organization_reorder_application_stages" : cfg.kind === "groups-roles" ? "organization_reorder_role_definitions" : "organization_reorder_lifecycle_statuses";
+      const action = cfg.kind === "membership-classes" ? "organization_reorder_membership_classes" : cfg.kind === "application-stages" ? "organization_reorder_application_stages" : cfg.kind === "groups-roles" ? "organization_reorder_role_definitions" : cfg.kind === "qualifications" ? "organization_reorder_qualification_definitions" : "organization_reorder_lifecycle_statuses";
       const payload = cfg.kind === "membership-classes"
         ? { organization_id: selectedOrgId, membership_class_definition_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) }
         : cfg.kind === "application-stages"
           ? { organization_id: selectedOrgId, application_stage_definition_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) }
           : cfg.kind === "groups-roles"
             ? { organization_id: selectedOrgId, role_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) }
-            : { organization_id: selectedOrgId, status_definition_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) };
+            : cfg.kind === "qualifications"
+              ? { organization_id: selectedOrgId, qualification_definition_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) }
+              : { organization_id: selectedOrgId, status_definition_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) };
       const data = await call(action, payload);
       setDefinitionListsFromPayload(data);
       saveOrgContextCache(selectedOrgId);
@@ -1568,7 +1614,7 @@
     const el = ensureRoot();
     if (!el) return;
     const cfg = styleConfig(selectedRow());
-    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, active_people_lens: activePeopleLens, active_definition_kind: activeDefinitionKind, selected_permission_role_id: selectedPermissionRoleId, role_filter: roleFilter, login_filter: loginFilter, people_count: people.length, definition_counts: { statuses: arr(definitionLists.statuses).length, membership_classes: arr(definitionLists.membership_classes).length, application_stages: arr(definitionLists.application_stages).length, groups_roles: arr(definitionLists.groups_roles).length, permissions: arr(definitionLists.permissions).length }, cache_ttl_ms: PEOPLE_CACHE_TTL_MS, parent_script_load_ms: mountOptions.scriptLoadMs || null, load_timings: loadTimings, backend: backend || {} }, null, 2))}</pre></details>` : "";
+    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, active_people_lens: activePeopleLens, active_definition_kind: activeDefinitionKind, selected_permission_role_id: selectedPermissionRoleId, role_filter: roleFilter, login_filter: loginFilter, people_count: people.length, definition_counts: { statuses: arr(definitionLists.statuses).length, membership_classes: arr(definitionLists.membership_classes).length, application_stages: arr(definitionLists.application_stages).length, groups_roles: arr(definitionLists.groups_roles).length, permissions: arr(definitionLists.permissions).length, qualifications: arr(definitionLists.qualifications).length }, cache_ttl_ms: PEOPLE_CACHE_TTL_MS, parent_script_load_ms: mountOptions.scriptLoadMs || null, load_timings: loadTimings, backend: backend || {} }, null, 2))}</pre></details>` : "";
     el.innerHTML = `<style>${peopleStyles(cfg)}</style><div class="people-wrap"><section class="people-card people-hero"><div class="people-eyebrow">Organization Admin</div><h1>${esc(clean(pageConfig?.title) || "People & Access")}</h1><p>${esc(clean(pageConfig?.intro_text) || "Search the full people pool, manage members and applicants, keep contact information current, and handle safe access updates from one place.")}</p><div class="people-message ${esc(messageKind)}">${esc(message)}</div></section>${renderContent()}${diagnostics}</div>`;
     bindEvents();
     restorePeopleSearchFocus();

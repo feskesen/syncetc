@@ -1,7 +1,7 @@
 // index.ts
 // Deploy target: Supabase Edge Function named core-access-action
 // JWT verification: ON
-// Internal Version: 2026-06-16-116-E
+// Internal Version: 2026-06-16-116-F
 // Purpose: secured user/organization-admin access foundation for SyncEtc. Separates lifecycle status, membership class, onboarding/application stage, roles, permissions, and future RSVP audience rules.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
@@ -11,7 +11,7 @@ type JsonRecord = Record<string, unknown>;
 type SupabaseClientAny = any;
 declare const Deno: { env: { get: (key: string) => string | undefined } };
 
-const VERSION = "2026-06-16-116-E";
+const VERSION = "2026-06-16-116-F";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -2360,6 +2360,9 @@ async function saveOrganizationPerson(
   const membershipClassKey = normalizeKey(body.membership_class_key || "");
   const applicationStageKey = normalizeKey(body.application_stage_key || "");
   const status = await findLifecycleStatus(serviceClient, organizationId, statusKey);
+  if (statusBlocksAccess(status) && clean(savedPerson.person_id) === clean(actorPersonId)) {
+    throw new Error("You cannot restrict your own organization access from this page.");
+  }
   if (statusBlocksAccess(status) && !optionalBoolean(body, "confirm_restrictive", false)) {
     throw new Error("Confirm before saving a restrictive lifecycle status.");
   }
@@ -2414,11 +2417,20 @@ async function saveOrganizationPerson(
 
     const existingHasSuperAdmin = existingRoleKeys.some(isSuperAdminRoleKey);
     const requestedHasSuperAdmin = roleKeysToSave.some(isSuperAdminRoleKey);
+    const targetIsActor = clean(savedPerson.person_id) === clean(actorPersonId);
+    const existingHasOrganizationAdmin = existingRoleKeys.some(isOrganizationAdminRoleKey);
+    const requestedHasOrganizationAdmin = roleKeysToSave.some(isOrganizationAdminRoleKey);
     if (existingHasSuperAdmin !== requestedHasSuperAdmin && !canManageSuperAdmin) {
       throw new Error("Only an Organization Super Admin can assign or remove Organization Super Admin.");
     }
+    if (targetIsActor && existingHasOrganizationAdmin && !requestedHasOrganizationAdmin) {
+      throw new Error("You cannot remove your own Organization Admin access from this page.");
+    }
+    if (targetIsActor && existingHasSuperAdmin && !requestedHasSuperAdmin) {
+      throw new Error("You cannot remove your own Organization Super Admin access from this page.");
+    }
 
-    if (existingRoleKeys.some(isOrganizationAdminRoleKey) && !roleKeysToSave.some(isOrganizationAdminRoleKey)) {
+    if (existingHasOrganizationAdmin && !requestedHasOrganizationAdmin) {
       await ensureRoleNotLast(serviceClient, organizationId, savedMembershipId, ORGANIZATION_ADMIN_ROLE_KEY, "You cannot remove the last Organization Admin.");
     }
     if (existingHasSuperAdmin && !requestedHasSuperAdmin) {

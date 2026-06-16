@@ -1,18 +1,18 @@
 // CUSTOMER-ADMIN-PAGE-organization-management-current.js
-// Internal Version: 2026-06-16-116-E
+// Internal Version: 2026-06-16-116-F
 // Purpose: Customer/organization-side Organization Management console runtime. Immutable admin workbench shell with left navigation and right-panel module loading.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-E";
+  const VERSION = "2026-06-16-116-F";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
   const SUPABASE_JS_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
   const AIRCRAFT_ADMIN_EXPECTED_VERSION = "2026-06-15-115-G";
   const AIRCRAFT_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js?v=${encodeURIComponent(AIRCRAFT_ADMIN_EXPECTED_VERSION)}`;
-  const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-16-116-E";
+  const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-16-116-F";
   const PEOPLE_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-people-current.js?v=${encodeURIComponent(PEOPLE_ADMIN_EXPECTED_VERSION)}`;
   const ROOT_SELECTOR = "#syncetc-organization-management-root, #syncetc-organization-admin-console-root, [data-syncetc-page='organization-management']";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -230,7 +230,7 @@
     { key: "people-membership-classes", label: "Membership Classes", short: "Class vocabulary", group: "People", status: "active", kind: "people", peopleView: "membership-classes", description: "Define membership/user classes such as full, probationary, family, honorary, social, student, or non-member classes." },
     { key: "people-stages", label: "Application / Onboarding Stages", short: "Workflow stages", group: "People", status: "active", kind: "people", peopleView: "application-stages", description: "Define the application and onboarding steps used before assigning them to people." },
     { key: "people-members", label: "Members / People", short: "Member records", group: "People", status: "active", kind: "people", peopleView: "members", peopleFilter: "all", peopleTab: "identity", description: "Manage organization people, member records, lifecycle, roster visibility, access links, and qualifications." },
-    { key: "people-admins", label: "Administrators & Access", short: "Admin access", group: "People", status: "active", kind: "people", peopleView: "members", peopleFilter: "admins", peopleTab: "access", description: "Manage customer administrators, organization super admins, delegated admin access, invitations, and login links using the same people records." },
+    { key: "people-admins", label: "Administrators & Access", short: "Admin access", group: "People", status: "active", kind: "people", peopleView: "members", peopleFilter: "admins-access", peopleTab: "access", peopleLens: "admin-access", description: "Manage customer administrators, organization super admins, delegated admin access, invitations, and login links." },
     { key: "people-groups", label: "Groups / Roles", short: "Permissions", group: "People", status: "placeholder", description: "Member groups, roles, permission bundles, and future mention groups." },
     { key: "people-instructors", label: "Instructors / Qualifications", short: "Qualifications", group: "People", status: "placeholder", description: "Instructor roster, checkouts, and qualification records." },
 
@@ -547,6 +547,8 @@
         initialView: active.peopleView || "members",
         initialFilter: active.peopleFilter || "all",
         initialTab: active.peopleTab || "identity",
+        initialLens: active.peopleLens || "",
+        peopleLens: active.peopleLens || "",
         organizationId: state.orgId,
         selectedOrganizationId: state.orgId,
         parentVersion: VERSION,
@@ -579,7 +581,7 @@
         await wait(50);
       }
       const mountStartedAt = performance.now();
-      await mountFn()(host, { embedded: true, organizationId: state.orgId, selectedOrganizationId: state.orgId, initialView: active.peopleView || "members", initialDefinition: active.peopleView || "", initialFilter: active.peopleFilter || "all", initialTab: active.peopleTab || "identity", parentVersion: VERSION, token: state.token, email: state.email, accessRows: state.accessRows, accessRow: selectedRow(), platformAdmin: Boolean(selectedRow()?.platform_admin), supabaseClient, scriptLoadMs });
+      await mountFn()(host, { embedded: true, organizationId: state.orgId, selectedOrganizationId: state.orgId, initialView: active.peopleView || "members", initialDefinition: active.peopleView || "", initialFilter: active.peopleFilter || "all", initialTab: active.peopleTab || "identity", initialLens: active.peopleLens || "", peopleLens: active.peopleLens || "", parentVersion: VERSION, token: state.token, email: state.email, accessRows: state.accessRows, accessRow: selectedRow(), platformAdmin: Boolean(selectedRow()?.platform_admin), supabaseClient, scriptLoadMs });
       mark("people-module:mount-done", `${Math.round(performance.now() - mountStartedAt)}ms`);
     }
   }

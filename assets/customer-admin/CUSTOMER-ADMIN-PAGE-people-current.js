@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-16-116-N
+// Internal Version: 2026-06-16-116-O
 // Purpose: Organization Admin People workbench. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-N";
+  const VERSION = "2026-06-16-116-O";
   const ROOT_ID = "syncetc-organization-people-root";
   const ROOT_SELECTOR = "#syncetc-organization-people-root, #syncetc-people-admin-root, [data-syncetc-page=\"organization-people\"]";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -573,6 +573,10 @@
       r.applies_to = clean(r.applies_to || settings.applies_to || "member");
       r.label = clean(r.label || r.qualification_key || "Untitled qualification");
       r.description = clean(r.description || settings.description || settings.notes || "");
+      r.field_style = key(settings.field_style || settings.input_style || defaultQualificationFieldStyle0116O(r));
+      r.input_style = r.field_style;
+      r.option_values = splitOptionLines0116O(settings.option_values || settings.options || settings.choices || defaultQualificationOptions0116O(r));
+      r.show_on_profile = settings.show_on_profile !== false;
       r.ui_status = definitionUiStatus(r);
       r.sort_order = Number(r.sort_order || 100);
     } else {
@@ -668,10 +672,10 @@
 
     if (k === "qualifications") {
       return {
-        kind: k, title: "Qualifications & Checkouts", kicker: "People",
-        helper: "Define certificates, checkouts, currency items, and other qualifications before assigning them to people.",
-        listTitle: "Qualifications", newLabel: "New qualification", itemLabel: "qualification", rowsKey: "qualifications",
-        idField: "qualification_definition_id", keyField: "qualification_key", categoryField: "qualification_type", categoryLabel: "Qualification type", categoryTip: "Choose the kind of qualification or checkout this is.",
+        kind: k, title: "Qualifications", kicker: "People",
+        helper: "Set up the qualification and checkout fields that appear on people records.",
+        listTitle: "Qualification fields", newLabel: "New qualification field", itemLabel: "qualification field", rowsKey: "qualifications",
+        idField: "qualification_definition_id", keyField: "qualification_key", categoryField: "qualification_type", categoryLabel: "Kind", categoryTip: "Choose the general kind of field this is.",
         categories: [["certificate","Certificate"],["rating","Rating"],["checkout","Checkout"],["currency","Currency"],["medical","Medical"],["training","Training"],["endorsement","Endorsement"],["instructor","Instructor"],["other","Other"]]
       };
     }
@@ -743,7 +747,7 @@
       return { application_stage_definition_id: "", stage_key: "", label: "", description: "", stage_category: "application", default_lifecycle_status_key: "applicant", default_can_login: false, default_can_view_portal: false, default_requires_admin_review: true, is_terminal: false, is_default: false, status: "active", ui_status: "active", sort_order: nextDefinitionSortOrder() };
     }
     if (cfg.kind === "qualifications") {
-      return { qualification_definition_id: "", qualification_key: "", label: "", description: "", qualification_type: "checkout", applies_to: "member", requires_expiration_date: false, requires_document: false, requires_approval: false, is_default: false, status: "active", ui_status: "active", sort_order: nextDefinitionSortOrder() };
+      return { qualification_definition_id: "", qualification_key: "", label: "", description: "", qualification_type: "checkout", applies_to: "member", requires_expiration_date: true, requires_document: false, requires_approval: false, is_default: false, status: "active", ui_status: "active", sort_order: nextDefinitionSortOrder(), settings_json: { field_style: "checkbox_expiration", show_on_profile: true, option_values: [] } };
     }
     if (cfg.kind === "groups-roles") {
       return { role_id: "", role_key: "", label: "", description: "", role_type: "custom", permission_keys: [], is_system_role: false, settings_json: { is_group: true }, status: "active", ui_status: "active", sort_order: nextDefinitionSortOrder() };
@@ -783,6 +787,60 @@
     const current = key(value || "member");
     const rows = [["member","Member"],["instructor","Instructor"],["asset","Asset / aircraft"],["general","General"],["other","Other"]];
     return rows.map(([k,label]) => `<option value="${esc(k)}" ${current === k ? "selected" : ""}>${esc(label)}</option>`).join("");
+  }
+
+
+  const QUALIFICATION_FIELD_STYLE_OPTIONS_0116O = [
+    ["checkbox", "Checkbox"],
+    ["checkbox_expiration", "Checkbox + expiration"],
+    ["date_expiration", "Completion date + expiration"],
+    ["class_expiration", "Class / option + expiration"],
+    ["status_expiration", "Status + expiration"],
+    ["notes", "Notes only"]
+  ];
+
+  function splitOptionLines0116O(value) {
+    if (Array.isArray(value)) return value.map(clean).filter(Boolean);
+    return clean(value).split(/\r?\n|,/).map(clean).filter(Boolean);
+  }
+
+  function defaultQualificationFieldStyle0116O(row = {}) {
+    const qk = qualificationDefinitionKey(row);
+    const qt = key(row.qualification_type || obj(row.settings_json).qualification_type);
+    if (qk === "medical-certificate") return "class_expiration";
+    if (["flight-review", "instrument-proficiency-check", "organization-checkout"].includes(qk)) return "date_expiration";
+    if (["cfi", "cfii", "mei"].includes(qk)) return "checkbox_expiration";
+    if (qk === "ifr-rated") return "checkbox";
+    if (["night-checkout", "ifr-checkout", "high-performance-checkout", "complex-checkout", "tailwheel-checkout", "club-instructor", "safety-pilot-approved"].includes(qk)) return "checkbox_expiration";
+    if (qt === "medical") return "class_expiration";
+    if (qt === "currency") return "date_expiration";
+    if (["checkout", "instructor", "certificate", "rating", "endorsement"].includes(qt)) return "checkbox_expiration";
+    return "checkbox";
+  }
+
+  function defaultQualificationOptions0116O(row = {}) {
+    const qk = qualificationDefinitionKey(row);
+    if (qk === "medical-certificate") return ["First Class", "Second Class", "Third Class", "BasicMed", "None"];
+    return [];
+  }
+
+  function qualificationSettings0116O(row = {}) {
+    const settings = obj(row.settings_json);
+    const style = key(settings.field_style || settings.input_style || defaultQualificationFieldStyle0116O(row)) || "checkbox";
+    const optionValues = splitOptionLines0116O(settings.option_values || settings.options || settings.choices || defaultQualificationOptions0116O(row));
+    return {
+      field_style: QUALIFICATION_FIELD_STYLE_OPTIONS_0116O.some(([k]) => k === style) ? style : "checkbox",
+      option_values: optionValues,
+      issued_label: clean(settings.issued_label || (style === "date_expiration" ? "Completed" : "Issued")),
+      expiration_label: clean(settings.expiration_label || "Expires"),
+      notes_label: clean(settings.notes_label || "Notes"),
+      show_on_profile: settings.show_on_profile !== false
+    };
+  }
+
+  function qualificationFieldStyleOptions0116O(value) {
+    const current = key(value || "checkbox");
+    return QUALIFICATION_FIELD_STYLE_OPTIONS_0116O.map(([k,label]) => `<option value="${esc(k)}" ${current === k ? "selected" : ""}>${esc(label)}</option>`).join("");
   }
 
   function definitionFieldLabel(label, tip = "") {
@@ -851,7 +909,9 @@
     } else if (cfg.kind === "application-stages") {
       body = `${commonTop}<div class="people-form-grid"><label class="people-field"><span>${definitionFieldLabel("Suggested lifecycle status", "Choose the lifecycle status normally associated with this stage.")}</span><select id="people-def-lifecycle-status" ${archived ? "disabled" : ""}>${lifecycleStatusOptions(row.default_lifecycle_status_key)}</select></label></div><div class="people-check-grid">${checkbox("people-def-stage-login", "Allow login during this stage", row.default_can_login)}${checkbox("people-def-stage-portal", "Allow portal during this stage", row.default_can_view_portal)}${checkbox("people-def-stage-review", "Requires admin review", row.default_requires_admin_review)}${checkbox("people-def-stage-terminal", "Final step", row.is_terminal)}${checkbox("people-def-default", "Default stage", row.is_default)}</div>`;
     } else if (cfg.kind === "qualifications") {
-      body = `${commonTop}<div class="people-form-grid"><label class="people-field"><span>${definitionFieldLabel("Applies to", "Choose where this qualification is normally used.")}</span><select id="people-def-applies-to" ${archived ? "disabled" : ""}>${qualificationAppliesToOptions(row.applies_to)}</select></label></div><div class="people-check-grid">${checkbox("people-def-requires-expiration", "Track expiration date", row.requires_expiration_date)}${checkbox("people-def-requires-document", "Attach document when assigned", row.requires_document)}${checkbox("people-def-requires-approval", "Requires admin approval", row.requires_approval)}${checkbox("people-def-default", "Default qualification", row.is_default)}</div>`;
+      const qSettings = qualificationSettings0116O(row);
+      const optionText = qSettings.option_values.join("\n");
+      body = `${commonTop}<div class="people-form-grid"><label class="people-field"><span>${definitionFieldLabel("Applies to", "Choose where this qualification is normally used.")}</span><select id="people-def-applies-to" ${archived ? "disabled" : ""}>${qualificationAppliesToOptions(row.applies_to)}</select></label><label class="people-field"><span>${definitionFieldLabel("Profile field", "Choose how this qualification should appear on a person profile.")}</span><select id="people-def-field-style" ${archived ? "disabled" : ""}>${qualificationFieldStyleOptions0116O(qSettings.field_style)}</select></label><label class="people-field"><span>${definitionFieldLabel("Expiration label", "Optional label for the expiration date field.")}</span><input id="people-def-expiration-label" type="text" value="${esc(qSettings.expiration_label)}" ${archived ? "disabled" : ""}></label>${textarea("people-def-option-values", "Options", optionText, "Use one line per option when the profile field uses a class or dropdown.")}<label class="people-field"><span>${definitionFieldLabel("Completed / issued label", "Optional label for the completion or issued date field.")}</span><input id="people-def-issued-label" type="text" value="${esc(qSettings.issued_label)}" ${archived ? "disabled" : ""}></label></div><div class="people-check-grid">${checkbox("people-def-requires-expiration", "Show expiration date", row.requires_expiration_date)}${checkbox("people-def-requires-document", "Allow document later", row.requires_document)}${checkbox("people-def-requires-approval", "Requires approval", row.requires_approval)}${checkbox("people-def-default", "Show by default", row.is_default)}</div>`;
     } else if (cfg.kind === "groups-roles") {
       body = `${commonTop}<div class="people-check-grid">${checkbox("people-def-show-public", "Show on public information pages", settingsBool(row, "show_on_public_info", false))}${checkbox("people-def-is-group", "Available as a group", settingsBool(row, "is_group", true))}</div>`;
     } else {
@@ -981,11 +1041,22 @@
       base.default_requires_admin_review = bool($("people-def-stage-review")?.checked);
       base.is_terminal = bool($("people-def-stage-terminal")?.checked);
     } else if (cfg.kind === "qualifications") {
+      const originalSettings = qualificationSettings0116O(original);
+      const optionValues = splitOptionLines0116O($("people-def-option-values")?.value || originalSettings.option_values || []);
       base.qualification_type = clean($("people-def-category")?.value) || "checkout";
       base.applies_to = clean($("people-def-applies-to")?.value) || "member";
       base.requires_expiration_date = bool($("people-def-requires-expiration")?.checked);
       base.requires_document = bool($("people-def-requires-document")?.checked);
       base.requires_approval = bool($("people-def-requires-approval")?.checked);
+      base.settings_json = {
+        ...obj(original.settings_json),
+        field_style: key($("people-def-field-style")?.value || originalSettings.field_style) || "checkbox",
+        input_style: key($("people-def-field-style")?.value || originalSettings.field_style) || "checkbox",
+        option_values: optionValues,
+        issued_label: clean($("people-def-issued-label")?.value || originalSettings.issued_label || "Issued"),
+        expiration_label: clean($("people-def-expiration-label")?.value || originalSettings.expiration_label || "Expires"),
+        show_on_profile: true
+      };
     } else if (cfg.kind === "groups-roles") {
       base.role_type = clean($("people-def-category")?.value) || "custom";
       base.show_on_public_info = bool($("people-def-show-public")?.checked);
@@ -1301,6 +1372,28 @@
     return ({ admin: 10, access: 15, board: 20, officer: 25, manager: 30, instructor: 40, committee: 50, staff: 60, member: 70, group: 80, custom: 90 })[t] || 95;
   }
   function activeAssignableRoles() { return sortRoles(options.roles).filter((role) => !role.archived_at && key(role.status || "active") !== "archived"); }
+  function sortedQualificationDefinitions() {
+    const fromDefinitions = arr(definitionLists.qualifications).length ? arr(definitionLists.qualifications) : arr(options.qualifications).map((r) => normalizeDefinitionRow(r, "qualifications"));
+    return fromDefinitions.slice().filter((row) => !row.archived_at && key(row.status || row.ui_status || "active") !== "archived").sort((a,b) => Number(a.sort_order || 100) - Number(b.sort_order || 100) || clean(a.label || a.qualification_key).localeCompare(clean(b.label || b.qualification_key)));
+  }
+  function qualificationDefinitionId(row) { return clean(row?.qualification_definition_id || row?.definition_id); }
+  function qualificationDefinitionKey(row) { return key(row?.qualification_key || row?.definition_key || row?.label); }
+  function assignmentQualificationId(row) { return clean(row?.qualification_definition_id || row?.definition_id); }
+  function assignmentQualificationKey(row) { return key(row?.qualification_key || row?.definition_key); }
+  function qualificationAssignmentsFor(row = selected || {}) { return arr(row.qualification_assignments).map(obj); }
+  function qualificationAssignmentFor(definition, row = selected || {}) {
+    const id = qualificationDefinitionId(definition);
+    const k = qualificationDefinitionKey(definition);
+    return qualificationAssignmentsFor(row).find((assignment) => (id && assignmentQualificationId(assignment) === id) || (k && assignmentQualificationKey(assignment) === k)) || null;
+  }
+  function qualificationLabel(row) { return clean(row?.label || row?.qualification_label || row?.qualification_key || row?.definition_key || "Qualification"); }
+  function safeDomId(value) { return key(value || "item") || "item"; }
+  function isQualificationChecked(definition, row = selected || {}) {
+    const assignment = qualificationAssignmentFor(definition, row);
+    if (!assignment) return false;
+    const status = key(assignment.assignment_status || assignment.status || "active");
+    return status === "active" || status === "waived";
+  }
   function isAdminAccessRelevant(p) { return hasAdminRoleKeys(p) || arr(p.role_keys).some(isAccessRelevantRole) || bool(p.login_linked); }
   function isOwnSelectedPerson(row = selected || {}) {
     const actor = selectedRow() || {};
@@ -1493,6 +1586,151 @@
 
 
 
+  function qualificationStatusOptions(value, includeBlank = false) {
+    const current = key(value || "");
+    const rows = [["inactive","Not current"],["active","Active / approved"],["pending","Pending"],["expired","Expired"],["revoked","Revoked"],["waived","Waived"]];
+    const blank = includeBlank ? `<option value="" ${!current ? "selected" : ""}>Not set</option>` : "";
+    return blank + rows.map(([v,label]) => `<option value="${esc(v)}" ${current === v ? "selected" : ""}>${esc(label)}</option>`).join("");
+  }
+
+  function qualificationAssignmentSetting0116O(assignment, ...keys) {
+    const settings = obj(assignment?.settings_json);
+    for (const k of keys) {
+      const direct = clean(assignment?.[k]);
+      if (direct) return direct;
+      const nested = clean(settings[k]);
+      if (nested) return nested;
+    }
+    return "";
+  }
+
+  function qualificationChoiceOptions0116O(definition, assignment = {}) {
+    const settings = qualificationSettings0116O(definition);
+    const selectedValue = qualificationAssignmentSetting0116O(assignment, "option_value", "value", "level");
+    const options = settings.option_values.length ? settings.option_values : defaultQualificationOptions0116O(definition);
+    const rows = [`<option value="" ${!selectedValue ? "selected" : ""}>Not set</option>`];
+    rows.push(...options.map((option) => `<option value="${esc(option)}" ${selectedValue === option ? "selected" : ""}>${esc(option)}</option>`));
+    if (selectedValue && !options.includes(selectedValue)) rows.push(`<option value="${esc(selectedValue)}" selected>${esc(selectedValue)}</option>`);
+    return rows.join("");
+  }
+
+  function renderQualificationAssignmentRows(row, mayEdit) {
+    const definitions = sortedQualificationDefinitions().filter((definition) => qualificationSettings0116O(definition).show_on_profile !== false);
+    if (!definitions.length) {
+      return `<section class="people-qualification-panel"><div class="people-empty-row compact">Create qualification fields first in People → Qualifications.</div></section>`;
+    }
+    return `<section class="people-qualification-panel"><div class="people-role-section-head"><h4>Qualifications</h4><span>${esc(definitions.length)} fields</span></div><div class="people-qualification-list people-qualification-profile-list">${definitions.map((definition) => {
+      const id = qualificationDefinitionId(definition);
+      const domId = safeDomId(id || qualificationDefinitionKey(definition));
+      const assignment = qualificationAssignmentFor(definition, row) || {};
+      const settings = qualificationSettings0116O(definition);
+      const fieldStyle = key(settings.field_style || "checkbox") || "checkbox";
+      const assignmentSettings = obj(assignment.settings_json);
+      const assigned = isQualificationChecked(definition, row);
+      const status = key(assignment.assignment_status || assignment.status || (assigned ? "active" : ""));
+      const issued = clean(assignment.issued_date || assignment.issued_at || "").slice(0,10);
+      const expires = clean(assignment.expiration_date || assignment.expires_at || "").slice(0,10);
+      const notes = clean(assignment.notes || "");
+      const optionValue = clean(assignmentSettings.option_value || assignment.option_value || assignment.class_value || "");
+      const disabled = mayEdit ? "" : "disabled";
+      let controls = "";
+      if (fieldStyle === "class_expiration") {
+        const options = [`<option value="">Not recorded</option>`].concat(settings.option_values.map((option) => `<option value="${esc(option)}" ${optionValue === option ? "selected" : ""}>${esc(option)}</option>`));
+        if (optionValue && !settings.option_values.includes(optionValue)) options.push(`<option value="${esc(optionValue)}" selected>${esc(optionValue)}</option>`);
+        controls = `<label class="people-field"><span>Class / level</span><select id="people-qual-option-${esc(domId)}" ${disabled}>${options.join("")}</select></label><label class="people-field"><span>${esc(settings.expiration_label || "Expires")}</span><input id="people-qual-expires-${esc(domId)}" type="date" value="${esc(expires)}" ${disabled}></label>`;
+      } else if (fieldStyle === "date_expiration") {
+        controls = `<label class="people-field"><span>${esc(settings.issued_label || "Completed")}</span><input id="people-qual-issued-${esc(domId)}" type="date" value="${esc(issued)}" ${disabled}></label><label class="people-field"><span>${esc(settings.expiration_label || "Expires")}</span><input id="people-qual-expires-${esc(domId)}" type="date" value="${esc(expires)}" ${disabled}></label>`;
+      } else if (fieldStyle === "status_expiration") {
+        controls = `<label class="people-field"><span>Status</span><select id="people-qual-status-${esc(domId)}" ${disabled}>${qualificationStatusOptions(status || "inactive")}</select></label><label class="people-field"><span>${esc(settings.expiration_label || "Expires")}</span><input id="people-qual-expires-${esc(domId)}" type="date" value="${esc(expires)}" ${disabled}></label>`;
+      } else if (fieldStyle === "notes") {
+        controls = `<label class="people-field people-field-wide"><span>${esc(settings.notes_label || "Notes")}</span><textarea id="people-qual-notes-${esc(domId)}" ${disabled}>${esc(notes)}</textarea></label>`;
+      } else if (fieldStyle === "checkbox_expiration") {
+        controls = `<label class="people-qualification-check compact"><input id="people-qual-checked-${esc(domId)}" type="checkbox" ${assigned ? "checked" : ""} ${disabled}><span><strong>Current / approved</strong></span></label><label class="people-field"><span>${esc(settings.expiration_label || "Expires")}</span><input id="people-qual-expires-${esc(domId)}" type="date" value="${esc(expires)}" ${disabled}></label>`;
+      } else {
+        controls = `<label class="people-qualification-check compact"><input id="people-qual-checked-${esc(domId)}" type="checkbox" ${assigned ? "checked" : ""} ${disabled}><span><strong>Yes</strong></span></label>`;
+      }
+      const notesControl = fieldStyle === "notes" ? "" : `<label class="people-field people-qualification-notes"><span>Notes</span><input id="people-qual-notes-${esc(domId)}" type="text" value="${esc(notes)}" ${disabled}></label>`;
+      return `<div class="people-qualification-row people-qualification-profile-field" data-qualification-field="${esc(domId)}" data-qualification-definition-id="${esc(id)}" data-qualification-key="${esc(qualificationDefinitionKey(definition))}" data-field-style="${esc(fieldStyle)}" data-assignment-id="${esc(clean(assignment.person_qualification_assignment_id || assignment.qualification_assignment_id || ""))}">
+        <div class="people-qualification-label"><strong>${esc(qualificationLabel(definition))}</strong>${definition.description ? `<small>${esc(definition.description)}</small>` : ""}</div>
+        <div class="people-qualification-controls">${controls}${notesControl}</div>
+      </div>`;
+    }).join("")}</div></section>`;
+  }
+
+  function collectQualificationAssignments() {
+    return Array.from(document.querySelectorAll("[data-qualification-field]")).map((field) => {
+      const domId = clean(field.getAttribute("data-qualification-field"));
+      const definitionId = clean(field.getAttribute("data-qualification-definition-id"));
+      const definitionKey = key(field.getAttribute("data-qualification-key"));
+      const fieldStyle = key(field.getAttribute("data-field-style"));
+      const assignmentId = clean(field.getAttribute("data-assignment-id"));
+      const notes = clean($(`people-qual-notes-${domId}`)?.value);
+      const issued = clean($(`people-qual-issued-${domId}`)?.value);
+      const expires = clean($(`people-qual-expires-${domId}`)?.value);
+      const optionValue = clean($(`people-qual-option-${domId}`)?.value);
+      const checked = bool($(`people-qual-checked-${domId}`)?.checked);
+      const explicitStatus = key($(`people-qual-status-${domId}`)?.value || "");
+      let include = false;
+      let assignmentStatus = explicitStatus || "active";
+      const settings = { field_style: fieldStyle };
+      if (optionValue) settings.option_value = optionValue;
+      if (["checkbox", "checkbox_expiration"].includes(fieldStyle)) {
+        include = checked || Boolean(expires || notes);
+        assignmentStatus = checked ? "active" : include ? "inactive" : "inactive";
+        settings.checked = checked;
+      } else if (fieldStyle === "class_expiration") {
+        include = Boolean(optionValue || expires || notes);
+        assignmentStatus = include ? "active" : "inactive";
+      } else if (fieldStyle === "date_expiration") {
+        include = Boolean(issued || expires || notes);
+        assignmentStatus = include ? "active" : "inactive";
+      } else if (fieldStyle === "status_expiration") {
+        include = Boolean(explicitStatus && explicitStatus !== "inactive" || expires || notes);
+        assignmentStatus = explicitStatus || (include ? "active" : "inactive");
+      } else if (fieldStyle === "notes") {
+        include = Boolean(notes);
+        assignmentStatus = include ? "active" : "inactive";
+      } else {
+        include = checked || Boolean(notes);
+        assignmentStatus = checked ? "active" : include ? "inactive" : "inactive";
+        settings.checked = checked;
+      }
+      if (!definitionId || !include) return null;
+      return {
+        person_qualification_assignment_id: assignmentId,
+        qualification_assignment_id: assignmentId,
+        qualification_definition_id: definitionId,
+        qualification_key: definitionKey,
+        assignment_status: assignmentStatus,
+        status: assignmentStatus,
+        issued_at: issued,
+        issued_date: issued,
+        expires_at: expires,
+        expiration_date: expires,
+        notes,
+        settings_json: settings,
+      };
+    }).filter(Boolean);
+  }
+
+  function hasCollectedQualificationKey(assignments, keys) {
+    const wanted = new Set(arr(keys).map(key));
+    return arr(assignments).some((assignment) => wanted.has(key(assignment.qualification_key)));
+  }
+
+  function checkboxValue(id, fallback = false) {
+    const el = $(id);
+    return el ? bool(el.checked) : Boolean(fallback);
+  }
+
+  function bindQualificationAssignmentEvents() {
+    document.querySelectorAll("[data-qualification-field] input, [data-qualification-field] select, [data-qualification-field] textarea").forEach((input) => {
+      input.addEventListener("input", () => setDirty(true));
+      input.addEventListener("change", () => setDirty(true));
+    });
+  }
+
+
   function renderPersonTimeline(row) {
     const notes = Array.isArray(row.timeline_notes) ? row.timeline_notes : [];
     return `<div class="people-form-grid"><label class="people-field people-field-wide"><span>Add admin note</span><textarea id="people-timeline-note" placeholder="Add a dated admin note for this person. These notes are not visible to the person."></textarea><small>Notes added here can carry forward from applicant history and continue through the person/member lifecycle.</small></label></div><div class="people-inline-actions"><button id="people-add-timeline-note" class="people-btn secondary" type="button">Add note</button></div><div class="people-timeline-list">${notes.length ? notes.map((n) => `<div class="people-note-card"><strong>${esc((n.application_id && !String(n.title||'').toLowerCase().includes('applicant')) ? `Applicant history — ${n.title || n.note_type || 'Note'}` : (n.title || n.note_type || "Note"))}</strong><span>${esc(new Date(n.created_at || Date.now()).toLocaleString())}</span><p>${esc(n.body || "")}</p><small>${esc(n.actor_name || n.actor_email || "System")}${n.application_id ? ' • Applicant-origin history' : ''}</small></div>`).join("") : `<div class="people-empty-row">No admin timeline notes yet.</div>`}</div>`;
@@ -1538,65 +1776,8 @@
   }
 
 
-  function activeQualificationDefinitions() {
-    return arr(options.qualifications).filter((qualification) => !qualification.archived_at && key(qualification.status || "active") !== "archived").slice().sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || clean(a.label || a.qualification_key).localeCompare(clean(b.label || b.qualification_key)));
-  }
-
-  function qualificationDefinitionById(id) {
-    const qid = clean(id);
-    return activeQualificationDefinitions().find((qualification) => clean(qualification.qualification_definition_id) === qid) || null;
-  }
-
-  function qualificationStatusOptions(value) {
-    const current = key(value || "active") || "active";
-    return [["active","Active"],["pending","Pending"],["expired","Expired"],["revoked","Revoked"],["waived","Waived"],["inactive","Inactive"]].map(([v,label]) => `<option value="${esc(v)}" ${current === v ? "selected" : ""}>${esc(label)}</option>`).join("");
-  }
-
-  function qualificationDefinitionOptions(currentId) {
-    const defs = activeQualificationDefinitions();
-    const cid = clean(currentId);
-    const rows = [`<option value="">Select qualification</option>`];
-    if (cid && !defs.some((definition) => clean(definition.qualification_definition_id) === cid)) {
-      rows.push(`<option value="${esc(cid)}" selected>Current qualification</option>`);
-    }
-    rows.push(...defs.map((definition) => `<option value="${esc(definition.qualification_definition_id)}" ${clean(definition.qualification_definition_id) === cid ? "selected" : ""}>${esc(definition.label || definition.qualification_key || "Qualification")}</option>`));
-    return rows.join("");
-  }
-
-  function renderQualificationAssignmentRow(assignment, index, mayEdit) {
-    const row = obj(assignment);
-    const def = qualificationDefinitionById(row.qualification_definition_id) || row;
-    const requires = [def.requires_expiration_date ? "expiration" : "", def.requires_document ? "document" : "", def.requires_approval ? "approval" : ""].filter(Boolean).join(", ");
-    return `<div class="people-qualification-row" data-qualification-row="${esc(index)}" data-assignment-id="${esc(row.person_qualification_assignment_id || row.assignment_id || "")}">
-      <label class="people-field"><span>Qualification / checkout</span><select id="people-qual-definition-${esc(index)}" ${mayEdit ? "" : "disabled"}>${qualificationDefinitionOptions(row.qualification_definition_id)}</select>${requires ? `<small>Tracks ${esc(requires)}.</small>` : ""}</label>
-      <label class="people-field"><span>Status</span><select id="people-qual-status-${esc(index)}" ${mayEdit ? "" : "disabled"}>${qualificationStatusOptions(row.assignment_status || row.status)}</select></label>
-      ${input(`people-qual-issued-${index}`, "Issued", row.issued_at || "", "date", "", mayEdit ? "" : "disabled")}
-      ${input(`people-qual-expires-${index}`, "Expires", row.expires_at || "", "date", "", mayEdit ? "" : "disabled")}
-      <label class="people-field people-field-wide"><span>Notes</span><textarea id="people-qual-notes-${esc(index)}" ${mayEdit ? "" : "disabled"}>${esc(row.notes || "")}</textarea></label>
-      <div class="people-qualification-actions"><button class="people-link-btn" data-remove-qualification="${esc(index)}" type="button" ${mayEdit ? "" : "disabled"}>Remove</button></div>
-    </div>`;
-  }
-
-  function renderQualificationsAssignmentPanel(row, mayEdit) {
-    const assignments = arr(row.qualification_assignments);
-    return `<section class="people-qualification-panel people-field-wide">
-      <div class="people-section-head"><div><h4>Qualifications & checkouts</h4><p>Track certificates, checkouts, currency items, and organization approvals for this person.</p></div><button id="people-add-qualification" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Assign qualification</button></div>
-      <div class="people-qualification-list">${assignments.length ? assignments.map((assignment, index) => renderQualificationAssignmentRow(assignment, index, mayEdit)).join("") : `<div class="people-empty-row compact">No qualifications assigned yet.</div>`}</div>
-    </section>`;
-  }
-
-  function collectQualificationAssignmentsFromDom() {
-    return Array.from(document.querySelectorAll("[data-qualification-row]")).map((row) => {
-      const index = clean(row.getAttribute("data-qualification-row"));
-      return {
-        person_qualification_assignment_id: clean(row.getAttribute("data-assignment-id")),
-        qualification_definition_id: clean($(`people-qual-definition-${index}`)?.value),
-        assignment_status: key($(`people-qual-status-${index}`)?.value || "active") || "active",
-        issued_at: clean($(`people-qual-issued-${index}`)?.value),
-        expires_at: clean($(`people-qual-expires-${index}`)?.value),
-        notes: clean($(`people-qual-notes-${index}`)?.value),
-      };
-    }).filter((row) => clean(row.qualification_definition_id));
+  function renderAviationDetails0116O(aviation, applicant, background) {
+    return `<section class="people-aviation-details"><div class="people-section-head"><div><h4>Flight profile</h4><p>General aviation background that is not controlled by qualification definitions.</p></div></div><div class="people-form-grid">${input("people-application-date","Application date",aviation.application_date || applicant.application_date,"date")}${input("people-employer","Employer",background.employer)}${input("people-occupation","Occupation",background.occupation)}${input("people-ratings","Ratings",aviation.ratings)}${input("people-pilot-certificate","Pilot certificate #",aviation.pilot_certificate_number)}${input("people-aircraft-types","Aircraft types",aviation.aircraft_types)}${input("people-bfr-aircraft","Flight review aircraft",aviation.bfr_aircraft)}${input("people-clubs-fbos","Prior clubs/FBOs",aviation.clubs_fbos)}${input("people-flying-type","Type of flying",aviation.flying_type)}${input("people-total-hours","Total hours",aviation.total_hours,"number")}${input("people-night-hours","Night hours",aviation.total_night_hours,"number")}${input("people-ifr-hours","IFR hours",aviation.total_ifr_hours,"number")}${input("people-complex-hours","Complex hours",aviation.total_complex_hours,"number")}</div></section>`;
   }
 
 
@@ -1635,7 +1816,7 @@
       <div class="people-tab-panel ${tab === "membership" ? "active" : ""}" data-tab-panel="membership" ${tab === "membership" ? "" : "hidden"}><div class="people-form-grid people-access-status-grid"><label class="people-field"><span>Lifecycle status</span><select id="people-status-key">${optionList(options.statuses,row.lifecycle_status_key,"status_key","label","Select status")}</select><small>Where this person is in their membership journey.</small></label><label class="people-field"><span>Membership class</span><select id="people-class-key">${optionList(options.membership_classes,row.membership_class_key,"class_key","label","No class")}</select><small>The type of membership or user relationship.</small></label><label class="people-field"><span>Application / onboarding stage</span><select id="people-stage-key">${optionList(options.application_stages,row.application_stage_key,"stage_key","label","No stage")}</select><small>The current application or onboarding step.</small></label></div><div class="people-form-grid people-affiliation-grid">${input("people-joined-at","Affiliation start date",String(row.joined_at || "").slice(0,10),"date")}<label class="people-field ${endFieldsDisabled ? "disabled-field" : ""}"><span>Affiliation end date</span><input id="people-affiliation-end-date" type="date" value="${esc(String(row.left_at || "").slice(0,10))}" ${endFieldsDisabled ? "disabled" : ""}><small id="people-affiliation-end-hint">${endFieldsDisabled ? "Enabled when status is inactive, former, expelled, archived, or blocked." : "Use when this organization affiliation has ended."}</small></label><label class="people-field ${endFieldsDisabled ? "disabled-field" : ""}"><span>End reason</span><select id="people-affiliation-end-reason" ${endFieldsDisabled ? "disabled" : ""}>${endReasonOptions(settings.end_reason)}</select><small id="people-affiliation-end-reason-hint">Use internal notes below if more detail is needed.</small></label>${textarea("people-notes","Internal notes — not visible to this person",row.notes)}</div></div>
       <div class="people-tab-panel ${tab === "contact" ? "active" : ""}" data-tab-panel="contact" ${tab === "contact" ? "" : "hidden"}><p class="muted">Choose one primary phone. This avoids duplicating the same number in multiple places.</p><div class="phone-grid"><label class="primary-pick"><input name="primary-phone-type" type="radio" value="mobile" ${primaryType === "mobile" || primaryType === "primary" ? "checked" : ""}> Primary</label>${input("people-mobile-phone","Mobile phone",contact.mobile_phone || row.primary_phone || row.phone,"tel","","inputmode=\"tel\"")}<label class="primary-pick"><input name="primary-phone-type" type="radio" value="home" ${primaryType === "home" ? "checked" : ""}> Primary</label>${input("people-home-phone","Home phone",contact.home_phone,"tel","","inputmode=\"tel\"")}<label class="primary-pick"><input name="primary-phone-type" type="radio" value="work" ${primaryType === "work" ? "checked" : ""}> Primary</label>${input("people-work-phone","Work phone",contact.work_phone,"tel","","inputmode=\"tel\"")}</div><div class="people-form-grid">${input("people-alt-email","Alternate email",contact.alternate_email,"email","","inputmode=\"email\"")}${input("people-address","Street address",contact.address)}${input("people-city","City",contact.city)}${input("people-state","State",contact.state)}${input("people-zip","ZIP",contact.zip)}${input("people-emergency-name","Emergency contact",emergency.name)}${input("people-emergency-phone","Emergency phone",emergency.phone,"tel","","inputmode=\"tel\"")}${input("people-emergency-relation","Emergency relation",emergency.relation)}</div></div>
       <div class="people-tab-panel ${tab === "access" ? "active" : ""}" data-tab-panel="access" ${tab === "access" ? "" : "hidden"}>${renderAccessTab(row, roles, mayEdit, mayEditAnyRole, mayEditSuperAdmin)}</div>
-      <div class="people-tab-panel ${tab === "aviation" ? "active" : ""}" data-tab-panel="aviation" ${tab === "aviation" ? "" : "hidden"}>${renderQualificationsAssignmentPanel(row, mayEdit)}<div class="people-check-grid">${checkbox("people-club-cfi","CFI / instructor",aviation.club_cfi)}${checkbox("people-maintenance","Maintenance crew",aviation.on_maintenance_crew)}${checkbox("people-ifr-rated","IFR rated",aviation.ifr_rated)}${checkbox("people-night-checkout","Night checkout",aviation.club_night_checkout)}</div><div class="people-form-grid">${input("people-bfr-expiry","Flight review / BFR expiry",aviation.bfr_expiry_date,"date")}${input("people-last-checkout","Last organization checkout",aviation.last_club_checkout,"date")}${input("people-medical-expiry","Medical expiry",aviation.medical_expiry_date,"date")}${input("people-last-medical","Last medical date",aviation.last_medical_date,"date")}${input("people-medical-class","Medical class",aviation.medical_class)}${input("people-application-date","Application date",aviation.application_date || applicant.application_date,"date")}${input("people-employer","Employer",background.employer)}${input("people-occupation","Occupation",background.occupation)}${input("people-ratings","Ratings",aviation.ratings)}${input("people-pilot-certificate","Pilot certificate #",aviation.pilot_certificate_number)}${input("people-aircraft-types","Aircraft types",aviation.aircraft_types)}${input("people-bfr-aircraft","BFR aircraft",aviation.bfr_aircraft)}${input("people-clubs-fbos","Prior clubs/FBOs",aviation.clubs_fbos)}${input("people-flying-type","Type of flying",aviation.flying_type)}${input("people-total-hours","Total hours",aviation.total_hours,"number")}${input("people-night-hours","Night hours",aviation.total_night_hours,"number")}${input("people-ifr-hours","IFR hours",aviation.total_ifr_hours,"number")}${input("people-complex-hours","Complex hours",aviation.total_complex_hours,"number")}</div></div>
+      <div class="people-tab-panel ${tab === "aviation" ? "active" : ""}" data-tab-panel="aviation" ${tab === "aviation" ? "" : "hidden"}>${renderQualificationAssignmentRows(row, mayEdit)}<section class="people-aviation-details"><div class="people-role-section-head"><h4>Pilot background</h4><span>Optional</span></div><div class="people-form-grid">${input("people-application-date","Application date",aviation.application_date || applicant.application_date,"date")}${input("people-employer","Employer",background.employer)}${input("people-occupation","Occupation",background.occupation)}${input("people-ratings","Ratings / certificates",aviation.ratings)}${input("people-pilot-certificate","Pilot certificate #",aviation.pilot_certificate_number)}${input("people-aircraft-types","Aircraft types",aviation.aircraft_types)}${input("people-clubs-fbos","Prior clubs/FBOs",aviation.clubs_fbos)}${input("people-flying-type","Type of flying",aviation.flying_type)}${input("people-total-hours","Total hours",aviation.total_hours,"number")}${input("people-night-hours","Night hours",aviation.total_night_hours,"number")}${input("people-ifr-hours","IFR hours",aviation.total_ifr_hours,"number")}${input("people-complex-hours","Complex hours",aviation.total_complex_hours,"number")}</div></section></div>
       <div class="people-tab-panel ${tab === "notes" ? "active" : ""}" data-tab-panel="notes" ${tab === "notes" ? "" : "hidden"}><div class="people-form-grid">${input("people-objectives","Objectives",applicant.objectives)}${input("people-how-hear","How they heard about us",applicant.how_hear_us)}${textarea("people-accident-details","Accident / incident details",applicant.accident_details)}${textarea("people-faa-details","FAA / regulatory details",applicant.faa_details)}</div>${renderPersonTimeline(row)}</div>
       <div class="people-action-row"><div class="people-save-state ${dirty ? "dirty" : ""}"><span>${dirty ? "Unsaved changes" : "Saved"}</span>${message ? `<small class="people-action-status ${esc(messageKind)}">${esc(message)}</small>` : ""}</div><div class="people-action-buttons"><button id="people-reset" class="people-btn secondary" type="button">Reset</button>${archiveButton}<button id="people-save" class="people-btn" type="button" ${mayEdit ? "" : "disabled"}>Save</button></div></div>
     </section>`;
@@ -1664,9 +1845,9 @@
       .people-module-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:15px 17px;margin:0 0 10px;border-top:3px solid var(--people-primary)}.people-module-header h2{margin:6px 0 4px;font-size:25px;line-height:1.1;color:#101828}.people-module-header p{margin:0;color:var(--people-muted);font-weight:650}.people-header-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
       .people-workbench{display:grid;grid-template-columns:330px minmax(0,1fr);gap:10px;align-items:start}.people-list-panel{padding:12px;position:sticky;top:10px;max-height:calc(100vh - 24px);overflow:auto}.people-list-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}.people-list-head h3,.people-editor-head h3{margin:0;font-size:21px;color:#101828}.people-list-head p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-toolbar-row,.people-inline-actions,.people-action-buttons,.people-pill-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.people-toolbar-row{margin:8px 0 10px}.people-btn,.people-icon-btn,.people-link-btn{border:0;border-radius:999px;background:var(--people-primary);color:#fff;font-weight:900;padding:10px 14px;cursor:pointer;text-decoration:none;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}.people-btn:hover,.people-person-card:hover{transform:translateY(-1px)}.people-btn.secondary,.people-btn.outline{background:#fff;color:var(--people-primary);border:1px solid var(--people-primary)}.people-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-btn:disabled{opacity:.55;cursor:not-allowed;transform:none}.people-link-btn{background:transparent;color:var(--people-primary);text-decoration:underline;padding:8px}.people-message{margin-top:12px;padding:10px 12px;border-radius:12px;background:var(--people-soft);color:var(--people-primary);font-weight:850}.people-message:empty{display:none}.people-message.ok{background:#ecfdf5;color:#047857}.people-message.warn,.people-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:12px;padding:10px 12px}.people-action-status{display:block;margin-top:3px;color:var(--people-muted);font-size:12px;line-height:1.25}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}.people-context-single{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);padding:9px 12px;border-radius:999px;font-weight:900}.muted{color:var(--people-muted)}
       .people-field{display:grid;gap:6px;font-weight:850}.people-field span{font-size:13px}.people-field small{font-weight:600;color:var(--people-muted);line-height:1.35}.people-field input,.people-field select,.people-field textarea,.people-search-wrap input,#people-org-select{width:100%;border:1px solid var(--people-border);border-radius:12px;background:#fff;color:var(--people-text);padding:10px 12px;font:inherit;min-height:42px}.people-field textarea{min-height:104px;resize:vertical}.people-field input[readonly],.people-field input:disabled,.people-field select:disabled{background:#f8fafc;color:var(--people-muted);cursor:not-allowed}.people-field-wide{grid-column:1/-1}.field-error{color:#b91c1c!important;font-weight:900!important}.people-field.disabled-field{opacity:.72}.people-status-filter,.people-role-filter,.people-login-filter{margin:10px 0}.people-advanced-filters{display:grid;gap:8px;margin:6px 0 10px}.people-advanced-toggle{justify-self:start;padding-left:0}.people-active-filters{display:flex;gap:7px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--people-muted);font-weight:850}.people-filter-chip{border:1px solid var(--people-border);border-radius:999px;background:var(--people-soft);color:var(--people-primary);font:inherit;font-size:12px;font-weight:900;padding:5px 9px;cursor:pointer}.people-advanced-panel{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:10px}.people-search-wrap{position:relative;margin:10px 0}.people-search-wrap input{padding-right:44px}.people-icon-btn{position:absolute;right:6px;top:5px;width:32px;height:32px;padding:0;background:var(--people-soft);color:var(--people-primary)}.people-sort-hint{font-size:12px;color:var(--people-muted);font-weight:750;margin:8px 0 10px}.people-compact-list{display:grid;gap:7px;max-height:calc(100vh - 320px);min-height:240px;overflow:auto;padding:3px 2px 8px;overscroll-behavior:contain;align-content:start;grid-auto-rows:max-content}.people-person-card{text-align:left;border:1px solid var(--people-border);border-radius:13px;background:#fff;color:var(--people-text);padding:10px;display:grid;gap:8px;cursor:pointer;box-shadow:0 3px 11px ${rgba(cfg.primary,.04)};align-self:start}.people-person-card .person-badges{align-items:flex-start}.people-person-card .person-badges em{align-self:flex-start}.people-person-card.selected{border-color:var(--people-primary);box-shadow:0 0 0 3px var(--people-strong-soft)}.people-person-card.archived{opacity:.58;background:#f8fafc}.people-person-card.restricted:not(.archived){border-color:#fed7aa;background:#fff7ed}.person-main{display:grid;gap:3px;min-width:0}.person-main strong{font-weight:950;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-main small{color:var(--people-muted);font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-badges{display:flex;gap:4px;flex-wrap:wrap}.person-badges em{font-style:normal;font-size:10px;font-weight:900;border-radius:999px;padding:3px 6px;background:var(--people-soft);color:var(--people-primary)}.people-empty-row{border:1px dashed var(--people-border);border-radius:13px;padding:18px;text-align:center;color:var(--people-muted);background:#fff}.people-empty-row.compact{padding:12px;text-align:left}.people-empty{min-height:380px;display:grid;align-content:center;text-align:center;padding:24px}
-      .people-editor-panel{min-width:0;padding:0;overflow:hidden}.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:15px 17px;border-bottom:1px solid var(--people-border)}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}.people-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--people-border);background:#fcfcfd}.people-tab{border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-weight:900;padding:8px 11px;cursor:pointer}.people-tab.active{background:var(--people-primary);color:#fff;border-color:var(--people-primary)}.people-tab-panel{padding:16px}.people-tab-panel[hidden]{display:none!important}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}.people-access-status-grid{padding-bottom:8px}.people-affiliation-grid{padding-top:8px;border-top:1px solid var(--people-border)}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;margin:10px 0 14px}.primary-pick{min-height:42px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:12px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border:1px solid var(--people-border);border-radius:12px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-access-callout{display:flex;justify-content:space-between;gap:14px;align-items:center;border:1px solid var(--people-border);border-radius:13px;background:var(--people-soft);padding:12px;margin-bottom:14px}.people-access-callout p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-access-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 14px}.people-access-summary>div{border:1px solid var(--people-border);border-radius:12px;background:#fff;padding:10px;display:grid;gap:3px}.people-access-summary span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-access-summary strong{font-size:13px;line-height:1.25}.people-role-assignment-wrap{display:grid;gap:12px}.people-role-section{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px}.people-role-section-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}.people-role-section-head h4{margin:0;color:#101828;font-size:15px}.people-role-section-head span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-role-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.people-section-head{display:flex;justify-content:space-between;gap:14px;align-items:center;margin-bottom:12px}.people-section-head h4{margin:0;color:#101828;font-size:16px}.people-section-head p{margin:3px 0 0;color:var(--people-muted);font-weight:750}.people-qualification-panel{border:1px solid var(--people-border);border-radius:14px;background:#fff;padding:12px;margin-bottom:14px}.people-qualification-list{display:grid;gap:10px}.people-qualification-row{display:grid;grid-template-columns:minmax(220px,1.45fr) minmax(120px,.75fr) minmax(120px,.7fr) minmax(120px,.7fr) minmax(180px,1fr) auto;gap:10px;align-items:end;border:1px solid var(--people-border);border-radius:12px;background:#fcfcfd;padding:10px}.people-qualification-actions{display:flex;align-items:center;justify-content:flex-end;padding-bottom:10px}.people-inline-actions{margin:10px 0}.people-action-row{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid var(--people-border);padding:12px 14px;background:#fcfcfd}.people-save-state{display:grid;gap:2px;font-weight:900;color:var(--people-muted)}.people-save-state.dirty{color:#9a3412}.people-photo-panel{grid-column:1/-1;display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;align-items:center;border:1px dashed var(--people-border);border-radius:14px;background:var(--people-soft);padding:14px}.people-photo-panel.dragover{box-shadow:0 0 0 3px var(--people-strong-soft);border-color:var(--people-primary)}.people-photo-preview{width:132px;height:132px;border-radius:18px;background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--people-border);box-shadow:0 10px 26px ${rgba(cfg.primary,.16)}}.people-photo-preview img{width:100%;height:100%;object-fit:cover;display:block}.people-photo-preview span{font-size:38px;font-weight:950;letter-spacing:.03em}.people-photo-copy strong{display:block;color:var(--people-primary);font-size:15px;margin-bottom:4px}.people-photo-copy p{margin:0 0 8px;color:var(--people-muted);font-weight:750}.people-photo-copy small{display:block;color:var(--people-muted);font-weight:750;margin-bottom:10px}.people-photo-actions{display:flex;gap:8px;flex-wrap:wrap}.people-timeline-list{display:grid;gap:10px;margin-top:10px}.people-note-card{border-left:4px solid var(--people-primary);background:#f8fafc;border-radius:12px;padding:10px}.people-note-card strong{display:block;color:var(--people-primary)}.people-note-card span{font-size:12px;color:#64748b;font-weight:800}.people-note-card p{margin:6px 0;white-space:pre-wrap}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:12px;padding:14px;font-size:12px;max-height:260px;overflow:auto}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}.people-def-row{padding:0;display:grid;grid-template-columns:30px minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab}.people-def-row.dragging{opacity:.55}.people-def-row.drag-over{outline:2px dashed var(--people-primary);outline-offset:2px}.people-def-drag-handle{display:flex;align-items:center;justify-content:center;color:var(--people-muted);font-weight:950;letter-spacing:-5px;background:#f8fafc;border-right:1px solid var(--people-border);cursor:grab;user-select:none}.people-def-row .people-def-main{border:0;background:transparent;text-align:left;padding:10px;display:grid;gap:7px;cursor:pointer;color:inherit}.people-def-order{display:flex;flex-direction:column;justify-content:space-between;border-left:1px solid var(--people-border);background:#f8fafc}.people-order-button{border:0;background:#f8fafc;color:var(--people-primary);font-weight:950;width:34px;min-height:32px;cursor:pointer}.people-order-button:first-child{border-bottom:1px solid var(--people-border)}.people-order-button:last-child{border-top:1px solid var(--people-border)}.people-order-button:disabled{opacity:.35;cursor:not-allowed}.people-info-btn{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:5px;border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-size:11px;font-weight:950;line-height:1;vertical-align:middle;padding:0;cursor:help}.people-def-editor .people-tab-panel>.people-form-grid{grid-template-columns:1fr}.people-def-editor .people-form-grid .people-form-grid{grid-template-columns:repeat(3,minmax(0,1fr));}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}.people-soft-note{background:var(--people-soft);color:var(--people-primary);border:1px solid var(--people-border);border-radius:12px;padding:10px 12px;font-weight:750}.people-permission-role-list{min-height:240px}.people-permission-groups{display:grid;gap:12px}.people-permission-group{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px}.people-permission-group h4{margin:0 0 10px;font-size:16px;color:#101828}.people-permission-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.people-permission-capability{display:flex;align-items:center;gap:9px;border:1px solid var(--people-border);border-radius:12px;background:#fff;padding:10px;font-weight:850;min-height:44px}.people-permission-capability.enabled{background:var(--people-soft);border-color:var(--people-primary);color:var(--people-primary)}.people-permission-capability.locked{opacity:.72}.people-permission-capability input{width:16px;height:16px;accent-color:var(--people-primary)}
-      @media(max-width:1100px){.people-qualification-row{grid-template-columns:1fr 1fr}.people-workbench{grid-template-columns:1fr}.people-list-panel{position:static;max-height:none}.people-compact-list{max-height:320px;min-height:0}.people-form-grid,.people-check-grid,.people-role-grid,.people-access-summary{grid-template-columns:1fr 1fr}.people-module-header,.people-action-row,.people-access-callout{display:grid}.people-header-actions,.people-action-buttons{justify-content:flex-start}.phone-grid{grid-template-columns:1fr}.primary-pick{justify-content:flex-start;padding:0 12px}}
-      @media(max-width:640px){.people-qualification-row{grid-template-columns:1fr}.people-section-head{display:grid}.people-form-grid,.people-check-grid,.people-role-grid,.people-access-summary{grid-template-columns:1fr}.people-photo-panel{grid-template-columns:1fr}.people-photo-preview{margin:auto}.people-btn{width:100%}.people-action-buttons{width:100%}}
+      .people-editor-panel{min-width:0;padding:0;overflow:hidden}.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:15px 17px;border-bottom:1px solid var(--people-border)}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}.people-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--people-border);background:#fcfcfd}.people-tab{border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-weight:900;padding:8px 11px;cursor:pointer}.people-tab.active{background:var(--people-primary);color:#fff;border-color:var(--people-primary)}.people-tab-panel{padding:16px}.people-tab-panel[hidden]{display:none!important}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}.people-access-status-grid{padding-bottom:8px}.people-affiliation-grid{padding-top:8px;border-top:1px solid var(--people-border)}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;margin:10px 0 14px}.primary-pick{min-height:42px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:12px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border:1px solid var(--people-border);border-radius:12px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-access-callout{display:flex;justify-content:space-between;gap:14px;align-items:center;border:1px solid var(--people-border);border-radius:13px;background:var(--people-soft);padding:12px;margin-bottom:14px}.people-access-callout p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-access-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 14px}.people-access-summary>div{border:1px solid var(--people-border);border-radius:12px;background:#fff;padding:10px;display:grid;gap:3px}.people-access-summary span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-access-summary strong{font-size:13px;line-height:1.25}.people-role-assignment-wrap{display:grid;gap:12px}.people-role-section{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px}.people-role-section-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}.people-role-section-head h4{margin:0;color:#101828;font-size:15px}.people-role-section-head span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-role-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.people-qualification-panel,.people-aviation-details{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px;margin-bottom:14px}.people-qualification-list{display:grid;gap:10px}.people-qualification-row{display:grid;grid-template-columns:minmax(180px,1.5fr) minmax(120px,.8fr) minmax(120px,.8fr) minmax(120px,.8fr) minmax(160px,1fr);gap:10px;align-items:end;border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:10px}.people-qualification-row.selected{background:var(--people-soft);border-color:var(--people-primary)}.people-qualification-check{display:flex;gap:9px;align-items:flex-start;font-weight:900;color:var(--people-primary)}.people-qualification-check input{width:auto;margin-top:3px}.people-qualification-check span{display:grid;gap:3px}.people-qualification-check small{font-weight:750;color:var(--people-muted);line-height:1.25}.people-qualification-notes{min-width:0}.people-inline-actions{margin:10px 0}.people-action-row{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid var(--people-border);padding:12px 14px;background:#fcfcfd}.people-save-state{display:grid;gap:2px;font-weight:900;color:var(--people-muted)}.people-save-state.dirty{color:#9a3412}.people-photo-panel{grid-column:1/-1;display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;align-items:center;border:1px dashed var(--people-border);border-radius:14px;background:var(--people-soft);padding:14px}.people-photo-panel.dragover{box-shadow:0 0 0 3px var(--people-strong-soft);border-color:var(--people-primary)}.people-photo-preview{width:132px;height:132px;border-radius:18px;background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--people-border);box-shadow:0 10px 26px ${rgba(cfg.primary,.16)}}.people-photo-preview img{width:100%;height:100%;object-fit:cover;display:block}.people-photo-preview span{font-size:38px;font-weight:950;letter-spacing:.03em}.people-photo-copy strong{display:block;color:var(--people-primary);font-size:15px;margin-bottom:4px}.people-photo-copy p{margin:0 0 8px;color:var(--people-muted);font-weight:750}.people-photo-copy small{display:block;color:var(--people-muted);font-weight:750;margin-bottom:10px}.people-photo-actions{display:flex;gap:8px;flex-wrap:wrap}.people-timeline-list{display:grid;gap:10px;margin-top:10px}.people-note-card{border-left:4px solid var(--people-primary);background:#f8fafc;border-radius:12px;padding:10px}.people-note-card strong{display:block;color:var(--people-primary)}.people-note-card span{font-size:12px;color:#64748b;font-weight:800}.people-note-card p{margin:6px 0;white-space:pre-wrap}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:12px;padding:14px;font-size:12px;max-height:260px;overflow:auto}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}.people-def-row{padding:0;display:grid;grid-template-columns:30px minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab}.people-def-row.dragging{opacity:.55}.people-def-row.drag-over{outline:2px dashed var(--people-primary);outline-offset:2px}.people-def-drag-handle{display:flex;align-items:center;justify-content:center;color:var(--people-muted);font-weight:950;letter-spacing:-5px;background:#f8fafc;border-right:1px solid var(--people-border);cursor:grab;user-select:none}.people-def-row .people-def-main{border:0;background:transparent;text-align:left;padding:10px;display:grid;gap:7px;cursor:pointer;color:inherit}.people-def-order{display:flex;flex-direction:column;justify-content:space-between;border-left:1px solid var(--people-border);background:#f8fafc}.people-order-button{border:0;background:#f8fafc;color:var(--people-primary);font-weight:950;width:34px;min-height:32px;cursor:pointer}.people-order-button:first-child{border-bottom:1px solid var(--people-border)}.people-order-button:last-child{border-top:1px solid var(--people-border)}.people-order-button:disabled{opacity:.35;cursor:not-allowed}.people-info-btn{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:5px;border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-size:11px;font-weight:950;line-height:1;vertical-align:middle;padding:0;cursor:help}.people-def-editor .people-tab-panel>.people-form-grid{grid-template-columns:1fr}.people-def-editor .people-form-grid .people-form-grid{grid-template-columns:repeat(3,minmax(0,1fr));}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}.people-soft-note{background:var(--people-soft);color:var(--people-primary);border:1px solid var(--people-border);border-radius:12px;padding:10px 12px;font-weight:750}.people-permission-role-list{min-height:240px}.people-permission-groups{display:grid;gap:12px}.people-permission-group{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px}.people-permission-group h4{margin:0 0 10px;font-size:16px;color:#101828}.people-permission-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.people-permission-capability{display:flex;align-items:center;gap:9px;border:1px solid var(--people-border);border-radius:12px;background:#fff;padding:10px;font-weight:850;min-height:44px}.people-permission-capability.enabled{background:var(--people-soft);border-color:var(--people-primary);color:var(--people-primary)}.people-permission-capability.locked{opacity:.72}.people-permission-capability input{width:16px;height:16px;accent-color:var(--people-primary)}.people-qualification-profile-list{display:grid;gap:10px}.people-qualification-profile-field{display:grid;grid-template-columns:minmax(160px,.65fr) minmax(0,1.5fr);gap:12px;align-items:start}.people-qualification-label strong{display:block;color:#101828;font-size:14px}.people-qualification-label small{display:block;color:var(--people-muted);font-weight:700;margin-top:3px}.people-qualification-controls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:end}.people-qualification-check.compact{align-self:end;min-height:44px}.people-qualification-notes{min-width:0}.people-qualification-title{display:grid;gap:3px;min-width:180px}.people-qualification-title strong{font-size:14px;color:#101828}.people-qualification-title small{color:var(--people-muted);font-weight:750}.people-qualification-fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;align-items:end;flex:1}.people-qualification-row{display:flex;gap:12px;align-items:flex-start}.people-qualification-row.selected{border-color:var(--people-primary);background:var(--people-soft)}.people-qualification-toggle{margin:0;min-height:42px}.people-aviation-details{border:1px solid var(--people-border);border-radius:14px;background:#fff;padding:12px;margin-top:14px}
+      @media(max-width:1100px){.people-workbench{grid-template-columns:1fr}.people-list-panel{position:static;max-height:none}.people-compact-list{max-height:320px;min-height:0}.people-form-grid,.people-check-grid,.people-role-grid,.people-access-summary,.people-qualification-profile-fields{grid-template-columns:1fr 1fr}.people-qualification-row{grid-template-columns:1fr 1fr}.people-module-header,.people-action-row,.people-access-callout{display:grid}.people-header-actions,.people-action-buttons{justify-content:flex-start}.phone-grid{grid-template-columns:1fr}.primary-pick{justify-content:flex-start;padding:0 12px}}
+      @media(max-width:640px){.people-form-grid,.people-check-grid,.people-role-grid,.people-access-summary,.people-qualification-row,.people-qualification-profile-row,.people-qualification-profile-fields{grid-template-columns:1fr}.people-photo-panel{grid-template-columns:1fr}.people-photo-preview{margin:auto}.people-btn{width:100%}.people-action-buttons{width:100%}}
       @media print{#syncetc-portal-shell,.people-hero,.people-list-panel,.people-editor-panel,.people-message,.people-module-header{display:none!important}.people-wrap{max-width:none;margin:0;padding:0}.people-card{box-shadow:none;border:none}}
     `;
   }
@@ -1761,12 +1942,11 @@
       photoDropZone.addEventListener("dragleave", () => photoDropZone.classList.remove("dragover"));
       photoDropZone.addEventListener("drop", (event) => { event.preventDefault(); photoDropZone.classList.remove("dragover"); runButton("people-photo-choose", "Uploading…", () => uploadSelectedPhoto(event.dataTransfer?.files?.[0])); });
     }
-    $("people-add-qualification")?.addEventListener("click", () => { selected.qualification_assignments = collectQualificationAssignmentsFromDom(); selected.qualification_assignments.push({ qualification_definition_id: "", assignment_status: "active", issued_at: "", expires_at: "", notes: "" }); setDirty(true); render(); });
-    document.querySelectorAll("[data-remove-qualification]").forEach((btn) => btn.addEventListener("click", () => { const index = Number(btn.getAttribute("data-remove-qualification")); const nextRows = collectQualificationAssignmentsFromDom(); if (Number.isFinite(index)) nextRows.splice(index, 1); selected.qualification_assignments = nextRows; setDirty(true); render(); }));
     document.querySelectorAll(".people-editor input, .people-editor select, .people-editor textarea").forEach((el) => {
       el.addEventListener("input", () => { setDirty(true); refreshDisplayNamePreview(); });
       el.addEventListener("change", () => { setDirty(true); updateAffiliationEndState(el.id === "people-status-key"); refreshDisplayNamePreview(); });
     });
+    bindQualificationAssignmentEvents();
     updateAffiliationEndState();
     refreshDisplayNamePreview();
   }
@@ -1774,7 +1954,7 @@
 
   function blankPerson() {
     const applicant = arr(options.statuses).find((s) => s.status_key === "applicant") || arr(options.statuses)[0] || {};
-    return { person_id:"", membership_id:"", display_name:"", first_name:"", last_name:"", primary_email:"", primary_phone:"", phone:"", member_number:"", title:"", joined_at:"", left_at:"", lifecycle_status_key:applicant.status_key || "applicant", membership_class_key:"", application_stage_key:"", role_keys:[], role_labels:[], qualification_assignments:[], qualification_keys:[], qualification_labels:[], profile_json:{ name:{}, contact:{ primary_phone_type:"mobile" }, emergency:{}, aviation:{}, background:{}, applicant:{}, admin:{} }, membership_settings_json:{}, notes:"", login_linked:false };
+    return { person_id:"", membership_id:"", display_name:"", first_name:"", last_name:"", primary_email:"", primary_phone:"", phone:"", member_number:"", title:"", joined_at:"", left_at:"", lifecycle_status_key:applicant.status_key || "applicant", membership_class_key:"", application_stage_key:"", role_keys:[], role_labels:[], profile_json:{ name:{}, contact:{ primary_phone_type:"mobile" }, emergency:{}, aviation:{}, background:{}, applicant:{}, admin:{} }, membership_settings_json:{}, notes:"", login_linked:false };
   }
 
   function isValidEmail(value) { const v = clean(value); return !v || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
@@ -1813,18 +1993,23 @@
     const suffix = clean($("people-suffix")?.value);
     const statusKey = clean($("people-status-key")?.value);
     const endEnabled = isEndedStatus(statusKey) || clean($("people-affiliation-end-date")?.value);
+    const qualificationAssignments = collectQualificationAssignments();
+    const currentProfile = getProfile(selected);
+    const currentAviation = obj(currentProfile.aviation);
+    const { club_cfi, on_maintenance_crew, ifr_rated, club_night_checkout, bfr_expiry_date, last_club_checkout, medical_expiry_date, last_medical_date, medical_class, bfr_aircraft, qualification_assignments, ...aviationBase } = currentAviation;
     const profile = {
       name: { preferred_first_name: preferredFirstName, middle_name: middleName, suffix },
       contact: { primary_phone_type: primaryType, mobile_phone: mobilePhone, home_phone: homePhone, work_phone: workPhone, alternate_email: clean($("people-alt-email")?.value).toLowerCase(), address: clean($("people-address")?.value), city: clean($("people-city")?.value), state: clean($("people-state")?.value), zip: clean($("people-zip")?.value) },
       emergency: { name: clean($("people-emergency-name")?.value), phone: clean($("people-emergency-phone")?.value), relation: clean($("people-emergency-relation")?.value) },
-      aviation: { club_cfi: bool($("people-club-cfi")?.checked), on_maintenance_crew: bool($("people-maintenance")?.checked), ifr_rated: bool($("people-ifr-rated")?.checked), club_night_checkout: bool($("people-night-checkout")?.checked), bfr_expiry_date: clean($("people-bfr-expiry")?.value), last_club_checkout: clean($("people-last-checkout")?.value), medical_expiry_date: clean($("people-medical-expiry")?.value), last_medical_date: clean($("people-last-medical")?.value), medical_class: clean($("people-medical-class")?.value), application_date: clean($("people-application-date")?.value), ratings: clean($("people-ratings")?.value), pilot_certificate_number: clean($("people-pilot-certificate")?.value), aircraft_types: clean($("people-aircraft-types")?.value), bfr_aircraft: clean($("people-bfr-aircraft")?.value), clubs_fbos: clean($("people-clubs-fbos")?.value), flying_type: clean($("people-flying-type")?.value), total_hours: clean($("people-total-hours")?.value), total_night_hours: clean($("people-night-hours")?.value), total_ifr_hours: clean($("people-ifr-hours")?.value), total_complex_hours: clean($("people-complex-hours")?.value) },
+      aviation: { ...aviationBase, application_date: clean($("people-application-date")?.value), ratings: clean($("people-ratings")?.value), pilot_certificate_number: clean($("people-pilot-certificate")?.value), aircraft_types: clean($("people-aircraft-types")?.value), clubs_fbos: clean($("people-clubs-fbos")?.value), flying_type: clean($("people-flying-type")?.value), total_hours: clean($("people-total-hours")?.value), total_night_hours: clean($("people-night-hours")?.value), total_ifr_hours: clean($("people-ifr-hours")?.value), total_complex_hours: clean($("people-complex-hours")?.value) },
       background: { employer: clean($("people-employer")?.value), occupation: clean($("people-occupation")?.value) },
       applicant: { application_date: clean($("people-application-date")?.value), objectives: clean($("people-objectives")?.value), how_hear_us: clean($("people-how-hear")?.value), accident_details: clean($("people-accident-details")?.value), faa_details: clean($("people-faa-details")?.value) },
-      admin: obj(getProfile(selected).admin)
+      admin: obj(currentProfile.admin)
     };
     const membershipSettings = { ...obj(selected?.membership_settings_json), end_reason: endEnabled ? clean($("people-affiliation-end-reason")?.value) : "" };
-    const payload = { organization_id: selectedOrgId, person_id: selected?.person_id || "", membership_id: selected?.membership_id || "", first_name: firstName, preferred_first_name: preferredFirstName, middle_name: middleName, last_name: lastName, suffix, display_name: calculatedDisplayName(firstName, preferredFirstName, middleName, lastName, suffix), primary_email: clean($("people-primary-email")?.value).toLowerCase(), primary_phone: primaryPhone, member_number: clean($("people-member-number")?.value), title: clean($("people-title")?.value), joined_at: clean($("people-joined-at")?.value), left_at: endEnabled ? clean($("people-affiliation-end-date")?.value) : "", status_key: statusKey, membership_class_key: clean($("people-class-key")?.value), application_stage_key: clean($("people-stage-key")?.value), notes: clean($("people-notes")?.value), profile_json: profile, membership_settings_json: membershipSettings, qualification_assignments: collectQualificationAssignmentsFromDom() };
+    const payload = { organization_id: selectedOrgId, person_id: selected?.person_id || "", membership_id: selected?.membership_id || "", first_name: firstName, preferred_first_name: preferredFirstName, middle_name: middleName, last_name: lastName, suffix, display_name: calculatedDisplayName(firstName, preferredFirstName, middleName, lastName, suffix), primary_email: clean($("people-primary-email")?.value).toLowerCase(), primary_phone: primaryPhone, member_number: clean($("people-member-number")?.value), title: clean($("people-title")?.value), joined_at: clean($("people-joined-at")?.value), left_at: endEnabled ? clean($("people-affiliation-end-date")?.value) : "", status_key: statusKey, membership_class_key: clean($("people-class-key")?.value), application_stage_key: clean($("people-stage-key")?.value), notes: clean($("people-notes")?.value), profile_json: profile, membership_settings_json: membershipSettings };
     if (canManageSafeRoles(selectedRow())) payload.role_keys = unique(roleKeys);
+    payload.qualification_assignments = qualificationAssignments;
     return payload;
   }
 
@@ -1866,10 +2051,12 @@
     if (!confirmAccessRoleChanges(payload)) return;
     payload.confirm_restrictive = restrictive;
     const res = await call("organization_save_person", payload);
+    const savedMembershipId = clean(res.person?.membership_id || selected?.membership_id);
     selected = res.person || selected;
     setDirty(false);
     await loadPeople();
-    if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
+    if (savedMembershipId) await loadSelectedPerson(savedMembershipId);
+    else if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
     fieldErrors = {};
     setMessage("Person saved.", "ok");
   }

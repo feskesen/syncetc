@@ -1,23 +1,26 @@
 // CUSTOMER-ADMIN-PAGE-organization-management-current.js
-// Internal Version: 2026-06-15-115-E
+// Internal Version: 2026-06-16-116-A
 // Purpose: Customer/organization-side Organization Management console runtime. Immutable admin workbench shell with left navigation and right-panel module loading.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-15-115-E";
+  const VERSION = "2026-06-16-116-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
   const SUPABASE_JS_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
-  const AIRCRAFT_ADMIN_EXPECTED_VERSION = "2026-06-15-115-E";
+  const AIRCRAFT_ADMIN_EXPECTED_VERSION = "2026-06-15-115-G";
   const AIRCRAFT_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js?v=${encodeURIComponent(AIRCRAFT_ADMIN_EXPECTED_VERSION)}`;
+  const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-16-116-A";
+  const PEOPLE_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-people-current.js?v=${encodeURIComponent(PEOPLE_ADMIN_EXPECTED_VERSION)}`;
   const ROOT_SELECTOR = "#syncetc-organization-management-root, #syncetc-organization-admin-console-root, [data-syncetc-page='organization-management']";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
   const DIRTY_MESSAGE = "You have unsaved module changes. Switch modules anyway?";
 
   let supabaseClient = null;
   let aircraftScriptLoading = null;
+  let peopleScriptLoading = null;
 
   const state = {
     debug: new URLSearchParams(location.search).get("syncetc_debug") === "1",
@@ -212,7 +215,7 @@
   const MODULES = [
     { key: "overview", label: "Overview", short: "Console home", group: "Home", status: "active", kind: "overview", description: "Organization management home, module status map, and setup shortcuts." },
 
-    { key: "people-members", label: "Members", short: "Member records", group: "People", status: "existing", href: "/organization-people", description: "Manage organization people, member records, lifecycle, roster visibility, and access links." },
+    { key: "people-members", label: "Members / People", short: "Member records", group: "People", status: "active", kind: "people", peopleView: "members", description: "Manage organization people, member records, lifecycle, roster visibility, and access links." },
     { key: "people-admins", label: "Administrators", short: "Admin access", group: "People", status: "placeholder", description: "Customer administrators, organization super admins, and delegated admin access." },
     { key: "people-groups", label: "Groups / Roles", short: "Permissions", group: "People", status: "placeholder", description: "Member groups, roles, permission bundles, and future mention groups." },
     { key: "people-instructors", label: "Instructors / Qualifications", short: "Qualifications", group: "People", status: "placeholder", description: "Instructor roster, checkouts, and qualification records." },
@@ -258,7 +261,7 @@
 
   function findModule(key) { return MODULES.find(m => m.key === key) || MODULES.find(m => m.key === "overview"); }
   function activeModule() { return findModule(state.activeModule); }
-  function moduleCanEmbed(m) { return m && (m.kind === "overview" || m.kind === "aircraft"); }
+  function moduleCanEmbed(m) { return m && (m.kind === "overview" || m.kind === "aircraft" || m.kind === "people"); }
   function activeGroupName() { return activeModule().group || "Home"; }
   function isKnownNonHomeGroup(group) {
     return Boolean(group && group !== "Home" && GROUPS.some(g => g.group === group));
@@ -396,6 +399,11 @@
         <div id="syncetc-organization-aircraft-admin-root" class="omg-module-host" data-syncetc-embedded-module="organization-management" data-syncetc-embedded-view="${attr(active.aircraftView || "identity")}"></div>
       </section>`;
     }
+    if (active.kind === "people") {
+      return `<section class="omg-embedded-panel">
+        <div id="syncetc-organization-people-root" class="omg-module-host" data-syncetc-embedded-module="organization-management" data-syncetc-embedded-view="${attr(active.peopleView || "members")}"></div>
+      </section>`;
+    }
     if (active.status === "existing") return renderExistingPanel(active);
     return renderPlaceholderPanel(active);
   }
@@ -439,6 +447,10 @@
       if (window.SyncEtcAircraftAdmin?.isDirty?.()) return true;
       if (window.SyncEtcAircraftAdminPage?.hasUnsavedChanges?.()) return true;
     }
+    if (active.kind === "people") {
+      if (window.SyncEtcPeopleAdmin?.isDirty?.()) return true;
+      if (window.SyncEtcPeopleAdminPage?.hasUnsavedChanges?.()) return true;
+    }
     return false;
   }
 
@@ -449,6 +461,14 @@
       if (dirty) {
         if (typeof window.SyncEtcAircraftAdmin?.confirmDiscard === "function") return window.SyncEtcAircraftAdmin.confirmDiscard(DIRTY_MESSAGE);
         if (typeof window.SyncEtcAircraftAdminPage?.confirmDiscard === "function") return window.SyncEtcAircraftAdminPage.confirmDiscard(DIRTY_MESSAGE);
+        return window.confirm(DIRTY_MESSAGE);
+      }
+    }
+    if (active.kind === "people") {
+      const dirty = window.SyncEtcPeopleAdmin?.isDirty?.() || window.SyncEtcPeopleAdminPage?.hasUnsavedChanges?.();
+      if (dirty) {
+        if (typeof window.SyncEtcPeopleAdmin?.confirmDiscard === "function") return window.SyncEtcPeopleAdmin.confirmDiscard(DIRTY_MESSAGE);
+        if (typeof window.SyncEtcPeopleAdminPage?.confirmDiscard === "function") return window.SyncEtcPeopleAdminPage.confirmDiscard(DIRTY_MESSAGE);
         return window.confirm(DIRTY_MESSAGE);
       }
     }
@@ -473,7 +493,12 @@
   }
 
   async function mountActiveModule(active) {
-    if (!active || active.kind !== "aircraft") return;
+    if (!active) return;
+    if (active.kind === "aircraft") return mountAircraftModule(active);
+    if (active.kind === "people") return mountPeopleModule(active);
+  }
+
+  async function mountAircraftModule(active) {
     const host = document.getElementById("syncetc-organization-aircraft-admin-root");
     if (!host) return;
     window.SyncEtcOrganizationManagementModuleContext = window.SyncEtcOrganizationManagementModuleContext || {};
@@ -497,11 +522,38 @@
       if (Date.now() - started > 8000) throw new Error("Aircraft Admin module did not become ready.");
       await wait(50);
     }
-    await mountFn()(host, { embedded: true, organizationId: state.orgId, initialView: active.aircraftView || "identity", initialTab: active.aircraftView || "identity", parentVersion: VERSION });
+    await mountFn()(host, { embedded: true, organizationId: state.orgId, initialView: active.aircraftView || "identity", initialTab: active.aircraftView || "identity", parentVersion: VERSION, debug: state.debug });
+  }
+
+  async function mountPeopleModule(active) {
+    const host = document.getElementById("syncetc-organization-people-root");
+    if (!host) return;
+    window.SyncEtcOrganizationManagementModuleContext = window.SyncEtcOrganizationManagementModuleContext || {};
+    window.SyncEtcOrganizationManagementModuleContext.people = {
+      embedded: true,
+      activeView: active.peopleView || "members",
+      organizationId: state.orgId,
+      selectedOrganizationId: state.orgId,
+      parentVersion: VERSION
+    };
+    host.innerHTML = `<div class="omg-module-loading">Loading People…</div>`;
+    window.SyncEtcPeopleAdminSuppressAutoBoot = true;
+    const mountFn = () => window.SyncEtcPeopleAdmin?.mount || window.SyncEtcPeopleAdminPage?.mount;
+    const loadedPeopleVersion = () => clean(window.SyncEtcPeopleAdmin?.version || window.SyncEtcPeopleAdminPage?.version || "");
+    if (!mountFn() || loadedPeopleVersion() !== PEOPLE_ADMIN_EXPECTED_VERSION) {
+      peopleScriptLoading = loadScript(PEOPLE_ADMIN_SCRIPT_URL, `syncetc-people-admin-module-script-${PEOPLE_ADMIN_EXPECTED_VERSION.replace(/[^A-Za-z0-9_-]/g, "-")}`);
+      await peopleScriptLoading;
+    }
+    const started = Date.now();
+    while (!mountFn()) {
+      if (Date.now() - started > 8000) throw new Error("People module did not become ready.");
+      await wait(50);
+    }
+    await mountFn()(host, { embedded: true, organizationId: state.orgId, initialView: active.peopleView || "members", initialTab: "identity", filter: "all", parentVersion: VERSION, debug: state.debug });
   }
 
   function showModuleError(error) {
-    const host = document.getElementById("syncetc-organization-aircraft-admin-root");
+    const host = document.getElementById("syncetc-organization-aircraft-admin-root") || document.getElementById("syncetc-organization-people-root");
     if (host) host.innerHTML = `<div class="omg-error"><h3>Module could not load</h3><p>${esc(error?.message || String(error))}</p></div>`;
   }
 

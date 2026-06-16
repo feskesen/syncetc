@@ -1,18 +1,18 @@
 // CUSTOMER-ADMIN-PAGE-organization-management-current.js
-// Internal Version: 2026-06-16-116-A
+// Internal Version: 2026-06-16-116-B
 // Purpose: Customer/organization-side Organization Management console runtime. Immutable admin workbench shell with left navigation and right-panel module loading.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-A";
+  const VERSION = "2026-06-16-116-B";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
   const SUPABASE_JS_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
   const AIRCRAFT_ADMIN_EXPECTED_VERSION = "2026-06-15-115-G";
   const AIRCRAFT_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js?v=${encodeURIComponent(AIRCRAFT_ADMIN_EXPECTED_VERSION)}`;
-  const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-16-116-A";
+  const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-16-116-B";
   const PEOPLE_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-people-current.js?v=${encodeURIComponent(PEOPLE_ADMIN_EXPECTED_VERSION)}`;
   const ROOT_SELECTOR = "#syncetc-organization-management-root, #syncetc-organization-admin-console-root, [data-syncetc-page='organization-management']";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -42,13 +42,24 @@
 
   function root() { return document.querySelector(ROOT_SELECTOR); }
   function clean(value) { return String(value ?? "").replace(/\s+/g, " ").trim(); }
-  function lower(value) { return clean(value).toLowerCase(); }
+  function lowerText(value) { return clean(value).toLowerCase(); }
   function arr(value) { return Array.isArray(value) ? value : []; }
   function obj(value) { return value && typeof value === "object" && !Array.isArray(value) ? value : {}; }
   function esc(value) { return String(value ?? "").replace(/[&<>'"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" }[c])); }
   function attr(value) { return esc(value); }
   function mark(label, detail) { state.steps.push({ ms: Math.round(performance.now() - state.startedAt), label, detail: detail || "" }); }
   function wait(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+  function ensureLegacyGlobalTextHelpers() {
+    try {
+      if (typeof window !== "undefined" && typeof window.lower !== "function") {
+        Object.defineProperty(window, "lower", {
+          value: function syncetcLegacyLower(value) { return String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase(); },
+          configurable: true
+        });
+      }
+    } catch {}
+  }
 
   function markManagementWorkbenchPage() {
     try {
@@ -130,7 +141,7 @@
     let result = null;
     try { result = await res.json(); } catch { result = { ok: false, error: "non_json_response", text: await res.text() }; }
     state.lastResult = { action, http_status: res.status, result };
-    const errText = lower(result && (result.error || result.message || ""));
+    const errText = lowerText(result && (result.error || result.message || ""));
     if (retry && (res.status === 401 || errText.includes("jwt") || errText.includes("auth"))) {
       await refreshToken();
       return callAccess(action, payload, false);
@@ -215,8 +226,8 @@
   const MODULES = [
     { key: "overview", label: "Overview", short: "Console home", group: "Home", status: "active", kind: "overview", description: "Organization management home, module status map, and setup shortcuts." },
 
-    { key: "people-members", label: "Members / People", short: "Member records", group: "People", status: "active", kind: "people", peopleView: "members", description: "Manage organization people, member records, lifecycle, roster visibility, and access links." },
-    { key: "people-admins", label: "Administrators", short: "Admin access", group: "People", status: "placeholder", description: "Customer administrators, organization super admins, and delegated admin access." },
+    { key: "people-members", label: "Members / People", short: "Member records", group: "People", status: "active", kind: "people", peopleFilter: "all", peopleTab: "identity", description: "Manage organization people, member records, lifecycle, roster visibility, access links, and qualifications." },
+    { key: "people-admins", label: "Administrators & Access", short: "Admin access", group: "People", status: "active", kind: "people", peopleFilter: "admins", peopleTab: "access", description: "Manage customer administrators, organization super admins, delegated admin access, invitations, and login links using the same people records." },
     { key: "people-groups", label: "Groups / Roles", short: "Permissions", group: "People", status: "placeholder", description: "Member groups, roles, permission bundles, and future mention groups." },
     { key: "people-instructors", label: "Instructors / Qualifications", short: "Qualifications", group: "People", status: "placeholder", description: "Instructor roster, checkouts, and qualification records." },
 
@@ -273,6 +284,7 @@
     return activeGroup && activeGroup !== "Home" ? activeGroup : "";
   }
   async function boot() {
+    ensureLegacyGlobalTextHelpers();
     markManagementWorkbenchPage();
     const el = root();
     if (!el) return;
@@ -324,7 +336,7 @@
     const cfg = styleConfig();
     if (state.loading) return renderLoading();
     if (state.error) {
-      el.innerHTML = `<style>${css(cfg)}</style><div class="omg-wrap"><div class="omg-error"><h2>Organization Management could not load</h2><p>${esc(state.error)}</p><small>Version ${VERSION}</small></div>${debugPanel()}</div>`;
+      el.innerHTML = `<style>${css(cfg)}</style><div class="omg-wrap"><div class="omg-error"><h2>Organization Management could not load</h2><p>${esc(state.error)}</p></div>${debugPanel()}</div>`;
       return;
     }
     const row = selectedRow();
@@ -401,7 +413,7 @@
     }
     if (active.kind === "people") {
       return `<section class="omg-embedded-panel">
-        <div id="syncetc-organization-people-root" class="omg-module-host" data-syncetc-embedded-module="organization-management" data-syncetc-embedded-view="${attr(active.peopleView || "members")}"></div>
+        <div id="syncetc-organization-people-root" class="omg-module-host" data-syncetc-embedded-module="organization-management" data-syncetc-embedded-view="${attr(active.peopleFilter || "all")}" data-syncetc-embedded-tab="${attr(active.peopleTab || "identity")}"></div>
       </section>`;
     }
     if (active.status === "existing") return renderExistingPanel(active);
@@ -493,68 +505,70 @@
   }
 
   async function mountActiveModule(active) {
-    if (!active) return;
-    if (active.kind === "aircraft") return mountAircraftModule(active);
-    if (active.kind === "people") return mountPeopleModule(active);
-  }
+    if (!active || (active.kind !== "aircraft" && active.kind !== "people")) return;
 
-  async function mountAircraftModule(active) {
-    const host = document.getElementById("syncetc-organization-aircraft-admin-root");
-    if (!host) return;
-    window.SyncEtcOrganizationManagementModuleContext = window.SyncEtcOrganizationManagementModuleContext || {};
-    window.SyncEtcOrganizationManagementModuleContext.aircraft = {
-      embedded: true,
-      activeTab: active.aircraftView || "identity",
-      organizationId: state.orgId,
-      selectedOrganizationId: state.orgId,
-      parentVersion: VERSION
-    };
-    host.innerHTML = `<div class="omg-module-loading">Loading Aircraft Admin…</div>`;
-    window.SyncEtcAircraftAdminSuppressAutoBoot = true;
-    const mountFn = () => window.SyncEtcAircraftAdmin?.mount || window.SyncEtcAircraftAdminPage?.mount;
-    const loadedAircraftVersion = () => clean(window.SyncEtcAircraftAdmin?.version || window.SyncEtcAircraftAdminPage?.version || "");
-    if (!mountFn() || loadedAircraftVersion() !== AIRCRAFT_ADMIN_EXPECTED_VERSION) {
-      aircraftScriptLoading = loadScript(AIRCRAFT_ADMIN_SCRIPT_URL, `syncetc-aircraft-admin-module-script-${AIRCRAFT_ADMIN_EXPECTED_VERSION.replace(/[^A-Za-z0-9_-]/g, "-")}`);
-      await aircraftScriptLoading;
+    if (active.kind === "aircraft") {
+      const host = document.getElementById("syncetc-organization-aircraft-admin-root");
+      if (!host) return;
+      window.SyncEtcOrganizationManagementModuleContext = window.SyncEtcOrganizationManagementModuleContext || {};
+      window.SyncEtcOrganizationManagementModuleContext.aircraft = {
+        embedded: true,
+        activeTab: active.aircraftView || "identity",
+        organizationId: state.orgId,
+        selectedOrganizationId: state.orgId,
+        parentVersion: VERSION
+      };
+      host.innerHTML = `<div class="omg-module-loading">Loading Aircraft Admin…</div>`;
+      window.SyncEtcAircraftAdminSuppressAutoBoot = true;
+      const mountFn = () => window.SyncEtcAircraftAdmin?.mount || window.SyncEtcAircraftAdminPage?.mount;
+      const loadedAircraftVersion = () => clean(window.SyncEtcAircraftAdmin?.version || window.SyncEtcAircraftAdminPage?.version || "");
+      if (!mountFn() || loadedAircraftVersion() !== AIRCRAFT_ADMIN_EXPECTED_VERSION) {
+        aircraftScriptLoading = loadScript(AIRCRAFT_ADMIN_SCRIPT_URL, `syncetc-aircraft-admin-module-script-${AIRCRAFT_ADMIN_EXPECTED_VERSION.replace(/[^A-Za-z0-9_-]/g, "-")}`);
+        await aircraftScriptLoading;
+      }
+      const started = Date.now();
+      while (!mountFn()) {
+        if (Date.now() - started > 8000) throw new Error("Aircraft Admin module did not become ready.");
+        await wait(50);
+      }
+      await mountFn()(host, { embedded: true, organizationId: state.orgId, initialView: active.aircraftView || "identity", initialTab: active.aircraftView || "identity", parentVersion: VERSION });
+      return;
     }
-    const started = Date.now();
-    while (!mountFn()) {
-      if (Date.now() - started > 8000) throw new Error("Aircraft Admin module did not become ready.");
-      await wait(50);
-    }
-    await mountFn()(host, { embedded: true, organizationId: state.orgId, initialView: active.aircraftView || "identity", initialTab: active.aircraftView || "identity", parentVersion: VERSION, debug: state.debug });
-  }
 
-  async function mountPeopleModule(active) {
-    const host = document.getElementById("syncetc-organization-people-root");
-    if (!host) return;
-    window.SyncEtcOrganizationManagementModuleContext = window.SyncEtcOrganizationManagementModuleContext || {};
-    window.SyncEtcOrganizationManagementModuleContext.people = {
-      embedded: true,
-      activeView: active.peopleView || "members",
-      organizationId: state.orgId,
-      selectedOrganizationId: state.orgId,
-      parentVersion: VERSION
-    };
-    host.innerHTML = `<div class="omg-module-loading">Loading People…</div>`;
-    window.SyncEtcPeopleAdminSuppressAutoBoot = true;
-    const mountFn = () => window.SyncEtcPeopleAdmin?.mount || window.SyncEtcPeopleAdminPage?.mount;
-    const loadedPeopleVersion = () => clean(window.SyncEtcPeopleAdmin?.version || window.SyncEtcPeopleAdminPage?.version || "");
-    if (!mountFn() || loadedPeopleVersion() !== PEOPLE_ADMIN_EXPECTED_VERSION) {
-      peopleScriptLoading = loadScript(PEOPLE_ADMIN_SCRIPT_URL, `syncetc-people-admin-module-script-${PEOPLE_ADMIN_EXPECTED_VERSION.replace(/[^A-Za-z0-9_-]/g, "-")}`);
-      await peopleScriptLoading;
+    if (active.kind === "people") {
+      const host = document.getElementById("syncetc-organization-people-root");
+      if (!host) return;
+      window.SyncEtcOrganizationManagementModuleContext = window.SyncEtcOrganizationManagementModuleContext || {};
+      window.SyncEtcOrganizationManagementModuleContext.people = {
+        embedded: true,
+        initialFilter: active.peopleFilter || "all",
+        initialTab: active.peopleTab || "identity",
+        organizationId: state.orgId,
+        selectedOrganizationId: state.orgId,
+        parentVersion: VERSION
+      };
+      host.innerHTML = `<div class="omg-module-loading">Loading People Workbench…</div>`;
+      ensureLegacyGlobalTextHelpers();
+      window.SyncEtcPeopleAdminSuppressAutoBoot = true;
+      const mountFn = () => window.SyncEtcPeopleAdmin?.mount || window.SyncEtcPeopleAdminPage?.mount;
+      const loadedPeopleVersion = () => clean(window.SyncEtcPeopleAdmin?.version || window.SyncEtcPeopleAdminPage?.version || "");
+      if (!mountFn() || loadedPeopleVersion() !== PEOPLE_ADMIN_EXPECTED_VERSION) {
+        peopleScriptLoading = loadScript(PEOPLE_ADMIN_SCRIPT_URL, `syncetc-people-admin-module-script-${PEOPLE_ADMIN_EXPECTED_VERSION.replace(/[^A-Za-z0-9_-]/g, "-")}`);
+        await peopleScriptLoading;
+      }
+      const started = Date.now();
+      while (!mountFn()) {
+        if (Date.now() - started > 8000) throw new Error("People Workbench module did not become ready.");
+        await wait(50);
+      }
+      await mountFn()(host, { embedded: true, organizationId: state.orgId, selectedOrganizationId: state.orgId, initialFilter: active.peopleFilter || "all", initialTab: active.peopleTab || "identity", parentVersion: VERSION });
     }
-    const started = Date.now();
-    while (!mountFn()) {
-      if (Date.now() - started > 8000) throw new Error("People module did not become ready.");
-      await wait(50);
-    }
-    await mountFn()(host, { embedded: true, organizationId: state.orgId, initialView: active.peopleView || "members", initialTab: "identity", filter: "all", parentVersion: VERSION, debug: state.debug });
   }
 
   function showModuleError(error) {
     const host = document.getElementById("syncetc-organization-aircraft-admin-root") || document.getElementById("syncetc-organization-people-root");
-    if (host) host.innerHTML = `<div class="omg-error"><h3>Module could not load</h3><p>${esc(error?.message || String(error))}</p></div>`;
+    const details = state.debug ? `<small>Active module: ${esc(state.activeModule)} • Org Mgmt: ${esc(VERSION)} • People expected: ${esc(PEOPLE_ADMIN_EXPECTED_VERSION)} • Aircraft expected: ${esc(AIRCRAFT_ADMIN_EXPECTED_VERSION)}</small>` : "";
+    if (host) host.innerHTML = `<div class="omg-error"><h3>Module could not load</h3><p>${esc(error?.message || String(error))}</p>${details}</div>`;
   }
 
   function bindEvents() {

@@ -1,7 +1,7 @@
 // index.ts
 // Deploy target: Supabase Edge Function named core-access-action
 // JWT verification: ON
-// Internal Version: 2026-06-16-116-F
+// Internal Version: 2026-06-16-116-G
 // Purpose: secured user/organization-admin access foundation for SyncEtc. Separates lifecycle status, membership class, onboarding/application stage, roles, permissions, and future RSVP audience rules.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
@@ -11,7 +11,7 @@ type JsonRecord = Record<string, unknown>;
 type SupabaseClientAny = any;
 declare const Deno: { env: { get: (key: string) => string | undefined } };
 
-const VERSION = "2026-06-16-116-F";
+const VERSION = "2026-06-16-116-G";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -1098,19 +1098,21 @@ function sortedPeopleDefinitions0116D(rows: JsonRecord[]): JsonRecord[] {
     const aArchived = a.archived_at || normalizeKey(a.status) === "archived" ? 1 : 0;
     const bArchived = b.archived_at || normalizeKey(b.status) === "archived" ? 1 : 0;
     if (aArchived !== bArchived) return aArchived - bArchived;
-    return Number(a.sort_order || 0) - Number(b.sort_order || 0) || clean(a.label || a.status_key || a.class_key || a.stage_key).localeCompare(clean(b.label || b.status_key || b.class_key || b.stage_key));
+    return Number(a.sort_order || 0) - Number(b.sort_order || 0) || clean(a.label || a.status_key || a.class_key || a.stage_key || a.role_key).localeCompare(clean(b.label || b.status_key || b.class_key || b.stage_key || b.role_key));
   });
 }
 
 async function peopleListDefinitions0116D(serviceClient: SupabaseClientAny, organizationId: string): Promise<JsonRecord> {
-  const [statuses, classes, stages] = await Promise.all([
+  const [statuses, classes, stages, roles] = await Promise.all([
     serviceClient.from("core_membership_status_definitions").select("*").eq("organization_id", organizationId).order("sort_order", { ascending: true }).order("label", { ascending: true }),
     serviceClient.from("core_membership_class_definitions").select("*").eq("organization_id", organizationId).order("sort_order", { ascending: true }).order("label", { ascending: true }),
     serviceClient.from("core_application_stage_definitions").select("*").eq("organization_id", organizationId).order("sort_order", { ascending: true }).order("label", { ascending: true }),
+    serviceClient.from("core_organization_roles").select("*").eq("organization_id", organizationId).order("sort_order", { ascending: true }).order("label", { ascending: true }),
   ]);
   if (statuses.error) throw statuses.error;
   if (classes.error) throw classes.error;
   if (stages.error) throw stages.error;
+  if (roles.error) throw roles.error;
   const lifecycleStatuses = ((statuses.data || []) as JsonRecord[]).filter((status) => {
     const statusKey = normalizeKey(status.status_key);
     const settings = jsonObject(status.settings_json);
@@ -1120,6 +1122,8 @@ async function peopleListDefinitions0116D(serviceClient: SupabaseClientAny, orga
     lifecycle_statuses: sortedPeopleDefinitions0116D(lifecycleStatuses),
     membership_classes: sortedPeopleDefinitions0116D((classes.data || []) as JsonRecord[]),
     application_stages: sortedPeopleDefinitions0116D((stages.data || []) as JsonRecord[]),
+    organization_roles: sortedPeopleDefinitions0116D(((roles.data || []) as JsonRecord[]).map(enrichPeopleRole0116G)),
+    groups_roles: sortedPeopleDefinitions0116D(((roles.data || []) as JsonRecord[]).map(enrichPeopleRole0116G)),
   };
 }
 
@@ -1270,6 +1274,36 @@ async function peopleSetApplicationStageArchive0116E(serviceClient: SupabaseClie
   return data as JsonRecord;
 }
 
+const PEOPLE_PROTECTED_ROLE_KEYS_0116G = new Set(["organization-super-admin", "organization-admin", "member"]);
+const PEOPLE_ROLE_TYPES_0116G = new Set(["member", "board", "officer", "committee", "instructor", "manager", "staff", "admin", "access", "group", "custom"]);
+
+function normalizePeopleRoleType0116G(value: unknown, fallback = "custom"): string {
+  const next = normalizeKey(value || fallback);
+  return PEOPLE_ROLE_TYPES_0116G.has(next) ? next : fallback;
+}
+
+function inferPeopleRoleType0116G(row: JsonRecord): string {
+  const roleKey = normalizeKey(row.role_key);
+  if (["organization-super-admin", "organization-admin"].includes(roleKey)) return "admin";
+  if (["board-member", "director", "president", "vice-president", "secretary", "treasurer"].includes(roleKey)) return "board";
+  if (["applicant-manager", "asset-manager", "content-editor", "document-manager", "event-manager", "gallery-manager", "manager"].includes(roleKey)) return "manager";
+  if (roleKey.includes("instructor") || roleKey.includes("cfi")) return "instructor";
+  if (roleKey === "member") return "member";
+  return "custom";
+}
+
+function enrichPeopleRole0116G(row: JsonRecord): JsonRecord {
+  const settings = jsonObject(row.settings_json);
+  const roleType = normalizePeopleRoleType0116G(settings.role_type || settings.group_type || inferPeopleRoleType0116G(row));
+  return {
+    ...row,
+    role_type: roleType,
+    is_protected: PEOPLE_PROTECTED_ROLE_KEYS_0116G.has(normalizeKey(row.role_key)) || Boolean(row.is_system_role),
+    show_on_public_info: String(settings.show_on_public_info || "").toLowerCase() === "true",
+    settings_json: { ...settings, role_type: roleType },
+  };
+}
+
 async function peopleReorderDefinitions0116D(serviceClient: SupabaseClientAny, organizationId: string, definitionKind: string, ids: string[]): Promise<void> {
   let table = "core_membership_class_definitions";
   let idColumn = "membership_class_definition_id";
@@ -1279,6 +1313,9 @@ async function peopleReorderDefinitions0116D(serviceClient: SupabaseClientAny, o
   } else if (definitionKind === "application_stage") {
     table = "core_application_stage_definitions";
     idColumn = "application_stage_definition_id";
+  } else if (definitionKind === "people_role" || definitionKind === "organization_role") {
+    table = "core_organization_roles";
+    idColumn = "role_id";
   }
   for (let i = 0; i < ids.length; i += 1) {
     const id = clean(ids[i]);
@@ -1286,6 +1323,65 @@ async function peopleReorderDefinitions0116D(serviceClient: SupabaseClientAny, o
     const { error } = await serviceClient.from(table).update({ sort_order: (i + 1) * 10 }).eq("organization_id", organizationId).eq(idColumn, id);
     if (error) throw error;
   }
+}
+
+async function peopleSaveOrganizationRole0116G(serviceClient: SupabaseClientAny, organizationId: string, body: JsonRecord): Promise<JsonRecord> {
+  const id = clean(body.role_id);
+  const label = clean(body.label);
+  if (!label) throw new Error("Role name is required.");
+  const existing = id ? (await serviceClient.from("core_organization_roles").select("*").eq("organization_id", organizationId).eq("role_id", id).maybeSingle()) : { data: null, error: null };
+  if (existing.error) throw existing.error;
+  const existingRow = (existing.data || {}) as JsonRecord;
+  const roleKey = id ? normalizeKey(existingRow.role_key) : normalizeKey(body.role_key || label);
+  if (!roleKey) throw new Error("Could not create a role key from that name.");
+  if (!id && PEOPLE_PROTECTED_ROLE_KEYS_0116G.has(roleKey)) throw new Error("That role already has a protected meaning. Choose a different name.");
+  const protectedRole = PEOPLE_PROTECTED_ROLE_KEYS_0116G.has(roleKey) || Boolean(existingRow.is_system_role);
+  const rawSettings = jsonObject(existingRow.settings_json);
+  const roleType = normalizePeopleRoleType0116G(body.role_type || rawSettings.role_type || inferPeopleRoleType0116G({ ...existingRow, role_key: roleKey }));
+  const statusValue = protectedRole ? "active" : normalizeDefinitionStatus0116D(body.status || existingRow.status || "active");
+  const nextSettings: JsonRecord = {
+    ...rawSettings,
+    role_type: roleType,
+    show_on_public_info: optionalBoolean(body, "show_on_public_info", String(rawSettings.show_on_public_info || "").toLowerCase() === "true") ? "true" : "false",
+    is_group: optionalBoolean(body, "is_group", String(rawSettings.is_group || "true").toLowerCase() !== "false") ? "true" : "false",
+    notes: clean(body.notes || rawSettings.notes || ""),
+    model_role: "people_role",
+    last_edited_by_module: "people_groups_roles_0116G",
+  };
+  const payload: JsonRecord = {
+    organization_id: organizationId,
+    role_key: roleKey,
+    label,
+    description: clean(body.description || "") || null,
+    permission_keys: Array.isArray(existingRow.permission_keys) ? existingRow.permission_keys : [],
+    is_system_role: Boolean(existingRow.is_system_role),
+    sort_order: Number(body.sort_order ?? existingRow.sort_order ?? 100) || 100,
+    status: statusValue,
+    settings_json: nextSettings,
+  };
+  if (statusValue === "archived") payload.archived_at = existingRow.archived_at || new Date().toISOString();
+  else payload.archived_at = null;
+  if (id) {
+    const { data, error } = await serviceClient.from("core_organization_roles").update(payload).eq("organization_id", organizationId).eq("role_id", id).select("*").single();
+    if (error) throw error;
+    return enrichPeopleRole0116G(data as JsonRecord);
+  }
+  const { data, error } = await serviceClient.from("core_organization_roles").insert({ ...payload, is_system_role: false }).select("*").single();
+  if (error) throw error;
+  return enrichPeopleRole0116G(data as JsonRecord);
+}
+
+async function peopleSetOrganizationRoleArchive0116G(serviceClient: SupabaseClientAny, organizationId: string, roleId: string, archived: boolean): Promise<JsonRecord> {
+  const existing = await serviceClient.from("core_organization_roles").select("*").eq("organization_id", organizationId).eq("role_id", roleId).maybeSingle();
+  if (existing.error) throw existing.error;
+  const row = (existing.data || {}) as JsonRecord;
+  if (!row.role_id) throw new Error("Role not found.");
+  const roleKey = normalizeKey(row.role_key);
+  if (PEOPLE_PROTECTED_ROLE_KEYS_0116G.has(roleKey) || Boolean(row.is_system_role)) throw new Error("This role cannot be archived.");
+  const payload: JsonRecord = archived ? { archived_at: new Date().toISOString(), status: "archived", sort_order: 999 } : { archived_at: null, status: "active" };
+  const { data, error } = await serviceClient.from("core_organization_roles").update(payload).eq("organization_id", organizationId).eq("role_id", roleId).select("*").single();
+  if (error) throw error;
+  return enrichPeopleRole0116G(data as JsonRecord);
 }
 
 async function upsertPerson(serviceClient: SupabaseClientAny, body: JsonRecord): Promise<JsonRecord> {
@@ -8450,6 +8546,31 @@ serve(async (req: Request) => {
         return jsonResponse(200, { ok: true, action, access: actorAccess, ...result });
       }
 
+
+      if (action === "organization_save_people_role" || action === "organization_save_role_definition") {
+        const actorAccess = await peopleRequireDefinitionAdminAccess0116D(serviceClient, personId, organizationId, platformAdmin);
+        const people_role = await peopleSaveOrganizationRole0116G(serviceClient, organizationId, body);
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_organization_roles", clean(people_role.role_id), { organization_id: organizationId, label: clean(body.label) }, { saved: true });
+        const result = await peopleListDefinitions0116D(serviceClient, organizationId);
+        return jsonResponse(200, { ok: true, action, access: actorAccess, people_role, role_definition: people_role, organization_role: people_role, ...result });
+      }
+
+      if (action === "organization_archive_people_role" || action === "organization_restore_people_role" || action === "organization_archive_role_definition" || action === "organization_restore_role_definition") {
+        const actorAccess = await peopleRequireDefinitionAdminAccess0116D(serviceClient, personId, organizationId, platformAdmin);
+        const roleId = requireString(body, "role_id");
+        const people_role = await peopleSetOrganizationRoleArchive0116G(serviceClient, organizationId, roleId, (action === "organization_archive_people_role" || action === "organization_archive_role_definition"));
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_organization_roles", roleId, { organization_id: organizationId }, { archived: action === "organization_archive_people_role" || action === "organization_archive_role_definition" });
+        const result = await peopleListDefinitions0116D(serviceClient, organizationId);
+        return jsonResponse(200, { ok: true, action, access: actorAccess, people_role, role_definition: people_role, organization_role: people_role, ...result });
+      }
+
+      if (action === "organization_reorder_people_roles" || action === "organization_reorder_role_definitions") {
+        const actorAccess = await peopleRequireDefinitionAdminAccess0116D(serviceClient, personId, organizationId, platformAdmin);
+        await peopleReorderDefinitions0116D(serviceClient, organizationId, "people_role", Array.isArray(body.role_ids) ? body.role_ids.map(clean) : []);
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_organization_roles", organizationId, { organization_id: organizationId }, { reordered: true });
+        const result = await peopleListDefinitions0116D(serviceClient, organizationId);
+        return jsonResponse(200, { ok: true, action, access: actorAccess, ...result });
+      }
 
       if (action === "organization_list_aircraft_admin") {
         const actorAccess = await aircraftRequireAdminAccess0113A(serviceClient, personId, organizationId, platformAdmin);

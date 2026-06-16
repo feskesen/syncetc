@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-16-116-F
+// Internal Version: 2026-06-16-116-G
 // Purpose: Organization Admin People workbench. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-F";
+  const VERSION = "2026-06-16-116-G";
   const ROOT_ID = "syncetc-organization-people-root";
   const ROOT_SELECTOR = "#syncetc-organization-people-root, #syncetc-people-admin-root, [data-syncetc-page=\"organization-people\"]";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -51,7 +51,7 @@
   let pageConfig = null;
   let selected = null;
   let activeDefinitionKind = "";
-  let definitionLists = { statuses: [], membership_classes: [], application_stages: [] };
+  let definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [] };
   let selectedDefinition = null;
   let definitionSearch = "";
   let definitionFilter = "all";
@@ -120,7 +120,7 @@
   }
   function saveOrgContextCache(orgId) {
     if (!orgId) return;
-    peopleCacheByOrg[clean(orgId)] = { cached_at_ms: Date.now(), adminAccess, options, pageConfig, people: arr(people).slice(), definitionLists: { statuses: arr(definitionLists.statuses).slice(), membership_classes: arr(definitionLists.membership_classes).slice(), application_stages: arr(definitionLists.application_stages).slice() } };
+    peopleCacheByOrg[clean(orgId)] = { cached_at_ms: Date.now(), adminAccess, options, pageConfig, people: arr(people).slice(), definitionLists: { statuses: arr(definitionLists.statuses).slice(), membership_classes: arr(definitionLists.membership_classes).slice(), application_stages: arr(definitionLists.application_stages).slice(), groups_roles: arr(definitionLists.groups_roles).slice() } };
   }
   function hydrateFromMountOptions() {
     if (!embeddedMode) return false;
@@ -150,6 +150,7 @@
     if (["lifecycle-statuses", "lifecycle-status", "statuses", "status", "membership-statuses"].includes(k)) return "lifecycle-statuses";
     if (["membership-classes", "membership-class", "classes", "class"].includes(k)) return "membership-classes";
     if (["application-stages", "application-stage", "applicant-stages", "onboarding-stages", "stages", "stage", "people-stages"].includes(k)) return "application-stages";
+    if (["groups-roles", "group-roles", "groups", "group", "roles", "role", "groups-and-roles", "people-groups", "people-roles", "organization-roles"].includes(k)) return "groups-roles";
     return "";
   }
   function normalizePeopleLens(value) {
@@ -384,7 +385,7 @@
     await refreshAuth();
     setMessage("Logged in.", "ok");
   }
-  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; definitionLists = { statuses: [], membership_classes: [], application_stages: [] }; selectedDefinition = null; authChecked = true; setShellState(); render(); }
+  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [] }; selectedDefinition = null; authChecked = true; setShellState(); render(); }
   async function resetOwnPassword() { await ensureSupabase(); const loginEmail = clean($("people-login-email")?.value || email).toLowerCase(); if (!loginEmail) throw new Error("Enter email first."); const { error } = await supabaseClient.auth.resetPasswordForEmail(loginEmail, { redirectTo: "https://syncetc.webflow.io/password-reset" }); if (error) throw error; setMessage("Password reset email requested.", "ok"); }
 
   async function runButton(id, label, fn) {
@@ -490,7 +491,7 @@
       r.description = clean(r.description || "");
       r.ui_status = definitionUiStatus(r);
       r.sort_order = Number(r.sort_order || 100);
-    } else {
+    } else if (type === "application-stages") {
       r.definition_type = "application-stages";
       r.definition_id = clean(r.application_stage_definition_id);
       r.definition_key = clean(r.stage_key);
@@ -498,8 +499,32 @@
       r.description = clean(r.description || "");
       r.ui_status = definitionUiStatus(r);
       r.sort_order = Number(r.sort_order || 100);
+    } else {
+      const settings = obj(r.settings_json);
+      r.definition_type = "groups-roles";
+      r.definition_id = clean(r.role_id);
+      r.definition_key = clean(r.role_key);
+      r.role_type = clean(r.role_type || settings.role_type || settings.group_type || "custom");
+      r.label = clean(r.label || r.role_key || "Untitled role");
+      r.description = clean(r.description || settings.description || settings.notes || "");
+      r.ui_status = definitionUiStatus(r);
+      r.sort_order = Number(r.sort_order || 100);
     }
     return r;
+  }
+
+  function isProtectedRoleDefinition(row) {
+    const rk = key(row?.role_key || row?.definition_key);
+    return Boolean(row?.is_system_role) || ["organization-super-admin", "organization-admin", "member"].includes(rk);
+  }
+
+  function settingsBool(row, field, fallback = false) {
+    const v = obj(row?.settings_json)[field];
+    if (v === true || v === false) return v;
+    const text = lower(v);
+    if (["true", "1", "yes", "on"].includes(text)) return true;
+    if (["false", "0", "no", "off"].includes(text)) return false;
+    return fallback;
   }
 
   function definitionUiStatus(row) {
@@ -514,7 +539,8 @@
     const statuses = arr(data.lifecycle_statuses || data.statuses).map((r) => normalizeDefinitionRow(r, "lifecycle-statuses"));
     const classes = arr(data.membership_classes).map((r) => normalizeDefinitionRow(r, "membership-classes"));
     const stages = arr(data.application_stages || data.stages).map((r) => normalizeDefinitionRow(r, "application-stages"));
-    if (statuses.length || classes.length || stages.length) definitionLists = { statuses, membership_classes: classes, application_stages: stages };
+    const roles = arr(data.groups_roles || data.organization_roles || data.roles).map((r) => normalizeDefinitionRow(r, "groups-roles"));
+    if (statuses.length || classes.length || stages.length || roles.length) definitionLists = { statuses, membership_classes: classes, application_stages: stages, groups_roles: roles };
   }
 
   async function loadPeopleDefinitionLists(run = activeLoadRun) {
@@ -528,7 +554,8 @@
       definitionLists = {
         statuses: arr(options.statuses).map((r) => normalizeDefinitionRow(r, "lifecycle-statuses")),
         membership_classes: arr(options.membership_classes).map((r) => normalizeDefinitionRow(r, "membership-classes")),
-        application_stages: arr(options.application_stages).map((r) => normalizeDefinitionRow(r, "application-stages"))
+        application_stages: arr(options.application_stages).map((r) => normalizeDefinitionRow(r, "application-stages")),
+        groups_roles: arr(options.roles).map((r) => normalizeDefinitionRow(r, "groups-roles"))
       };
       if (isDefinitionMode()) {
         message = e.message || "People definitions could not be loaded.";
@@ -547,6 +574,15 @@
         listTitle: "Classes", newLabel: "New class", itemLabel: "class", rowsKey: "membership_classes",
         idField: "membership_class_definition_id", keyField: "class_key", categoryField: "class_category", categoryLabel: "Class type", categoryTip: "Choose the general type this class belongs to.",
         categories: [["member","Member"],["probationary","Probationary"],["family","Family / household"],["honorary","Honorary"],["student","Student"],["non_member","Non-member / limited user"],["user","Generic user"],["external","External / vendor"],["other","Other"]]
+      };
+    }
+    if (k === "groups-roles") {
+      return {
+        kind: k, title: "Groups / Roles", kicker: "People",
+        helper: "Define organization roles and groups before assigning them to people.",
+        listTitle: "Roles", newLabel: "New role", itemLabel: "role", rowsKey: "groups_roles",
+        idField: "role_id", keyField: "role_key", categoryField: "role_type", categoryLabel: "Role type", categoryTip: "Choose how this role is used in your organization.",
+        categories: [["member","Member"],["board","Board"],["officer","Officer"],["committee","Committee"],["instructor","Instructor"],["manager","Manager"],["staff","Staff"],["access","Admin / access"],["group","Group"],["custom","Custom"]]
       };
     }
     if (k === "application-stages") {
@@ -588,7 +624,7 @@
   function definitionMatchesSearch(row) {
     const q = lower(definitionSearch);
     if (!q) return true;
-    const hay = [row.label, row.description, row.lifecycle_category, row.class_category, row.stage_category, row.dues_behavior, row.default_lifecycle_status_key].map(clean).join(" ").toLowerCase();
+    const hay = [row.label, row.description, row.lifecycle_category, row.class_category, row.stage_category, row.role_type, row.role_key, row.dues_behavior, row.default_lifecycle_status_key].map(clean).join(" ").toLowerCase();
     return hay.includes(q);
   }
 
@@ -615,6 +651,9 @@
     }
     if (cfg.kind === "application-stages") {
       return { application_stage_definition_id: "", stage_key: "", label: "", description: "", stage_category: "application", default_lifecycle_status_key: "applicant", default_can_login: false, default_can_view_portal: false, default_requires_admin_review: true, is_terminal: false, is_default: false, status: "active", ui_status: "active", sort_order: nextDefinitionSortOrder() };
+    }
+    if (cfg.kind === "groups-roles") {
+      return { role_id: "", role_key: "", label: "", description: "", role_type: "custom", permission_keys: [], is_system_role: false, settings_json: { is_group: true }, status: "active", ui_status: "active", sort_order: nextDefinitionSortOrder() };
     }
     return { status_definition_id: "", status_key: "", label: "", description: "", lifecycle_category: "active", is_active_member: true, can_login: true, can_view_member_portal: true, can_reserve_assets: true, requires_admin_review: false, is_default: false, status: "active", ui_status: "active", sort_order: nextDefinitionSortOrder() };
   }
@@ -700,16 +739,20 @@
     if (!row) return `<section class="people-editor-panel people-empty"><h3>Select a ${esc(cfg.itemLabel)}</h3><p>Choose an item on the left, or create a new one.</p>${!definitionRpcAvailable ? `<p class="people-warning">This list could not be edited right now.</p>` : ""}</section>`;
     const status = definitionUiStatus(row);
     const archived = status === "archived";
-    const archiveButton = archived ? `<button id="people-def-restore" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Restore</button>` : `<button id="people-def-archive" class="people-btn danger" type="button" ${mayEdit ? "" : "disabled"}>Archive</button>`;
+    const protectedRole = cfg.kind === "groups-roles" && isProtectedRoleDefinition(row);
+    const archiveButton = archived ? `<button id="people-def-restore" class="people-btn secondary" type="button" ${mayEdit ? "" : "disabled"}>Restore</button>` : `<button id="people-def-archive" class="people-btn danger" type="button" ${mayEdit && !protectedRole ? "" : "disabled"}>Archive</button>`;
     const statusValue = status === "inactive" || archived ? "paused" : "active";
-    const statusHelp = archived ? `<small>Restore this item before changing active/inactive.</small>` : "";
+    const statusDisabled = archived || protectedRole;
+    const statusHelp = archived ? `<small>Restore this item before changing active/inactive.</small>` : protectedRole ? `<small>This built-in role is protected from archive/inactive changes.</small>` : "";
     const categoryTip = cfg.categoryTip || "Choose the general category for this item.";
-    const commonTop = `${input("people-def-label", "Display name", row.label)}<label class="people-field"><span>Status</span><select id="people-def-ui-status" ${archived ? "disabled" : ""}>${definitionStatusOptions(statusValue)}</select>${statusHelp}</label><label class="people-field"><span>${definitionFieldLabel(cfg.categoryLabel, categoryTip)}</span><select id="people-def-category" ${archived ? "disabled" : ""}>${definitionCategoryOptions(cfg, row[cfg.categoryField])}</select></label>${textarea("people-def-description", "Description / notes", row.description || obj(row.settings_json).description || "")}`;
+    const commonTop = `${input("people-def-label", "Display name", row.label)}<label class="people-field"><span>Status</span><select id="people-def-ui-status" ${statusDisabled ? "disabled" : ""}>${definitionStatusOptions(statusValue)}</select>${statusHelp}</label><label class="people-field"><span>${definitionFieldLabel(cfg.categoryLabel, categoryTip)}</span><select id="people-def-category" ${archived ? "disabled" : ""}>${definitionCategoryOptions(cfg, row[cfg.categoryField])}</select></label>${textarea("people-def-description", "Description / notes", row.description || obj(row.settings_json).description || "")}`;
     let body = "";
     if (cfg.kind === "membership-classes") {
       body = `${commonTop}<div class="people-form-grid"><label class="people-field"><span>${definitionFieldLabel("Dues behavior", "Choose the broad dues treatment for this class.")}</span><select id="people-def-dues-behavior" ${archived ? "disabled" : ""}>${duesBehaviorOptions(row.dues_behavior)}</select></label>${textarea("people-def-privilege-notes", "Privilege notes", row.privilege_notes || "")}${textarea("people-def-billing-notes", "Billing notes", row.billing_notes || "")}</div><div class="people-check-grid">${checkbox("people-def-can-reserve", "Default can reserve/use assets", row.default_can_reserve_assets)}${checkbox("people-def-view-docs", "Default can view member documents", row.default_can_view_member_documents)}${checkbox("people-def-review", "Requires admin review", row.requires_admin_review)}${checkbox("people-def-default", "Default class", row.is_default)}</div>`;
     } else if (cfg.kind === "application-stages") {
       body = `${commonTop}<div class="people-form-grid"><label class="people-field"><span>${definitionFieldLabel("Suggested lifecycle status", "Choose the lifecycle status normally associated with this stage.")}</span><select id="people-def-lifecycle-status" ${archived ? "disabled" : ""}>${lifecycleStatusOptions(row.default_lifecycle_status_key)}</select></label></div><div class="people-check-grid">${checkbox("people-def-stage-login", "Allow login during this stage", row.default_can_login)}${checkbox("people-def-stage-portal", "Allow portal during this stage", row.default_can_view_portal)}${checkbox("people-def-stage-review", "Requires admin review", row.default_requires_admin_review)}${checkbox("people-def-stage-terminal", "Final step", row.is_terminal)}${checkbox("people-def-default", "Default stage", row.is_default)}</div>`;
+    } else if (cfg.kind === "groups-roles") {
+      body = `${commonTop}<div class="people-check-grid">${checkbox("people-def-show-public", "Show on public information pages", settingsBool(row, "show_on_public_info", false))}${checkbox("people-def-is-group", "Available as a group", settingsBool(row, "is_group", true))}</div>`;
     } else {
       body = `${commonTop}<div class="people-check-grid">${checkbox("people-def-active-member", "Counts as active member", row.is_active_member)}${checkbox("people-def-can-login", "Can log in", row.can_login)}${checkbox("people-def-view-portal", "Can view member portal", row.can_view_member_portal)}${checkbox("people-def-can-reserve", "Can reserve/use assets", row.can_reserve_assets)}${checkbox("people-def-review", "Requires admin review", row.requires_admin_review)}${checkbox("people-def-default", "Default status", row.is_default)}</div>`;
     }
@@ -756,6 +799,11 @@
       base.default_can_view_portal = bool($("people-def-stage-portal")?.checked);
       base.default_requires_admin_review = bool($("people-def-stage-review")?.checked);
       base.is_terminal = bool($("people-def-stage-terminal")?.checked);
+    } else if (cfg.kind === "groups-roles") {
+      base.role_type = clean($("people-def-category")?.value) || "custom";
+      base.show_on_public_info = bool($("people-def-show-public")?.checked);
+      base.is_group = bool($("people-def-is-group")?.checked);
+      if (isProtectedRoleDefinition(original)) base.status = "active";
     } else {
       base.lifecycle_category = clean($("people-def-category")?.value) || "active";
       base.is_active_member = bool($("people-def-active-member")?.checked);
@@ -777,7 +825,7 @@
 
   async function saveDefinitionPayload(payload) {
     const cfg = definitionConfig();
-    const action = cfg.kind === "membership-classes" ? "organization_save_membership_class" : cfg.kind === "application-stages" ? "organization_save_application_stage" : "organization_save_lifecycle_status";
+    const action = cfg.kind === "membership-classes" ? "organization_save_membership_class" : cfg.kind === "application-stages" ? "organization_save_application_stage" : cfg.kind === "groups-roles" ? "organization_save_role_definition" : "organization_save_lifecycle_status";
     const data = await call(action, { organization_id: selectedOrgId, ...obj(payload) });
     setDefinitionListsFromPayload(data);
     await refreshAccessVocabularyAfterDefinitionSave();
@@ -788,7 +836,7 @@
     const payload = collectDefinitionPayload();
     const data = await saveDefinitionPayload(payload);
     const cfg = definitionConfig();
-    const saved = cfg.kind === "membership-classes" ? obj(data.membership_class || data.saved_definition) : cfg.kind === "application-stages" ? obj(data.application_stage || data.saved_definition) : obj(data.lifecycle_status || data.saved_definition);
+    const saved = cfg.kind === "membership-classes" ? obj(data.membership_class || data.saved_definition) : cfg.kind === "application-stages" ? obj(data.application_stage || data.saved_definition) : cfg.kind === "groups-roles" ? obj(data.role_definition || data.organization_role || data.saved_definition) : obj(data.lifecycle_status || data.saved_definition);
     selectedDefinition = normalizeDefinitionRow(saved[cfg.idField] || saved[cfg.keyField] ? saved : payload, cfg.kind);
     const match = allDefinitionRows().find((r) => selectedDefinitionId(r) === selectedDefinitionId(selectedDefinition));
     if (match) selectedDefinition = { ...match };
@@ -818,6 +866,9 @@
     } else if (cfg.kind === "application-stages") {
       action = restore ? "organization_restore_application_stage" : "organization_archive_application_stage";
       payload = { organization_id: selectedOrgId, application_stage_definition_id: id };
+    } else if (cfg.kind === "groups-roles") {
+      action = restore ? "organization_restore_role_definition" : "organization_archive_role_definition";
+      payload = { organization_id: selectedOrgId, role_id: id };
     } else {
       action = restore ? "organization_restore_lifecycle_status" : "organization_archive_lifecycle_status";
       payload = { organization_id: selectedOrgId, status_definition_id: id };
@@ -850,12 +901,14 @@
     definitionLists[cfg.rowsKey] = allRows.map((r) => byId.get(selectedDefinitionId(r)) || r);
     render();
     try {
-      const action = cfg.kind === "membership-classes" ? "organization_reorder_membership_classes" : cfg.kind === "application-stages" ? "organization_reorder_application_stages" : "organization_reorder_lifecycle_statuses";
+      const action = cfg.kind === "membership-classes" ? "organization_reorder_membership_classes" : cfg.kind === "application-stages" ? "organization_reorder_application_stages" : cfg.kind === "groups-roles" ? "organization_reorder_role_definitions" : "organization_reorder_lifecycle_statuses";
       const payload = cfg.kind === "membership-classes"
         ? { organization_id: selectedOrgId, membership_class_definition_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) }
         : cfg.kind === "application-stages"
           ? { organization_id: selectedOrgId, application_stage_definition_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) }
-          : { organization_id: selectedOrgId, status_definition_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) };
+          : cfg.kind === "groups-roles"
+            ? { organization_id: selectedOrgId, role_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) }
+            : { organization_id: selectedOrgId, status_definition_ids: reordered.map((r) => selectedDefinitionId(r)).filter(Boolean) };
       const data = await call(action, payload);
       setDefinitionListsFromPayload(data);
       saveOrgContextCache(selectedOrgId);
@@ -1231,7 +1284,7 @@
     const el = ensureRoot();
     if (!el) return;
     const cfg = styleConfig(selectedRow());
-    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, active_people_lens: activePeopleLens, active_definition_kind: activeDefinitionKind, people_count: people.length, definition_counts: { statuses: arr(definitionLists.statuses).length, membership_classes: arr(definitionLists.membership_classes).length, application_stages: arr(definitionLists.application_stages).length }, cache_ttl_ms: PEOPLE_CACHE_TTL_MS, parent_script_load_ms: mountOptions.scriptLoadMs || null, load_timings: loadTimings, backend: backend || {} }, null, 2))}</pre></details>` : "";
+    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, active_people_lens: activePeopleLens, active_definition_kind: activeDefinitionKind, people_count: people.length, definition_counts: { statuses: arr(definitionLists.statuses).length, membership_classes: arr(definitionLists.membership_classes).length, application_stages: arr(definitionLists.application_stages).length, groups_roles: arr(definitionLists.groups_roles).length }, cache_ttl_ms: PEOPLE_CACHE_TTL_MS, parent_script_load_ms: mountOptions.scriptLoadMs || null, load_timings: loadTimings, backend: backend || {} }, null, 2))}</pre></details>` : "";
     el.innerHTML = `<style>${peopleStyles(cfg)}</style><div class="people-wrap"><section class="people-card people-hero"><div class="people-eyebrow">Organization Admin</div><h1>${esc(clean(pageConfig?.title) || "People & Access")}</h1><p>${esc(clean(pageConfig?.intro_text) || "Search the full people pool, manage members and applicants, keep contact information current, and handle safe access updates from one place.")}</p><div class="people-message ${esc(messageKind)}">${esc(message)}</div></section>${renderContent()}${diagnostics}</div>`;
     bindEvents();
     restorePeopleSearchFocus();

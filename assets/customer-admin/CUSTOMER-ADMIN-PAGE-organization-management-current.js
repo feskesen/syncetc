@@ -1,18 +1,18 @@
 // CUSTOMER-ADMIN-PAGE-organization-management-current.js
-// Internal Version: 2026-06-16-116-F
+// Internal Version: 2026-06-16-116-G
 // Purpose: Customer/organization-side Organization Management console runtime. Immutable admin workbench shell with left navigation and right-panel module loading.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-F";
+  const VERSION = "2026-06-16-116-G";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
   const SUPABASE_JS_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
   const AIRCRAFT_ADMIN_EXPECTED_VERSION = "2026-06-15-115-G";
   const AIRCRAFT_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js?v=${encodeURIComponent(AIRCRAFT_ADMIN_EXPECTED_VERSION)}`;
-  const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-16-116-F";
+  const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-16-116-G";
   const PEOPLE_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-people-current.js?v=${encodeURIComponent(PEOPLE_ADMIN_EXPECTED_VERSION)}`;
   const ROOT_SELECTOR = "#syncetc-organization-management-root, #syncetc-organization-admin-console-root, [data-syncetc-page='organization-management']";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -21,6 +21,45 @@
   let supabaseClient = null;
   let aircraftScriptLoading = null;
   let peopleScriptLoading = null;
+
+  function rawRequestedModuleKey() {
+    const params = new URLSearchParams(location.search);
+    return clean(params.get("module")) || clean(params.get("section")) || clean((location.hash || "").replace(/^#/, "")) || "overview";
+  }
+
+  function hiddenPeopleAccessModuleKeys() {
+    return ["people-admins", "administrators-access", "people-administrators", "admin-access", "admins-access"];
+  }
+
+  function isHiddenPeopleAccessModuleKey(value) {
+    return hiddenPeopleAccessModuleKeys().includes(clean(value));
+  }
+
+  function normalizeInitialModuleKey(value) {
+    const k = clean(value);
+    return isHiddenPeopleAccessModuleKey(k) ? "people-members" : k;
+  }
+
+  function initialPeopleTabOverride() {
+    const params = new URLSearchParams(location.search);
+    const requested = rawRequestedModuleKey();
+    const explicitTab = clean(params.get("people_tab"));
+    if (isHiddenPeopleAccessModuleKey(requested)) return "access";
+    return explicitTab;
+  }
+
+  function normalizeHiddenPeopleAccessUrlIfNeeded() {
+    try {
+      const requested = rawRequestedModuleKey();
+      if (!isHiddenPeopleAccessModuleKey(requested)) return;
+      const params = new URLSearchParams(location.search);
+      params.set("module", "people-members");
+      params.set("people_tab", "access");
+      params.delete("section");
+      if (state.debug) params.set("syncetc_debug", "1");
+      history.replaceState(null, "", `${location.pathname}?${params.toString()}`);
+    } catch {}
+  }
 
   const state = {
     debug: new URLSearchParams(location.search).get("syncetc_debug") === "1",
@@ -34,7 +73,8 @@
     accessRow: null,
     orgId: "",
     orgOptions: [],
-    activeModule: clean(new URLSearchParams(location.search).get("module")) || clean(new URLSearchParams(location.search).get("section")) || clean((location.hash || "").replace(/^#/, "")) || "overview",
+    activeModule: normalizeInitialModuleKey(rawRequestedModuleKey()),
+    peopleTabOverride: initialPeopleTabOverride(),
     steps: [],
     lastResult: null,
     openGroup: null
@@ -230,8 +270,7 @@
     { key: "people-membership-classes", label: "Membership Classes", short: "Class vocabulary", group: "People", status: "active", kind: "people", peopleView: "membership-classes", description: "Define membership/user classes such as full, probationary, family, honorary, social, student, or non-member classes." },
     { key: "people-stages", label: "Application / Onboarding Stages", short: "Workflow stages", group: "People", status: "active", kind: "people", peopleView: "application-stages", description: "Define the application and onboarding steps used before assigning them to people." },
     { key: "people-members", label: "Members / People", short: "Member records", group: "People", status: "active", kind: "people", peopleView: "members", peopleFilter: "all", peopleTab: "identity", description: "Manage organization people, member records, lifecycle, roster visibility, access links, and qualifications." },
-    { key: "people-admins", label: "Administrators & Access", short: "Admin access", group: "People", status: "active", kind: "people", peopleView: "members", peopleFilter: "admins-access", peopleTab: "access", peopleLens: "admin-access", description: "Manage customer administrators, organization super admins, delegated admin access, invitations, and login links." },
-    { key: "people-groups", label: "Groups / Roles", short: "Permissions", group: "People", status: "placeholder", description: "Member groups, roles, permission bundles, and future mention groups." },
+    { key: "people-groups", label: "Groups / Roles", short: "Role definitions", group: "People", status: "active", kind: "people", peopleView: "groups-roles", description: "Define organization roles and groups before assigning them to people." },
     { key: "people-instructors", label: "Instructors / Qualifications", short: "Qualifications", group: "People", status: "placeholder", description: "Instructor roster, checkouts, and qualification records." },
 
     { key: "assets-types", label: "Asset Types", short: "Classifications", group: "Assets", status: "active", kind: "aircraft", aircraftView: "asset-types", description: "Manage simple asset classifications such as aircraft, vehicles, simulators, equipment, vessels, or other asset groups." },
@@ -273,8 +312,9 @@
     return Array.from(map.entries()).map(([group, modules]) => ({ group, modules }));
   })();
 
-  function findModule(key) { return MODULES.find(m => m.key === key) || MODULES.find(m => m.key === "overview"); }
+  function findModule(key) { return MODULES.find(m => m.key === normalizeInitialModuleKey(key)) || MODULES.find(m => m.key === "overview"); }
   function activeModule() { return findModule(state.activeModule); }
+  function effectivePeopleTab(active) { return clean(state.peopleTabOverride) || clean(active?.peopleTab) || "identity"; }
   function moduleCanEmbed(m) { return m && (m.kind === "overview" || m.kind === "aircraft" || m.kind === "people"); }
   function activeGroupName() { return activeModule().group || "Home"; }
   function isKnownNonHomeGroup(group) {
@@ -297,6 +337,7 @@
       await ensureSupabase();
       await refreshToken();
       await loadAccess();
+      normalizeHiddenPeopleAccessUrlIfNeeded();
       state.loading = false;
       setShellState();
       render();
@@ -416,7 +457,7 @@
     }
     if (active.kind === "people") {
       return `<section class="omg-embedded-panel">
-        <div id="syncetc-organization-people-root" class="omg-module-host" data-syncetc-embedded-module="organization-management" data-syncetc-embedded-view="${attr(active.peopleView || "members")}" data-syncetc-embedded-filter="${attr(active.peopleFilter || "all")}" data-syncetc-embedded-tab="${attr(active.peopleTab || "identity")}"></div>
+        <div id="syncetc-organization-people-root" class="omg-module-host" data-syncetc-embedded-module="organization-management" data-syncetc-embedded-view="${attr(active.peopleView || "members")}" data-syncetc-embedded-filter="${attr(active.peopleFilter || "all")}" data-syncetc-embedded-tab="${attr(effectivePeopleTab(active))}"></div>
       </section>`;
     }
     if (active.status === "existing") return renderExistingPanel(active);
@@ -491,15 +532,20 @@
   }
 
   function setActiveModule(key, replace = false) {
+    const rawKey = clean(key);
+    const hiddenAccessAlias = isHiddenPeopleAccessModuleKey(rawKey);
+    key = normalizeInitialModuleKey(rawKey);
     const next = findModule(key);
-    if (!next || next.key === state.activeModule) return;
+    if (!next || (next.key === state.activeModule && (!hiddenAccessAlias || state.peopleTabOverride === "access"))) return;
     if (!confirmModuleSwitch()) return;
     state.activeModule = next.key;
+    state.peopleTabOverride = hiddenAccessAlias ? "access" : "";
     state.openGroup = next.group && next.group !== "Home" ? next.group : "";
     try {
       const params = new URLSearchParams(location.search);
       params.set("module", next.key);
       params.delete("section");
+      if (hiddenAccessAlias) params.set("people_tab", "access"); else params.delete("people_tab");
       if (state.debug) params.set("syncetc_debug", "1");
       const url = `${location.pathname}?${params.toString()}`;
       if (replace) history.replaceState(null, "", url); else history.pushState(null, "", url);
@@ -546,7 +592,7 @@
         embedded: true,
         initialView: active.peopleView || "members",
         initialFilter: active.peopleFilter || "all",
-        initialTab: active.peopleTab || "identity",
+        initialTab: effectivePeopleTab(active),
         initialLens: active.peopleLens || "",
         peopleLens: active.peopleLens || "",
         organizationId: state.orgId,
@@ -581,7 +627,7 @@
         await wait(50);
       }
       const mountStartedAt = performance.now();
-      await mountFn()(host, { embedded: true, organizationId: state.orgId, selectedOrganizationId: state.orgId, initialView: active.peopleView || "members", initialDefinition: active.peopleView || "", initialFilter: active.peopleFilter || "all", initialTab: active.peopleTab || "identity", initialLens: active.peopleLens || "", peopleLens: active.peopleLens || "", parentVersion: VERSION, token: state.token, email: state.email, accessRows: state.accessRows, accessRow: selectedRow(), platformAdmin: Boolean(selectedRow()?.platform_admin), supabaseClient, scriptLoadMs });
+      await mountFn()(host, { embedded: true, organizationId: state.orgId, selectedOrganizationId: state.orgId, initialView: active.peopleView || "members", initialDefinition: active.peopleView || "", initialFilter: active.peopleFilter || "all", initialTab: effectivePeopleTab(active), initialLens: active.peopleLens || "", peopleLens: active.peopleLens || "", parentVersion: VERSION, token: state.token, email: state.email, accessRows: state.accessRows, accessRow: selectedRow(), platformAdmin: Boolean(selectedRow()?.platform_admin), supabaseClient, scriptLoadMs });
       mark("people-module:mount-done", `${Math.round(performance.now() - mountStartedAt)}ms`);
     }
   }
@@ -675,9 +721,11 @@
   }
 
   window.addEventListener("popstate", () => {
-    const key = clean(new URLSearchParams(location.search).get("module")) || "overview";
+    const rawKey = rawRequestedModuleKey();
+    const key = normalizeInitialModuleKey(rawKey);
     if (!confirmModuleSwitch()) return;
     state.activeModule = findModule(key).key;
+    state.peopleTabOverride = isHiddenPeopleAccessModuleKey(rawKey) ? "access" : clean(new URLSearchParams(location.search).get("people_tab"));
     const nextGroup = activeModule().group;
     state.openGroup = nextGroup && nextGroup !== "Home" ? nextGroup : "";
     render();

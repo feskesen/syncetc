@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-15-115-E
+// Internal Version: 2026-06-15-115-F
 // Purpose: Customer/organization-side Aircraft Admin foundation. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-15-115-E";
+  const VERSION = "2026-06-15-115-F";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -697,6 +697,24 @@
 
   function setAssetTypeDraft(key, value) { if (!state.assetTypeDraft) state.assetTypeDraft = emptyAssetTypeDraft(); state.assetTypeDraft[key] = value; markAssetTypeDirty(); }
 
+  function updateDraftStatus(status) {
+    if (!state.draft) state.draft = emptyAircraftDraft();
+    state.draft.asset_record_status = status;
+    markDirty();
+  }
+
+  function updateLocationDraftStatus(status) {
+    if (!state.locationDraft) state.locationDraft = emptyLocationDraft();
+    state.locationDraft.status = status;
+    markLocationDirty();
+  }
+
+  function updateAssetTypeDraftStatus(status) {
+    if (!state.assetTypeDraft) state.assetTypeDraft = emptyAssetTypeDraft();
+    state.assetTypeDraft.status = status;
+    markAssetTypeDirty();
+  }
+
   function collectAircraftPayload() {
     const d = state.draft || emptyAircraftDraft();
     return {
@@ -786,7 +804,13 @@
   }
 
   function newAssetType() { if (!confirmDiscard("You have unsaved asset type changes. Continue?")) return; state.assetTypeStatusFilter = "all"; state.selectedAssetTypeId = ""; state.assetTypeDraft = emptyAssetTypeDraft(); setAssetTypeDirty(false); render(); }
-  function clearAssetType() { newAssetType(); }
+  function clearAssetType() {
+    if (!confirmDiscard("Reset this asset type form? Unsaved changes will be discarded.")) return;
+    const selected = selectedAssetType();
+    state.assetTypeDraft = selected ? draftFromAssetType(selected) : emptyAssetTypeDraft();
+    setAssetTypeDirty(false);
+    render();
+  }
 
   async function saveAircraft() {
     try {
@@ -847,8 +871,28 @@
   }
 
   function newAircraft() { if (!confirmDiscard()) return; state.statusFilter = "all"; state.selectedAircraftId = ""; state.draft = emptyAircraftDraft(); setDirty(false); setStatus("New aircraft draft ready."); render(); }
-  function clearAircraft() { if (!confirmDiscard()) return; state.draft = emptyAircraftDraft(); state.selectedAircraftId = ""; setDirty(false); render(); }
+  function clearAircraft() {
+    if (!confirmDiscard("Reset this aircraft form? Unsaved changes will be discarded.")) return;
+    const selected = selectedAircraft();
+    state.draft = selected ? draftFromAircraft(selected) : emptyAircraftDraft();
+    setDirty(false);
+    render();
+  }
   function newLocation() { if (!confirmDiscard("You have unsaved location changes. Continue?")) return; state.selectedLocationId = ""; state.locationDraft = emptyLocationDraft(); setLocationDirty(false); render(); }
+  function clearLocation() {
+    if (!confirmDiscard("Reset this location form? Unsaved changes will be discarded.")) return;
+    const selected = selectedLocation();
+    state.locationDraft = selected ? draftFromLocation(selected) : emptyLocationDraft();
+    setLocationDirty(false);
+    render();
+  }
+  function archiveLocation(restore = false) {
+    const d = state.locationDraft || emptyLocationDraft();
+    if (!d.organization_location_id) return;
+    if (!restore && !window.confirm("Archive this location? It can be restored later.")) return;
+    updateLocationDraftStatus(restore ? "active" : "archived");
+    saveLocation();
+  }
 
   function aircraftRecordStatus(a) {
     if (!a) return "available";
@@ -912,7 +956,7 @@
       billing_json: { billing_basis: d.billing_basis, fuel_included: !!d.fuel_included, tax_behavior: d.tax_behavior },
       maintenance_json: { placeholder: true, note: "Reminder and squawk systems are separate modules." },
       media_json: { primary_photo_url: d.primary_photo_url, panel_photo_url: d.panel_photo_url },
-      settings_json: { saved_from: "aircraft_admin_0115E" }
+      settings_json: { saved_from: "aircraft_admin_0115F" }
     };
   }
 
@@ -1043,7 +1087,7 @@
     return `
       <section class="aircraft-card aircraft-list-card">
         <div class="aircraft-section-head compact">
-          <div><h2>Assets / Aircraft</h2><p>${rows.length} shown.</p></div>
+          <div><h2>Assets / Aircraft</h2><p>Manage aircraft records, visibility, dispatch status, and operating details.</p></div>
           <button class="aircraft-button" id="aircraft-new">New Aircraft</button>
         </div>
         <div class="aircraft-module-divider"></div>
@@ -1103,19 +1147,18 @@
         <div class="aircraft-editor-head">
           <div>
             <h2>${d.operational_asset_id ? esc(d.tail_number || d.display_name || "Edit Aircraft") : "New Aircraft"}</h2>
-            <p>Generated slug/SKU: <strong>${esc(d.asset_key || "generated on save")}</strong></p>
-          </div>
-          <div class="aircraft-actions aircraft-save-row">
-            <div class="aircraft-bottom-state">${dirtyBadgeHtml()}${inlineStatusHtml()}</div>
-            <div class="aircraft-action-buttons">
-              <button class="aircraft-button secondary" id="aircraft-clear">Clear</button>
-              ${d.operational_asset_id ? `<button class="aircraft-button ${archived ? "secondary" : "danger"}" id="aircraft-archive">${archived ? "Restore" : "Archive"}</button>` : ""}
-              <button class="aircraft-button" data-save-button data-label="Save Aircraft" id="aircraft-save">Save Aircraft</button>
-            </div>
           </div>
         </div>
         ${renderTabs()}
         <div class="aircraft-tab-panel">${renderActiveTab(d)}</div>
+        <div class="aircraft-actions aircraft-save-row">
+          <div class="aircraft-bottom-state">${dirtyBadgeHtml()}${inlineStatusHtml()}</div>
+          <div class="aircraft-action-buttons">
+            <button class="aircraft-button secondary" id="aircraft-reset">Reset</button>
+            ${d.operational_asset_id ? `<button class="aircraft-button ${archived ? "secondary" : "danger"}" id="aircraft-archive">${archived ? "Restore" : "Archive"}</button>` : ""}
+            <button class="aircraft-button" data-save-button data-label="Save Aircraft" id="aircraft-save">Save Aircraft</button>
+          </div>
+        </div>
       </section>`;
   }
 
@@ -1265,7 +1308,7 @@
             <div class="aircraft-actions aircraft-save-row">
               <div class="aircraft-bottom-state">${dirtyBadgeHtml()}${inlineStatusHtml()}</div>
               <div class="aircraft-action-buttons">
-                <button class="aircraft-button secondary" id="aircraft-clear-asset-type">Clear</button>
+                <button class="aircraft-button secondary" id="aircraft-clear-asset-type">Reset</button>
                 ${d.asset_type_id ? `<button class="aircraft-button ${archived ? "secondary" : "danger"}" id="aircraft-archive-asset-type">${archived ? "Restore" : "Archive"}</button>` : ""}
                 <button class="aircraft-button" data-save-button data-label="Save Asset Type" id="aircraft-save-asset-type">Save Asset Type</button>
               </div>
@@ -1350,7 +1393,11 @@
             <label class="aircraft-field full"><span>Notes</span><textarea data-location-key="notes" placeholder="Optional operating notes, directions, access instructions, or internal location notes.">${esc(d.notes)}</textarea></label>
             <div class="aircraft-actions aircraft-save-row">
               <div class="aircraft-bottom-state">${dirtyBadgeHtml()}${inlineStatusHtml()}</div>
-              <div class="aircraft-action-buttons"><button class="aircraft-button" data-save-button data-label="Save Location" id="aircraft-save-location">Save Location</button></div>
+              <div class="aircraft-action-buttons">
+                <button class="aircraft-button secondary" id="aircraft-clear-location">Reset</button>
+                ${d.organization_location_id ? `<button class="aircraft-button ${locationStatus(d) === "archived" ? "secondary" : "danger"}" id="aircraft-archive-location">${locationStatus(d) === "archived" ? "Restore" : "Archive"}</button>` : ""}
+                <button class="aircraft-button" data-save-button data-label="Save Location" id="aircraft-save-location">Save Location</button>
+              </div>
             </div>
           </div>
         </div>
@@ -1416,7 +1463,7 @@
       state.orgId = e.target.value; localStorage.setItem(SELECTED_ORG_KEY, state.orgId); state.accessRow = state.accessRows.find(r => clean(r.organization_id) === state.orgId) || state.accessRow; await loadAircraftAdmin();
     });
     field("aircraft-new")?.addEventListener("click", newAircraft);
-    field("aircraft-clear")?.addEventListener("click", clearAircraft);
+    field("aircraft-reset")?.addEventListener("click", clearAircraft);
     field("aircraft-save")?.addEventListener("click", saveAircraft);
     field("aircraft-archive")?.addEventListener("click", () => archiveAircraft(clean(selectedAircraft()?.asset_record_status) === "archived" || !!selectedAircraft()?.archived_at));
     field("aircraft-status-filter")?.addEventListener("change", e => {
@@ -1565,6 +1612,8 @@
     });
     field("aircraft-new-location")?.addEventListener("click", newLocation);
     field("aircraft-save-location")?.addEventListener("click", saveLocation);
+    field("aircraft-clear-location")?.addEventListener("click", clearLocation);
+    field("aircraft-archive-location")?.addEventListener("click", () => archiveLocation(locationStatus(state.locationDraft || selectedLocation()) === "archived"));
     field("aircraft-location-status-filter")?.addEventListener("change", e => {
       const previous = state.locationStatusFilter;
       const nextFilter = e.target.value;

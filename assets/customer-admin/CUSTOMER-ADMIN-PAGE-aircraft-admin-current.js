@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-15-115-D
+// Internal Version: 2026-06-15-115-E
 // Purpose: Customer/organization-side Aircraft Admin foundation. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-15-115-D";
+  const VERSION = "2026-06-15-115-E";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -18,6 +18,7 @@
   let externalRoot = null;
   let mountOptions = {};
   let autoStarted = false;
+  let aircraftSearchTimer = null;
   let locationSearchTimer = null;
   let assetTypeSearchTimer = null;
 
@@ -44,8 +45,14 @@
     selectedAircraftId: "",
     selectedLocationId: "",
     selectedAssetTypeId: "",
-    includeArchived: false,
+    includeArchived: true,
     search: "",
+    aircraftSearchText: "",
+    aircraftSearchRestore: null,
+    aircraftOrderSaving: false,
+    aircraftOrderStatus: "",
+    aircraftOrderStatusKind: "",
+    draggingAircraftId: "",
     locationSearch: "",
     locationSearchText: "",
     assetTypeSearch: "",
@@ -86,6 +93,22 @@
   function money(value) { const n = Number(value); return Number.isFinite(n) ? `$${n.toFixed(2)}` : ""; }
   function numberOrBlank(value) { return value === null || value === undefined ? "" : String(value); }
   function bool(value) { return value === true || value === "true" || value === 1 || value === "1"; }
+
+  function restoreAircraftSearchFocus() {
+    const restore = state.aircraftSearchRestore;
+    if (!restore) return;
+    state.aircraftSearchRestore = null;
+    window.setTimeout(() => {
+      const input = field("aircraft-search");
+      if (!input) return;
+      try { input.focus({ preventScroll: true }); } catch { input.focus(); }
+      try {
+        const start = Number.isFinite(restore.start) ? Math.min(restore.start, input.value.length) : input.value.length;
+        const end = Number.isFinite(restore.end) ? Math.min(restore.end, input.value.length) : start;
+        input.setSelectionRange(start, end);
+      } catch {}
+    }, 0);
+  }
 
   function restoreLocationSearchFocus() {
     const restore = state.locationSearchRestore;
@@ -679,7 +702,7 @@
     return {
       ...d,
       organization_id: state.orgId,
-      include_archived: state.includeArchived,
+      include_archived: true,
       display_name: d.display_name || d.preferred_name || d.tail_number,
       specs_json: { source: "aircraft_admin_0113A", asset_type: "aircraft", features: featureKeys(d) },
       operational_json: { status_note: d.dispatch_note || "" },
@@ -792,7 +815,6 @@
       state.aircraft = arr(result.aircraft);
       state.locations = arr(result.locations);
       state.assetTypes = arr(result.asset_types || result.assetTypes || state.assetTypes);
-      state.includeArchived = true;
       const saved = obj(result.aircraft_record);
       state.selectedAircraftId = clean(saved.operational_asset_id || id);
       state.draft = draftFromAircraft(saved);
@@ -824,19 +846,154 @@
     finally { state.saving = false; renderActionState(); }
   }
 
-  function newAircraft() { if (!confirmDiscard()) return; state.selectedAircraftId = ""; state.draft = emptyAircraftDraft(); setDirty(false); setStatus("New aircraft draft ready."); render(); }
+  function newAircraft() { if (!confirmDiscard()) return; state.statusFilter = "all"; state.selectedAircraftId = ""; state.draft = emptyAircraftDraft(); setDirty(false); setStatus("New aircraft draft ready."); render(); }
   function clearAircraft() { if (!confirmDiscard()) return; state.draft = emptyAircraftDraft(); state.selectedAircraftId = ""; setDirty(false); render(); }
   function newLocation() { if (!confirmDiscard("You have unsaved location changes. Continue?")) return; state.selectedLocationId = ""; state.locationDraft = emptyLocationDraft(); setLocationDirty(false); render(); }
 
-  function filteredAircraft() {
-    const q = lower(state.search);
-    return state.aircraft.filter(a => {
-      const archived = !!a.archived_at || clean(a.asset_record_status) === "archived";
-      if (!state.includeArchived && archived) return false;
-      if (state.statusFilter !== "all" && clean(a.status_key) !== state.statusFilter) return false;
-      if (!q) return true;
-      return [a.tail_number, a.display_name, a.aircraft_make, a.aircraft_model, a.icao_type_code, a.base_location_name, a.base_airport_identifier].some(v => lower(v).includes(q));
+  function aircraftRecordStatus(a) {
+    if (!a) return "available";
+    if (a.archived_at || clean(a.asset_record_status) === "archived") return "archived";
+    if (bool(a.do_not_dispatch)) return "do-not-dispatch";
+    const key = clean(a.status_key || a.asset_record_status || "available");
+    return ["available", "maintenance", "grounded", "do-not-dispatch", "inactive", "archived"].includes(key) ? key : "available";
+  }
+
+  function sortedAircraft(list = state.aircraft) {
+    const rank = { available: 0, maintenance: 0, grounded: 0, "do-not-dispatch": 0, inactive: 1, archived: 2 };
+    return arr(list).slice().sort((a, b) => {
+      const as = aircraftRecordStatus(a);
+      const bs = aircraftRecordStatus(b);
+      if ((rank[as] ?? 9) !== (rank[bs] ?? 9)) return (rank[as] ?? 9) - (rank[bs] ?? 9);
+      const ao = Number(a.sort_order ?? (as === "archived" ? 999 : 100));
+      const bo = Number(b.sort_order ?? (bs === "archived" ? 999 : 100));
+      if (Number.isFinite(ao) && Number.isFinite(bo) && ao !== bo) return ao - bo;
+      if (Number.isFinite(ao) && !Number.isFinite(bo)) return -1;
+      if (!Number.isFinite(ao) && Number.isFinite(bo)) return 1;
+      return clean(a.tail_number || a.display_name || a.asset_key).localeCompare(clean(b.tail_number || b.display_name || b.asset_key));
     });
+  }
+
+  function aircraftRowsForCurrentSearch() {
+    const q = lower(state.search);
+    const filter = clean(state.statusFilter || "all");
+    return sortedAircraft().filter(a => {
+      const status = aircraftRecordStatus(a);
+      if (filter !== "all" && status !== filter) return false;
+      if (!q) return true;
+      const haystack = [a.tail_number, a.display_name, a.aircraft_make, a.aircraft_model, a.icao_type_code, a.base_location_name, a.base_airport_identifier, status].join(" ").toLowerCase();
+      return haystack.includes(q);
+    });
+  }
+
+  function filteredAircraft() { return aircraftRowsForCurrentSearch(); }
+
+  function renumberAircraft(list) {
+    let activeIndex = 0;
+    return arr(list).map(a => {
+      const status = aircraftRecordStatus(a);
+      if (status === "archived") return { ...a, sort_order: 999 };
+      activeIndex += 1;
+      return { ...a, sort_order: activeIndex * 10 };
+    });
+  }
+
+  function aircraftPayloadFromRecord(a) {
+    const d = draftFromAircraft(a);
+    const features = featureKeys(d);
+    return {
+      ...d,
+      organization_id: state.orgId,
+      include_archived: true,
+      display_name: d.display_name || d.preferred_name || d.tail_number,
+      sort_order: aircraftRecordStatus(a) === "archived" ? "999" : numberOrBlank(a.sort_order || 100),
+      specs_json: { source: "aircraft_admin_0115E", asset_type: "aircraft", features },
+      operational_json: { status_note: d.dispatch_note || "" },
+      usage_json: { usage_tracking_basis: d.usage_tracking_basis, current_tach: d.current_tach, current_hobbs: d.current_hobbs, current_airframe_hours: d.current_airframe_hours },
+      billing_json: { billing_basis: d.billing_basis, fuel_included: !!d.fuel_included, tax_behavior: d.tax_behavior },
+      maintenance_json: { placeholder: true, note: "Reminder and squawk systems are separate modules." },
+      media_json: { primary_photo_url: d.primary_photo_url, panel_photo_url: d.panel_photo_url },
+      settings_json: { saved_from: "aircraft_admin_0115E" }
+    };
+  }
+
+  function setAircraftOrderStatus(message, kind = "") {
+    state.aircraftOrderStatus = message || "";
+    state.aircraftOrderStatusKind = kind || "";
+    document.querySelectorAll("[data-aircraft-order-status]").forEach(el => {
+      el.className = `aircraft-order-status ${state.aircraftOrderStatusKind || ""}`;
+      el.textContent = state.aircraftOrderStatus;
+      el.style.display = state.aircraftOrderStatus ? "inline-flex" : "none";
+    });
+  }
+
+  function moveAircraftInList(sourceId, targetId, afterTarget = false) {
+    const list = sortedAircraft();
+    const sourceIndex = list.findIndex(a => clean(a.operational_asset_id) === clean(sourceId));
+    if (sourceIndex < 0) return null;
+    const [source] = list.splice(sourceIndex, 1);
+    const targetIndex = list.findIndex(a => clean(a.operational_asset_id) === clean(targetId));
+    if (targetIndex < 0) return null;
+    list.splice(afterTarget ? targetIndex + 1 : targetIndex, 0, source);
+    return renumberAircraft(list);
+  }
+
+  function moveAircraftByStep(aircraftId, direction) {
+    const visible = aircraftRowsForCurrentSearch();
+    const index = visible.findIndex(a => clean(a.operational_asset_id) === clean(aircraftId));
+    if (index < 0) return null;
+    if (direction === "up" && index > 0) return moveAircraftInList(aircraftId, visible[index - 1].operational_asset_id, false);
+    if (direction === "down" && index < visible.length - 1) return moveAircraftInList(aircraftId, visible[index + 1].operational_asset_id, true);
+    return null;
+  }
+
+  function canReorderAircraft() {
+    if (state.saving || state.aircraftOrderSaving) return false;
+    if (state.dirty || state.locationDirty || state.assetTypeDirty) {
+      setStatus("Save or discard changes before reordering aircraft.", "error");
+      return false;
+    }
+    return true;
+  }
+
+  async function persistAircraftOrder(nextAircraft) {
+    if (!nextAircraft || !nextAircraft.length || !canReorderAircraft()) return;
+    const previousAircraft = state.aircraft.map(a => ({ ...a }));
+    const previousDraft = state.draft ? { ...state.draft } : null;
+    const previousSelectedId = state.selectedAircraftId;
+    const previousById = new Map(previousAircraft.map(a => [clean(a.operational_asset_id), a]));
+    const changed = nextAircraft.filter(a => {
+      const prev = previousById.get(clean(a.operational_asset_id));
+      return prev && Number(prev.sort_order ?? 100) !== Number(a.sort_order ?? 100);
+    });
+    if (!changed.length) return;
+    state.aircraft = nextAircraft;
+    const selected = selectedAircraft();
+    if (selected) state.draft = draftFromAircraft(selected);
+    state.aircraftOrderSaving = true;
+    setAircraftOrderStatus("Saving order...", "");
+    render();
+    try {
+      let result = null;
+      for (const aircraft of changed) result = await callAccess("organization_save_aircraft", aircraftPayloadFromRecord(aircraft));
+      if (result) {
+        state.aircraft = arr(result.aircraft);
+        state.locations = arr(result.locations || state.locations);
+        state.assetTypes = arr(result.asset_types || result.assetTypes || state.assetTypes);
+      }
+      if (previousSelectedId) state.selectedAircraftId = previousSelectedId;
+      const refreshed = selectedAircraft();
+      if (refreshed) state.draft = draftFromAircraft(refreshed);
+      state.aircraftOrderSaving = false;
+      setAircraftOrderStatus("Order saved.", "ok");
+      render();
+    } catch (error) {
+      state.aircraft = previousAircraft;
+      state.selectedAircraftId = previousSelectedId;
+      state.draft = previousDraft;
+      state.aircraftOrderSaving = false;
+      setAircraftOrderStatus(error instanceof Error ? `Order could not be saved: ${error.message}` : "Order could not be saved.", "error");
+      render();
+    }
   }
 
   function statusBadge(statusKey, doNotDispatch) {
@@ -876,30 +1033,52 @@
   }
 
   function renderList() {
-    const rows = filteredAircraft();
+    const rows = aircraftRowsForCurrentSearch();
+    const statusFilters = [["all","All"],["available","Available"],["maintenance","Maintenance"],["grounded","Grounded"],["do-not-dispatch","Do Not Dispatch"],["inactive","Inactive"],["archived","Archived"]];
+    const statusText = (a) => {
+      const status = aircraftRecordStatus(a);
+      if (status === "do-not-dispatch") return "Do Not Dispatch";
+      return status.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    };
     return `
       <section class="aircraft-card aircraft-list-card">
-        <div class="aircraft-section-head">
-          <div><h2>Aircraft</h2><p>${rows.length} shown${state.includeArchived ? " including archived" : ""}.</p></div>
+        <div class="aircraft-section-head compact">
+          <div><h2>Assets / Aircraft</h2><p>${rows.length} shown.</p></div>
           <button class="aircraft-button" id="aircraft-new">New Aircraft</button>
         </div>
-        <div class="aircraft-filter-row">
-          <input id="aircraft-search" value="${attr(state.search)}" placeholder="Search tail, model, base...">
-          <select id="aircraft-status-filter">
-            ${["all","available","maintenance","grounded","do-not-dispatch","inactive"].map(v => `<option value="${v}" ${state.statusFilter === v ? "selected" : ""}>${v === "all" ? "All status" : esc(v.replace(/-/g," "))}</option>`).join("")}
+        <div class="aircraft-module-divider"></div>
+        <div class="aircraft-filter-row asset-type-filter-row">
+          <select id="aircraft-status-filter" aria-label="Filter aircraft by status">
+            ${statusFilters.map(([value,label]) => `<option value="${value}" ${state.statusFilter === value ? "selected" : ""}>${label}</option>`).join("")}
           </select>
-          <label class="aircraft-check"><input id="aircraft-include-archived" type="checkbox" ${state.includeArchived ? "checked" : ""}> Include archived</label>
         </div>
-        <div class="aircraft-list">
-          ${rows.length ? rows.map(a => {
+        <div class="aircraft-list-tools"><input id="aircraft-search" value="${attr(state.aircraftSearchText)}" placeholder="Search tail, model, base..."></div>
+        <div class="aircraft-order-tools">
+          <span class="aircraft-order-hint">Drag or use arrows to sort. Archived aircraft stay at the bottom.</span>
+          <span data-aircraft-order-status class="aircraft-order-status ${state.aircraftOrderStatusKind}" style="display:${state.aircraftOrderStatus ? "inline-flex" : "none"}">${esc(state.aircraftOrderStatus)}</span>
+        </div>
+        <div class="aircraft-list aircraft-reorder-list">
+          ${rows.length ? rows.map((a, index) => {
             const selected = clean(a.operational_asset_id) === state.selectedAircraftId;
+            const id = attr(a.operational_asset_id);
             const sub = [a.aircraft_year, a.aircraft_make, a.aircraft_model, a.icao_type_code].filter(Boolean).join(" ");
             const base = clean(a.base_airport_identifier || a.home_base || a.base_location_name || "No base set");
-            return `<button class="aircraft-row ${selected ? "selected" : ""}" data-aircraft-id="${attr(a.operational_asset_id)}">
-              <span class="aircraft-row-title">${esc(a.tail_number || a.display_name || "Aircraft")}</span>
-              <span class="aircraft-row-sub">${esc(sub || "Aircraft details not complete")}</span>
-              <span class="aircraft-row-meta">${esc(base)} ${statusBadge(a.status_key, a.do_not_dispatch)}</span>
-            </button>`;
+            const status = aircraftRecordStatus(a);
+            const canMove = status !== "archived" && !state.aircraftOrderSaving;
+            return `<div class="aircraft-location-row aircraft-record-row ${selected ? "selected" : ""} ${state.aircraftOrderSaving ? "saving" : ""} ${status === "archived" ? "archived" : ""} ${status === "inactive" ? "inactive" : ""}" draggable="${canMove ? "true" : "false"}" data-aircraft-row data-aircraft-id="${id}">
+              <button class="aircraft-location-main" type="button" data-aircraft-select="${id}">
+                <span class="aircraft-drag-handle" aria-hidden="true">☰</span>
+                <span class="aircraft-location-copy">
+                  <strong>${esc(a.tail_number || a.display_name || "Aircraft")}</strong>
+                  <span class="aircraft-location-meta">${esc([sub || "Aircraft details not complete", base].filter(Boolean).join(" · "))}</span>
+                  <span class="aircraft-list-badge ${status === "archived" ? "archived" : status === "inactive" ? "inactive" : ""}">${esc(statusText(a))}</span>
+                </span>
+              </button>
+              <span class="aircraft-order-buttons">
+                <button type="button" class="aircraft-order-button" data-aircraft-move="${id}" data-direction="up" ${index === 0 || !canMove ? "disabled" : ""} aria-label="Move aircraft up">▲</button>
+                <button type="button" class="aircraft-order-button" data-aircraft-move="${id}" data-direction="down" ${index === rows.length - 1 || !canMove ? "disabled" : ""} aria-label="Move aircraft down">▼</button>
+              </span>
+            </div>`;
           }).join("") : `<div class="aircraft-empty">No aircraft match the current filters.</div>`}
         </div>
       </section>`;
@@ -967,7 +1146,6 @@
         ${inputHtml("Model", "aircraft_model", "text", "172N")}
         ${inputHtml("ICAO type code", "icao_type_code", "text", "C172")}
         ${inputHtml("Serial number", "serial_number", "text", "Optional")}
-        ${inputHtml("Sort order", "sort_order", "number", "100")}
       </div>`;
     if (state.activeTab === "classification") return `
       <div class="aircraft-form-grid">
@@ -1181,7 +1359,7 @@
 
   function renderDebug() {
     if (!state.debug) return "";
-    return `<section class="aircraft-card aircraft-debug"><h2>Debug</h2><pre>${esc(JSON.stringify({ version: VERSION, email: state.email, orgId: state.orgId, aircraft: state.aircraft.length, locations: state.locations.length, assetTypes: state.assetTypes.length, dirty: state.dirty, locationDirty: state.locationDirty, assetTypeDirty: state.assetTypeDirty, steps: state.steps, lastResult: state.lastResult }, null, 2))}</pre></section>`;
+    return `<section class="aircraft-card aircraft-debug"><h2>Debug</h2><pre>${esc(JSON.stringify({ version: VERSION, email: state.email, orgId: state.orgId, aircraft: state.aircraft.length, locations: state.locations.length, assetTypes: state.assetTypes.length, dirty: state.dirty, locationDirty: state.locationDirty, assetTypeDirty: state.assetTypeDirty, aircraftOrderSaving: state.aircraftOrderSaving, steps: state.steps, lastResult: state.lastResult }, null, 2))}</pre></section>`;
   }
 
   function render() {
@@ -1204,7 +1382,7 @@
         .aircraft-pill{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.03em;background:color-mix(in srgb,var(--air-primary) 12%,#fff);color:var(--air-primary);}.aircraft-pill.ok{background:#eaf7ef;color:#196f3b;}.aircraft-pill.warn{background:#fff5d8;color:var(--air-warning);}.aircraft-pill.danger{background:#ffecec;color:var(--air-danger);}.aircraft-pill.neutral{background:#eef3f8;color:#30435c;}
         .aircraft-filter-row{display:grid;grid-template-columns:1fr 145px auto;gap:8px;margin:12px 0;align-items:center;}.aircraft-filter-row input,.aircraft-filter-row select,.aircraft-field input,.aircraft-field select,.aircraft-field textarea{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#172033;font-size:13px;}.aircraft-field textarea{min-height:82px;resize:vertical;font-family:Arial,Helvetica,sans-serif;}.aircraft-check{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:800;color:#334155;}
         .aircraft-list{display:flex;flex-direction:column;gap:8px;}.aircraft-row,.aircraft-location-row{width:100%;border:1px solid #d7e0ea;background:#fff;border-radius:13px;padding:11px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:4px;}.aircraft-row.selected,.aircraft-location-row.selected{border-color:var(--air-primary);box-shadow:inset 4px 0 0 var(--air-primary);background:color-mix(in srgb,var(--air-secondary) 38%,#fff);}.aircraft-row-title{font-weight:900;font-size:15px;}.aircraft-row-sub,.aircraft-row-meta,.aircraft-location-row span{color:var(--air-muted);font-size:12px;}.aircraft-row-meta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;}
-        .aircraft-location-row{padding:0;display:grid;grid-template-columns:minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab;}.aircraft-location-row.dragging{opacity:.55;}.aircraft-location-row.drag-over{outline:2px dashed var(--air-primary);outline-offset:2px;}.aircraft-location-row.saving{opacity:.75;cursor:wait;}.aircraft-location-row.archived{background:#f1f5f9;opacity:.76;}.aircraft-location-row.inactive{background:#fafaf8;}.aircraft-location-row.archived .aircraft-location-copy strong,.aircraft-location-row.archived .aircraft-location-copy span{color:#64748b;}.aircraft-location-main{border:0;background:transparent;text-align:left;padding:11px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:9px;align-items:flex-start;cursor:pointer;min-width:0;color:inherit;}.aircraft-drag-handle{font-size:13px;line-height:1;color:var(--air-muted);padding-top:3px;}.aircraft-location-copy{display:flex;flex-direction:column;gap:4px;min-width:0;overflow:hidden;}.aircraft-location-copy strong{color:#172033;font-size:14px;white-space:normal;overflow-wrap:anywhere;line-height:1.25;}.aircraft-location-meta{color:var(--air-muted);font-size:12px;white-space:normal;overflow-wrap:anywhere;line-height:1.3;}.aircraft-order-buttons{display:flex;flex-direction:column;border-left:1px solid #e2e8f0;min-width:34px;}.aircraft-order-button{border:0;border-bottom:1px solid #e2e8f0;background:#f8fafc;color:var(--air-primary);font-weight:900;width:34px;min-height:28px;cursor:pointer;}.aircraft-order-button:last-child{border-bottom:0;}.aircraft-order-button:disabled{opacity:.35;cursor:not-allowed;}.aircraft-order-tools{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin:-2px 0 8px;font-size:12px;color:var(--air-muted);flex-wrap:wrap;}.aircraft-order-status{display:inline-flex;border-radius:999px;padding:5px 8px;background:#eef3f8;color:#334155;font-weight:900;}.aircraft-order-status.ok{background:#eaf7ef;color:#196f3b;}.aircraft-order-status.error{background:#ffecec;color:var(--air-danger);}.aircraft-order-hint{white-space:normal;line-height:1.25;min-width:0;}.asset-type-filter-row{margin:0 0 8px;}.asset-type-filter-row select{width:100%;}.aircraft-list-badge{align-self:flex-start;border-radius:999px;padding:4px 7px;font-size:10px;font-weight:900;letter-spacing:.04em;text-transform:uppercase;background:#eaf7ef;color:#196f3b;white-space:nowrap;max-width:100%;}.aircraft-list-badge.inactive{background:#fff7ed;color:#9a3412;}.aircraft-list-badge.archived{background:#e2e8f0;color:#475569;}
+        .aircraft-location-row{padding:0;display:grid;grid-template-columns:minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab;}.aircraft-location-row.dragging{opacity:.55;}.aircraft-location-row.drag-over{outline:2px dashed var(--air-primary);outline-offset:2px;}.aircraft-location-row.saving{opacity:.75;cursor:wait;}.aircraft-location-row.archived{background:#f1f5f9;opacity:.76;}.aircraft-location-row.inactive{background:#fafaf8;}.aircraft-location-row.archived .aircraft-location-copy strong,.aircraft-location-row.archived .aircraft-location-copy span{color:#64748b;}.aircraft-record-row{cursor:grab;}.aircraft-record-row .aircraft-list-badge{margin-top:2px;}.aircraft-location-main{border:0;background:transparent;text-align:left;padding:11px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:9px;align-items:flex-start;cursor:pointer;min-width:0;color:inherit;}.aircraft-drag-handle{font-size:13px;line-height:1;color:var(--air-muted);padding-top:3px;}.aircraft-location-copy{display:flex;flex-direction:column;gap:4px;min-width:0;overflow:hidden;}.aircraft-location-copy strong{color:#172033;font-size:14px;white-space:normal;overflow-wrap:anywhere;line-height:1.25;}.aircraft-location-meta{color:var(--air-muted);font-size:12px;white-space:normal;overflow-wrap:anywhere;line-height:1.3;}.aircraft-order-buttons{display:flex;flex-direction:column;border-left:1px solid #e2e8f0;min-width:34px;}.aircraft-order-button{border:0;border-bottom:1px solid #e2e8f0;background:#f8fafc;color:var(--air-primary);font-weight:900;width:34px;min-height:28px;cursor:pointer;}.aircraft-order-button:last-child{border-bottom:0;}.aircraft-order-button:disabled{opacity:.35;cursor:not-allowed;}.aircraft-order-tools{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin:-2px 0 8px;font-size:12px;color:var(--air-muted);flex-wrap:wrap;}.aircraft-order-status{display:inline-flex;border-radius:999px;padding:5px 8px;background:#eef3f8;color:#334155;font-weight:900;}.aircraft-order-status.ok{background:#eaf7ef;color:#196f3b;}.aircraft-order-status.error{background:#ffecec;color:var(--air-danger);}.aircraft-order-hint{white-space:normal;line-height:1.25;min-width:0;}.asset-type-filter-row{margin:0 0 8px;}.asset-type-filter-row select{width:100%;}.aircraft-list-badge{align-self:flex-start;border-radius:999px;padding:4px 7px;font-size:10px;font-weight:900;letter-spacing:.04em;text-transform:uppercase;background:#eaf7ef;color:#196f3b;white-space:nowrap;max-width:100%;}.aircraft-list-badge.inactive{background:#fff7ed;color:#9a3412;}.aircraft-list-badge.archived{background:#e2e8f0;color:#475569;}
         .aircraft-tabs{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0;}.aircraft-tabs button{border:1px solid #cbd5e1;background:#fff;color:#26344d;border-radius:999px;padding:8px 11px;font-weight:900;cursor:pointer;}.aircraft-tabs button.active{background:var(--air-primary);color:#fff;border-color:var(--air-primary);}
         .aircraft-form-grid{display:grid;grid-template-columns:repeat(2,minmax(min(260px,100%),1fr));gap:10px 12px;}.aircraft-form-grid.compact{gap:8px 12px;}.aircraft-field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px;min-width:0;} .aircraft-field input,.aircraft-field select,.aircraft-field textarea{min-width:0;}.aircraft-field span{font-size:12px;font-weight:900;color:#334155;text-transform:uppercase;letter-spacing:.03em;}.aircraft-field.full{grid-column:1/-1;}.aircraft-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 4px;}.aircraft-note{background:color-mix(in srgb,var(--air-secondary) 55%,#fff);border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);border-radius:12px;padding:12px;margin-bottom:12px;color:#334155;font-size:13px;line-height:1.45;}
         .aircraft-location-layout{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:12px;min-width:0;width:100%;overflow:hidden;}.aircraft-location-list-wrap{min-width:0;}.aircraft-list-tools{margin-bottom:8px;}.aircraft-list-tools input{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#172033;font-size:13px;}.aircraft-location-list{display:flex;flex-direction:column;gap:8px;}.aircraft-location-form{min-width:0;overflow:hidden;}.aircraft-status{padding:12px;border-radius:12px;border:1px solid #d6e0ec;background:#eef3f8;color:#26344d;margin-bottom:14px;}.aircraft-status.ok{background:#eaf7ef;color:#196f3b}.aircraft-status.error{background:#ffecec;color:var(--air-danger);border-color:#ffc6c6;}.aircraft-empty{border:1px dashed #cbd5e1;border-radius:12px;padding:14px;color:var(--air-muted);background:#f8fafc;}.aircraft-debug pre{background:#101827;color:#e7edf6;border-radius:12px;padding:12px;overflow:auto;font-size:12px;}
@@ -1226,6 +1404,8 @@
     renderActionState();
     setLocationOrderStatus(state.locationOrderStatus, state.locationOrderStatusKind);
     setAssetTypeOrderStatus(state.assetTypeOrderStatus, state.assetTypeOrderStatusKind);
+    setAircraftOrderStatus(state.aircraftOrderStatus, state.aircraftOrderStatusKind);
+    restoreAircraftSearchFocus();
     restoreLocationSearchFocus();
     restoreAssetTypeSearchFocus();
   }
@@ -1239,10 +1419,67 @@
     field("aircraft-clear")?.addEventListener("click", clearAircraft);
     field("aircraft-save")?.addEventListener("click", saveAircraft);
     field("aircraft-archive")?.addEventListener("click", () => archiveAircraft(clean(selectedAircraft()?.asset_record_status) === "archived" || !!selectedAircraft()?.archived_at));
-    field("aircraft-search")?.addEventListener("input", e => { state.search = e.target.value; render(); });
-    field("aircraft-status-filter")?.addEventListener("change", e => { state.statusFilter = e.target.value; render(); });
-    field("aircraft-include-archived")?.addEventListener("change", async e => { state.includeArchived = !!e.target.checked; await loadAircraftAdmin(); });
-    document.querySelectorAll("[data-aircraft-id]").forEach(btn => btn.addEventListener("click", () => { if (!confirmDiscard()) return; state.selectedAircraftId = btn.dataset.aircraftId; state.draft = draftFromAircraft(selectedAircraft()); setDirty(false); render(); }));
+    field("aircraft-status-filter")?.addEventListener("change", e => {
+      const previous = state.statusFilter;
+      const nextFilter = e.target.value;
+      if (!confirmDiscard("Changing the aircraft filter will discard unsaved aircraft changes. Continue?")) { e.target.value = previous; return; }
+      state.statusFilter = nextFilter;
+      const rows = aircraftRowsForCurrentSearch();
+      if (!rows.some(a => clean(a.operational_asset_id) === state.selectedAircraftId)) {
+        state.selectedAircraftId = rows[0] ? clean(rows[0].operational_asset_id) : "";
+        state.draft = selectedAircraft() ? draftFromAircraft(selectedAircraft()) : emptyAircraftDraft();
+        setDirty(false);
+      }
+      render();
+    });
+    field("aircraft-search")?.addEventListener("input", e => {
+      const input = e.target;
+      state.aircraftSearchText = input.value;
+      if (aircraftSearchTimer) window.clearTimeout(aircraftSearchTimer);
+      aircraftSearchTimer = window.setTimeout(() => {
+        state.search = state.aircraftSearchText;
+        state.aircraftSearchRestore = {
+          start: typeof input.selectionStart === "number" ? input.selectionStart : input.value.length,
+          end: typeof input.selectionEnd === "number" ? input.selectionEnd : input.value.length
+        };
+        render();
+      }, 350);
+    });
+    document.querySelectorAll("[data-aircraft-select]").forEach(btn => btn.addEventListener("click", () => { if (!confirmDiscard()) return; state.selectedAircraftId = btn.dataset.aircraftSelect; state.draft = draftFromAircraft(selectedAircraft()); setDirty(false); render(); }));
+    document.querySelectorAll("[data-aircraft-move]").forEach(btn => btn.addEventListener("click", (event) => {
+      event.preventDefault(); event.stopPropagation();
+      const next = moveAircraftByStep(btn.dataset.aircraftMove, btn.dataset.direction);
+      if (next) persistAircraftOrder(next);
+    }));
+    document.querySelectorAll("[data-aircraft-row]").forEach(row => {
+      row.addEventListener("dragstart", (event) => {
+        if (!canReorderAircraft()) { event.preventDefault(); return; }
+        state.draggingAircraftId = row.dataset.aircraftId;
+        row.classList.add("dragging");
+        try { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", state.draggingAircraftId); } catch {}
+      });
+      row.addEventListener("dragend", () => {
+        state.draggingAircraftId = "";
+        row.classList.remove("dragging", "drag-over");
+        document.querySelectorAll(".aircraft-location-row.drag-over").forEach(el => el.classList.remove("drag-over"));
+      });
+      row.addEventListener("dragover", (event) => {
+        if (!state.draggingAircraftId || state.draggingAircraftId === row.dataset.aircraftId) return;
+        event.preventDefault(); row.classList.add("drag-over");
+        try { event.dataTransfer.dropEffect = "move"; } catch {}
+      });
+      row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+      row.addEventListener("drop", (event) => {
+        event.preventDefault(); row.classList.remove("drag-over");
+        const sourceId = clean((event.dataTransfer && event.dataTransfer.getData("text/plain")) || state.draggingAircraftId);
+        const targetId = clean(row.dataset.aircraftId);
+        if (!sourceId || !targetId || sourceId === targetId) return;
+        const rect = row.getBoundingClientRect();
+        const afterTarget = event.clientY > rect.top + rect.height / 2;
+        const next = moveAircraftInList(sourceId, targetId, afterTarget);
+        if (next) persistAircraftOrder(next);
+      });
+    });
     document.querySelectorAll("[data-tab]").forEach(btn => btn.addEventListener("click", () => { state.activeTab = btn.dataset.tab; render(); }));
     document.querySelectorAll("[data-draft-key]").forEach(el => {
       const key = el.dataset.draftKey;

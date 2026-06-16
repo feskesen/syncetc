@@ -1,16 +1,17 @@
 // CUSTOMER-ADMIN-PAGE-organization-management-current.js
-// Internal Version: 2026-06-15-115-A
+// Internal Version: 2026-06-15-115-E
 // Purpose: Customer/organization-side Organization Management console runtime. Immutable admin workbench shell with left navigation and right-panel module loading.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-15-115-A";
+  const VERSION = "2026-06-15-115-E";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
   const SUPABASE_JS_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
-  const AIRCRAFT_ADMIN_SCRIPT_URL = "https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js";
+  const AIRCRAFT_ADMIN_EXPECTED_VERSION = "2026-06-15-115-E";
+  const AIRCRAFT_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js?v=${encodeURIComponent(AIRCRAFT_ADMIN_EXPECTED_VERSION)}`;
   const ROOT_SELECTOR = "#syncetc-organization-management-root, #syncetc-organization-admin-console-root, [data-syncetc-page='organization-management']";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
   const DIRTY_MESSAGE = "You have unsaved module changes. Switch modules anyway?";
@@ -219,7 +220,6 @@
     { key: "assets-types", label: "Asset Types", short: "Classifications", group: "Assets", status: "active", kind: "aircraft", aircraftView: "asset-types", description: "Manage simple asset classifications such as aircraft, vehicles, simulators, equipment, vessels, or other asset groups." },
     { key: "assets-locations", label: "Spaces & Locations", short: "Locations", group: "Assets", status: "active", kind: "aircraft", aircraftView: "locations", description: "Manage shared locations such as airports, hangars, meeting rooms, offices, docks, storage, or other operating locations." },
     { key: "assets-aircraft", label: "Assets / Aircraft", short: "Fleet records", group: "Assets", status: "active", kind: "aircraft", aircraftView: "identity", description: "Manage aircraft identity, classification, status, visibility, usage, rates, media, and setup fields." },
-    { key: "assets-rates", label: "Rates", short: "Rate setup", group: "Assets", status: "placeholder", href: "/aircraft-admin#rates", description: "Basic rate and usage-basis setup. Full billing/finance is not built yet." },
     { key: "assets-usage", label: "Usage / Meters", short: "Hobbs/Tach/usage", group: "Assets", status: "placeholder", href: "/aircraft-admin#usage", description: "Usage basis, Hobbs/Tach/current readings, and future hours logs." },
     { key: "assets-maintenance-reminders", label: "Maintenance Reminders", short: "Due items", group: "Assets", status: "placeholder", href: "/aircraft-admin#maintenance", description: "Recurring aircraft/asset reminders by date, hours, or other basis." },
     { key: "assets-squawks", label: "Squawks / Discrepancies", short: "Maintenance issues", group: "Assets", status: "placeholder", description: "Operational discrepancy reporting and resolution workflow. Maintenance/squawk system remains separate from forum discussions." },
@@ -487,8 +487,9 @@
     host.innerHTML = `<div class="omg-module-loading">Loading Aircraft Admin…</div>`;
     window.SyncEtcAircraftAdminSuppressAutoBoot = true;
     const mountFn = () => window.SyncEtcAircraftAdmin?.mount || window.SyncEtcAircraftAdminPage?.mount;
-    if (!mountFn()) {
-      if (!aircraftScriptLoading) aircraftScriptLoading = loadScript(AIRCRAFT_ADMIN_SCRIPT_URL, "syncetc-aircraft-admin-module-script");
+    const loadedAircraftVersion = () => clean(window.SyncEtcAircraftAdmin?.version || window.SyncEtcAircraftAdminPage?.version || "");
+    if (!mountFn() || loadedAircraftVersion() !== AIRCRAFT_ADMIN_EXPECTED_VERSION) {
+      aircraftScriptLoading = loadScript(AIRCRAFT_ADMIN_SCRIPT_URL, `syncetc-aircraft-admin-module-script-${AIRCRAFT_ADMIN_EXPECTED_VERSION.replace(/[^A-Za-z0-9_-]/g, "-")}`);
       await aircraftScriptLoading;
     }
     const started = Date.now();

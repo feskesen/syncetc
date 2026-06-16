@@ -1,6 +1,6 @@
 // index.ts
 // Deploy target: Supabase Edge Function named core-admin-action
-// Internal Version: 2026-06-08-088-A
+// Internal Version: 2026-06-14-112-A
 // Purpose: platform-admin backend for current admin pages, media library, hardened Aircraft Admin actions, paginated history/restore, and reset-to-default workflows.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
@@ -1799,6 +1799,870 @@ async function upsertEventRsvpAdmin(serviceClient: SupabaseClientAny, body: Json
   return saved;
 }
 
+
+const NAV_MANAGER_VERSION = "2026-06-12-109-C";
+
+const NAV_ROW_DEFAULTS: JsonRecord[] = [
+  { row_key: "public", row_label: "PUBLIC", sort_order: 10, visibility_rule: "always", is_enabled: true },
+  { row_key: "user", row_label: "USER", sort_order: 20, visibility_rule: "authenticated_user", is_enabled: true },
+  { row_key: "admin", row_label: "ADMIN", sort_order: 30, visibility_rule: "organization_admin", is_enabled: true },
+  { row_key: "platform", row_label: "PLATFORM", sort_order: 40, visibility_rule: "platform_admin", is_enabled: true },
+];
+
+const NAV_RECIPE_FALLBACKS: JsonRecord[] = [
+  { recipe_key: "standard_horizontal", label: "Standard horizontal", description: "Default logo/name/header with inline navigation rows.", default_nav_display_mode: "inline_rows", sort_order: 10, status: "active" },
+  { recipe_key: "compact_horizontal", label: "Compact horizontal", description: "Smaller version of the standard header for customers that want less vertical space.", default_nav_display_mode: "inline_rows", sort_order: 20, status: "active" },
+  { recipe_key: "two_row", label: "Two row", description: "Organization name/auth on one row with navigation underneath.", default_nav_display_mode: "inline_rows", sort_order: 30, status: "active" },
+  { recipe_key: "dropdowns", label: "Dropdown groups", description: "Navigation rows render as dropdown groups.", default_nav_display_mode: "dropdowns", sort_order: 40, status: "active" },
+  { recipe_key: "minimal_login_only", label: "Minimal login only", description: "Organization name and login/logout controls with navigation tucked into a menu.", default_nav_display_mode: "side_drawer", sort_order: 50, status: "active" },
+  { recipe_key: "side_menu", label: "Side menu", description: "Branding/auth visible and navigation in a side drawer menu.", default_nav_display_mode: "side_drawer", sort_order: 60, status: "active" },
+  { recipe_key: "hybrid_top_and_side", label: "Hybrid top and side", description: "Foundation recipe for split top/side navigation behavior.", default_nav_display_mode: "side_drawer", sort_order: 70, status: "active" },
+];
+
+const NAV_PUBLIC_PAGE_KEYS = new Set(["home", "info", "about", "aircraft", "calendar", "events", "gallery", "documents", "resources", "contact", "apply-now", "apply"]);
+const NAV_USER_PAGE_KEYS = new Set(["dashboard", "user-dashboard", "my-profile", "profile", "roster", "member-roster", "member-documents", "user-documents"]);
+const NAV_ADMIN_PAGE_KEYS = new Set(["customer-admin", "admin-dashboard", "applicant-tracker", "contact-tracker", "events-admin", "events-manager", "organization-people", "people", "internal-documents", "documents-admin", "aircraft-admin"]);
+const NAV_PLATFORM_PAGE_KEYS = new Set(["access-admin", "customer-builder", "page-setup", "header-navigation-setup", "organization-settings", "layout-designer", "template-detail", "page-editor", "customer-assets", "media-library", "renderer-preview"]);
+
+function navBool(value: unknown, fallback = true): boolean {
+  if (typeof value === "boolean") return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return fallback;
+}
+
+function navNumber(value: unknown, fallback = 100): number {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? Math.trunc(n) : fallback;
+}
+
+function navString(value: unknown, fallback = ""): string {
+  const text = String(value ?? "").trim();
+  return text || fallback;
+}
+
+function navNormalizeKey(value: unknown, fallback = ""): string {
+  const k = normalizeKey(value || fallback);
+  return k || fallback;
+}
+
+function navNormalizeUnderscoreKey(value: unknown, fallback = ""): string {
+  const raw = String(value || fallback)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_ -]+/g, "_")
+    .replace(/[ -]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+  return raw || fallback;
+}
+
+function navNormalizeVisibilityRule(value: unknown, rowKey: unknown = "public"): string {
+  const raw = navNormalizeUnderscoreKey(value || "", "");
+  if (["always", "public", "all", "everyone"].includes(raw)) return "always";
+  if (["authenticated_user", "authenticated", "logged_in", "logged_in_user", "user", "member", "members"].includes(raw)) return "authenticated_user";
+  if (["organization_admin", "org_admin", "admin", "customer_admin"].includes(raw)) return "organization_admin";
+  if (["platform_admin", "platform", "platform_only"].includes(raw)) return "platform_admin";
+  if (["hidden", "disabled", "none"].includes(raw)) return "hidden";
+  const rk = navNormalizeUnderscoreKey(rowKey || "public", "public");
+  if (rk === "public") return "always";
+  if (rk === "user") return "authenticated_user";
+  if (rk === "admin") return "organization_admin";
+  if (rk === "platform") return "platform_admin";
+  return "always";
+}
+
+function navNormalizeAccessLevel(value: unknown, fallback = "user"): string {
+  const raw = navNormalizeUnderscoreKey(value || fallback, fallback);
+  if (["public", "all", "everyone"].includes(raw)) return "public";
+  if (["logged_in", "authenticated", "authenticated_user"].includes(raw)) return "logged_in";
+  if (["user", "member", "members", "member_user"].includes(raw)) return "user";
+  if (["organization_admin", "org_admin", "admin", "customer_admin"].includes(raw)) return "organization_admin";
+  if (["platform_admin", "platform"].includes(raw)) return "platform_admin";
+  if (["disabled", "hidden", "none"].includes(raw)) return "disabled";
+  return fallback;
+}
+
+function navPageHref(page: JsonRecord): string {
+  const pageKey = navNormalizeKey(page.page_key || page.template_key || page.nav_label || "page");
+  const rawSlug = navString(page.page_slug || page.slug || page.href || "");
+  if (rawSlug && /^https?:\/\//i.test(rawSlug)) return rawSlug;
+  if (rawSlug) return rawSlug.startsWith("/") ? rawSlug : `/${rawSlug}`;
+  if (pageKey === "home") return "/";
+  if (pageKey === "apply") return "/apply-now";
+  return `/${pageKey}`;
+}
+
+function navDefaultRowForPage(page: JsonRecord): string {
+  const pageKey = navNormalizeKey(page.page_key || page.template_key || page.nav_label);
+  if (NAV_PUBLIC_PAGE_KEYS.has(pageKey)) return "public";
+  if (NAV_USER_PAGE_KEYS.has(pageKey)) return "user";
+  if (NAV_ADMIN_PAGE_KEYS.has(pageKey)) return "admin";
+  if (NAV_PLATFORM_PAGE_KEYS.has(pageKey)) return "platform";
+  const templateKey = navNormalizeKey(page.template_key || "");
+  if (templateKey.includes("admin")) return "admin";
+  if (templateKey.includes("member") || templateKey.includes("user")) return "user";
+  return "public";
+}
+
+function navDefaultAccessForPage(page: JsonRecord, rowKey: string): string {
+  const pageKey = navNormalizeKey(page.page_key || page.template_key || page.nav_label);
+  if (rowKey === "platform" || NAV_PLATFORM_PAGE_KEYS.has(pageKey)) return "platform_admin";
+  if (rowKey === "admin" || NAV_ADMIN_PAGE_KEYS.has(pageKey)) return "organization_admin";
+  if (rowKey === "user" || NAV_USER_PAGE_KEYS.has(pageKey)) return "user";
+  return "public";
+}
+
+function navDefaultRiskForAccess(accessLevel: string): string {
+  if (accessLevel === "public") return "low_public";
+  if (accessLevel === "platform_admin") return "platform_system";
+  if (accessLevel === "organization_admin") return "sensitive_admin_data";
+  return "normal_restricted";
+}
+
+function navCanonicalRecipe(value: unknown): string {
+  const k = navNormalizeKey(value || "standard_horizontal").replace(/-/g, "_");
+  if (["pill_rows", "standard", "standard_horizontal"].includes(k)) return "standard_horizontal";
+  if (["compact", "compact_pill_rows", "compact_horizontal"].includes(k)) return "compact_horizontal";
+  if (["two_row", "rows", "stacked"].includes(k)) return "two_row";
+  if (["dropdown", "dropdowns", "top_dropdowns"].includes(k)) return "dropdowns";
+  if (["minimal", "minimal_login_only", "login_only"].includes(k)) return "minimal_login_only";
+  if (["side_menu", "side_drawer", "hamburger"].includes(k)) return "side_menu";
+  if (["hybrid", "hybrid_top_and_side"].includes(k)) return "hybrid_top_and_side";
+  return k || "standard_horizontal";
+}
+
+function navLegacyLayoutForRecipe(recipeKey: unknown): string {
+  const recipe = navCanonicalRecipe(recipeKey);
+  if (recipe === "compact_horizontal") return "compact-pill-rows";
+  if (["dropdowns", "minimal_login_only", "side_menu", "hybrid_top_and_side"].includes(recipe)) return "dropdown";
+  return "pill-rows";
+}
+
+function navErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    const rec = error as JsonRecord;
+    const parts = [rec.message, rec.details, rec.hint, rec.code].filter((part) => typeof part === "string" && part.trim()).map((part) => String(part));
+    if (parts.length) return parts.join(" | ");
+    try { return JSON.stringify(error); } catch { return String(error); }
+  }
+  return String(error);
+}
+
+async function navInsertSingleWithFallback(serviceClient: SupabaseClientAny, table: string, payloads: JsonRecord[]): Promise<JsonRecord> {
+  let lastError: unknown = null;
+  for (const payload of payloads) {
+    const result = await serviceClient.from(table).insert(payload).select("*").single();
+    if (!result.error && result.data) return result.data as JsonRecord;
+    lastError = result.error;
+  }
+  throw new Error(navErrorMessage(lastError || `Insert failed for ${table}.`));
+}
+
+async function navUpdateSingleWithFallback(serviceClient: SupabaseClientAny, table: string, idColumn: string, idValue: string, payloads: JsonRecord[], selectColumns = "*"): Promise<JsonRecord | null> {
+  let lastError: unknown = null;
+  for (const payload of payloads) {
+    const result = await serviceClient.from(table).update(payload).eq(idColumn, idValue).select(selectColumns).maybeSingle();
+    if (!result.error) return (result.data || null) as JsonRecord | null;
+    lastError = result.error;
+  }
+  throw new Error(navErrorMessage(lastError || `Update failed for ${table}.`));
+}
+
+function navDisplayForRecipe(recipeKey: unknown, requested: unknown): string {
+  const explicit = navNormalizeKey(requested || "").replace(/-/g, "_");
+  if (["inline_rows", "dropdowns", "side_drawer", "tabs"].includes(explicit)) return explicit;
+  const recipe = navCanonicalRecipe(recipeKey);
+  if (recipe === "dropdowns") return "dropdowns";
+  if (["minimal_login_only", "side_menu", "hybrid_top_and_side"].includes(recipe)) return "side_drawer";
+  return "inline_rows";
+}
+
+async function navSafeSelect(serviceClient: SupabaseClientAny, table: string, queryBuilder: (query: any) => any): Promise<JsonRecord[]> {
+  const query = queryBuilder(serviceClient.from(table).select("*"));
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data || []) as JsonRecord[];
+}
+
+async function navigationListOrganizations(serviceClient: SupabaseClientAny): Promise<JsonRecord[]> {
+  const { data, error } = await serviceClient
+    .from("core_organizations")
+    .select("organization_id, organization_key, display_name, legal_name, status, archived_at")
+    .is("archived_at", null)
+    .order("display_name", { ascending: true });
+  if (error) throw error;
+  return (data || []) as JsonRecord[];
+}
+
+async function navigationListRecipes(serviceClient: SupabaseClientAny): Promise<JsonRecord[]> {
+  try {
+    const { data, error } = await serviceClient
+      .from("core_header_recipe_cookbook_v1")
+      .select("*")
+      .order("sort_order", { ascending: true });
+    if (!error && Array.isArray(data) && data.length) return data as JsonRecord[];
+  } catch {
+    // Cookbook view is optional during rollout.
+  }
+  return NAV_RECIPE_FALLBACKS;
+}
+
+async function navigationFetchPages(serviceClient: SupabaseClientAny, organizationId: string): Promise<JsonRecord[]> {
+  let pages: JsonRecord[] = [];
+  try {
+    const { data, error } = await serviceClient
+      .from("core_customer_pages")
+      .select("*")
+      .eq("organization_id", organizationId)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (!error && Array.isArray(data)) pages = data as JsonRecord[];
+  } catch {
+    pages = [];
+  }
+  if (!pages.length) {
+    const { data, error } = await serviceClient
+      .from("core_customer_pages")
+      .select("*")
+      .eq("customer_id", organizationId)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    pages = (data || []) as JsonRecord[];
+  }
+  return pages.filter((page) => !page.archived_at && navNormalizeKey(page.status || "published") !== "archived");
+}
+
+async function navigationEnsureProfile(serviceClient: SupabaseClientAny, organizationId: string): Promise<JsonRecord> {
+  const { data, error } = await serviceClient
+    .from("core_navigation_profiles")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .order("created_at", { ascending: true })
+    .limit(1);
+  if (error) throw error;
+  if (Array.isArray(data) && data.length) return data[0] as JsonRecord;
+
+  const insertPayload: JsonRecord = {
+    organization_id: organizationId,
+    profile_key: "default",
+    profile_name: "Default header",
+    header_layout_key: "pill-rows",
+    header_recipe_key: "standard_horizontal",
+    nav_display_mode: "inline_rows",
+    show_logo: true,
+    show_large_title: true,
+    show_org_context_row: false,
+    show_user_badge: true,
+    show_logout_button: true,
+    settings_json: {},
+    header_settings_json: {},
+    status: "active",
+  };
+  return await navInsertSingleWithFallback(serviceClient, "core_navigation_profiles", [
+    insertPayload,
+    (() => { const p = { ...insertPayload }; delete p.header_settings_json; delete p.header_recipe_version; return p; })(),
+    (() => { const p = { ...insertPayload }; delete p.header_settings_json; delete p.header_recipe_version; delete p.header_recipe_key; delete p.nav_display_mode; return p; })(),
+    (() => { const p = { ...insertPayload }; delete p.profile_key; delete p.status; delete p.header_settings_json; delete p.header_recipe_version; delete p.header_recipe_key; delete p.nav_display_mode; return p; })(),
+  ]);
+}
+
+async function navigationEnsureRows(serviceClient: SupabaseClientAny, organizationId: string, profileId: string): Promise<JsonRecord[]> {
+  const { data, error } = await serviceClient
+    .from("core_navigation_rows")
+    .select("*")
+    .eq("navigation_profile_id", profileId)
+    .order("sort_order", { ascending: true });
+  if (error) throw error;
+  const existing = (data || []) as JsonRecord[];
+  const byKey = new Map(existing.map((row) => [navNormalizeKey(row.row_key), row]));
+  const inserted: JsonRecord[] = [];
+  for (const def of NAV_ROW_DEFAULTS) {
+    const rowKey = String(def.row_key);
+    if (byKey.has(rowKey)) continue;
+    const payload: JsonRecord = {
+      organization_id: organizationId,
+      navigation_profile_id: profileId,
+      row_key: rowKey,
+      row_label: def.row_label,
+      sort_order: def.sort_order,
+      visibility_rule: navNormalizeVisibilityRule(def.visibility_rule, rowKey),
+      is_enabled: def.is_enabled,
+      settings_json: {},
+    };
+    try {
+      const row = await navInsertSingleWithFallback(serviceClient, "core_navigation_rows", [
+        payload,
+        (() => { const p = { ...payload }; delete p.settings_json; return p; })(),
+      ]);
+      inserted.push(row);
+    } catch (error) {
+      console.warn("navigation_row_seed_failed", navErrorMessage(error));
+    }
+  }
+  return existing.concat(inserted).sort((a, b) => navNumber(a.sort_order) - navNumber(b.sort_order));
+}
+
+async function navigationFetchAccessSettings(serviceClient: SupabaseClientAny, organizationId: string): Promise<JsonRecord[]> {
+  try {
+    const { data, error } = await serviceClient
+      .from("core_page_access_settings")
+      .select("*")
+      .eq("organization_id", organizationId)
+      .order("page_key", { ascending: true });
+    if (error) throw error;
+    return (data || []) as JsonRecord[];
+  } catch {
+    return [];
+  }
+}
+
+async function navigationEnsureAccessSettings(serviceClient: SupabaseClientAny, organizationId: string, pages: JsonRecord[]): Promise<JsonRecord[]> {
+  const existing = await navigationFetchAccessSettings(serviceClient, organizationId);
+  const byPageId = new Map(existing.map((setting) => [navString(setting.customer_page_id), setting]));
+  const inserted: JsonRecord[] = [];
+  for (const page of pages) {
+    const customerPageId = navString(page.customer_page_id);
+    if (!customerPageId || byPageId.has(customerPageId)) continue;
+    const rowKey = navDefaultRowForPage(page);
+    const accessLevel = navDefaultAccessForPage(page, rowKey);
+    const payload: JsonRecord = {
+      organization_id: organizationId,
+      site_id: page.site_id || null,
+      customer_page_id: customerPageId,
+      page_key: navNormalizeKey(page.page_key || page.template_key || page.nav_label || "page"),
+      access_level: accessLevel,
+      risk_level: navDefaultRiskForAccess(accessLevel),
+      required_permission_key: null,
+      public_renderer_key: accessLevel === "public" ? navNormalizeKey(page.page_key || page.template_key || "") : null,
+      public_renderer_enabled: accessLevel === "public",
+      dangerous_public_allowed: false,
+      settings_json: {},
+    };
+    try {
+      const setting = await navInsertSingleWithFallback(serviceClient, "core_page_access_settings", [
+        payload,
+        (() => { const p = { ...payload }; delete p.settings_json; return p; })(),
+        (() => { const p = { ...payload }; delete p.public_renderer_key; delete p.public_renderer_enabled; delete p.dangerous_public_allowed; delete p.settings_json; return p; })(),
+      ]);
+      inserted.push(setting);
+    } catch (error) {
+      console.warn("navigation_access_setting_seed_failed", navErrorMessage(error));
+    }
+  }
+  return existing.concat(inserted);
+}
+
+async function navigationEnsureItems(serviceClient: SupabaseClientAny, organizationId: string, profileId: string, rows: JsonRecord[], pages: JsonRecord[]): Promise<JsonRecord[]> {
+  const { data, error } = await serviceClient
+    .from("core_navigation_items")
+    .select("*")
+    .eq("navigation_profile_id", profileId)
+    .order("sort_order", { ascending: true });
+  if (error) throw error;
+  const existing = (data || []) as JsonRecord[];
+  const byPageId = new Map(existing.filter((item) => item.customer_page_id).map((item) => [navString(item.customer_page_id), item]));
+  const rowByKey = new Map(rows.map((row) => [navNormalizeKey(row.row_key), row]));
+  const inserted: JsonRecord[] = [];
+  for (const page of pages) {
+    const customerPageId = navString(page.customer_page_id);
+    if (!customerPageId || byPageId.has(customerPageId)) continue;
+    const pageKey = navNormalizeKey(page.page_key || page.template_key || page.nav_label || customerPageId);
+    const rowKey = navDefaultRowForPage(page);
+    const isPlatform = rowKey === "platform";
+    const payload: JsonRecord = {
+      organization_id: organizationId,
+      navigation_profile_id: profileId,
+      navigation_row_id: rowByKey.get(rowKey)?.navigation_row_id || null,
+      customer_page_id: customerPageId,
+      item_key: pageKey,
+      item_type: "page",
+      page_key: pageKey,
+      href: navPageHref(page),
+      nav_label: navString(page.nav_label || page.page_label || page.title || pageKey, pageKey),
+      row_key: rowKey,
+      sort_order: navNumber(page.sort_order, rowKey === "public" ? 100 : rowKey === "user" ? 200 : 300),
+      show_in_header: pageKey === "home" ? true : (isPlatform ? false : page.show_in_nav !== false),
+      open_in_new_tab: false,
+      status: page.status === "hidden" ? "hidden" : "published",
+      settings_json: { seeded_by: "0109-A-header-navigation-manager" },
+    };
+    try {
+      const item = await navInsertSingleWithFallback(serviceClient, "core_navigation_items", [
+        payload,
+        (() => { const p = { ...payload }; delete p.open_in_new_tab; delete p.settings_json; return p; })(),
+        (() => { const p = { ...payload }; delete p.href; delete p.open_in_new_tab; delete p.status; delete p.settings_json; return p; })(),
+      ]);
+      inserted.push(item);
+    } catch (error) {
+      console.warn("navigation_item_seed_failed", navErrorMessage(error));
+    }
+  }
+  return existing.concat(inserted).sort((a, b) => navString(a.row_key).localeCompare(navString(b.row_key)) || navNumber(a.sort_order) - navNumber(b.sort_order));
+}
+
+function navigationSanitizeProfile(profile: JsonRecord): JsonRecord {
+  const recipe = navCanonicalRecipe(profile.header_recipe_key || profile.header_layout_key || "standard_horizontal");
+  return {
+    navigation_profile_id: profile.navigation_profile_id || null,
+    organization_id: profile.organization_id || null,
+    site_id: profile.site_id || null,
+    profile_key: profile.profile_key || "default",
+    profile_name: navString(profile.profile_name || "Default header"),
+    header_layout_key: navString(profile.header_layout_key || navLegacyLayoutForRecipe(recipe), navLegacyLayoutForRecipe(recipe)),
+    header_recipe_key: recipe,
+    nav_display_mode: navDisplayForRecipe(recipe, profile.nav_display_mode),
+    header_recipe_version: profile.header_recipe_version || "0109-B",
+    show_logo: navBool(profile.show_logo, true),
+    show_large_title: navBool(profile.show_large_title, true),
+    show_org_context_row: navBool(profile.show_org_context_row, false),
+    show_user_badge: navBool(profile.show_user_badge, true),
+    show_logout_button: navBool(profile.show_logout_button, true),
+    settings_json: profile.settings_json && typeof profile.settings_json === "object" ? profile.settings_json : {},
+    header_settings_json: profile.header_settings_json && typeof profile.header_settings_json === "object" ? profile.header_settings_json : {},
+    status: profile.status || "active",
+    created_at: profile.created_at || null,
+    updated_at: profile.updated_at || null,
+  };
+}
+
+function navigationDecorateItems(items: JsonRecord[], pages: JsonRecord[], accessSettings: JsonRecord[]): JsonRecord[] {
+  const pageById = new Map(pages.map((page) => [navString(page.customer_page_id), page]));
+  const accessByPageId = new Map(accessSettings.map((setting) => [navString(setting.customer_page_id), setting]));
+  return items.map((item) => {
+    const customerPageId = navString(item.customer_page_id);
+    const page = pageById.get(customerPageId) || {};
+    const setting = accessByPageId.get(customerPageId) || {};
+    const pageKey = navNormalizeKey(item.page_key || page.page_key || item.item_key || page.template_key || item.nav_label);
+    return {
+      ...item,
+      item_key: navNormalizeKey(item.item_key || pageKey),
+      page_key: pageKey,
+      page_slug: page.page_slug || null,
+      href: navString(item.href || navPageHref(page)),
+      nav_label: navString(item.nav_label || page.nav_label || pageKey, pageKey),
+      row_key: navNormalizeKey(item.row_key || navDefaultRowForPage(page), "public"),
+      sort_order: navNumber(item.sort_order, navNumber(page.sort_order, 100)),
+      show_in_header: pageKey === "home" ? true : navBool(item.show_in_header, true),
+      open_in_new_tab: item.open_in_new_tab === true,
+      status: navString(item.status || "published"),
+      access_level: setting.access_level || navDefaultAccessForPage(page, navDefaultRowForPage(page)),
+      risk_level: setting.risk_level || navDefaultRiskForAccess(String(setting.access_level || "public")),
+      is_home: pageKey === "home" || navString(item.href) === "/",
+      is_platform_protected: navDefaultRowForPage({ ...page, page_key: pageKey }) === "platform" || NAV_PLATFORM_PAGE_KEYS.has(pageKey),
+    };
+  });
+}
+
+async function navigationBuildSetup(serviceClient: SupabaseClientAny, organizationId: string): Promise<JsonRecord> {
+  const { data: organization, error: orgError } = await serviceClient
+    .from("core_organizations")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (orgError) throw orgError;
+  if (!organization) throw new Error("Organization not found.");
+
+  const pages = await navigationFetchPages(serviceClient, organizationId);
+  const profile = await navigationEnsureProfile(serviceClient, organizationId);
+  const profileId = navString(profile.navigation_profile_id);
+  if (!profileId) throw new Error("Navigation profile is missing a profile id.");
+  const rows = await navigationEnsureRows(serviceClient, organizationId, profileId);
+  const accessSettings = await navigationEnsureAccessSettings(serviceClient, organizationId, pages);
+  const items = await navigationEnsureItems(serviceClient, organizationId, profileId, rows, pages);
+  const recipes = await navigationListRecipes(serviceClient);
+
+  return {
+    version: NAV_MANAGER_VERSION,
+    organization,
+    profile: navigationSanitizeProfile(profile),
+    profiles: [navigationSanitizeProfile(profile)],
+    recipes,
+    rows,
+    items: navigationDecorateItems(items, pages, accessSettings),
+    pages,
+    access_settings: accessSettings,
+    protected_rules: {
+      platform_admin_nav_hardcoded: true,
+      home_locked: true,
+      hide_not_delete: true,
+      customer_admin_future_limited_controls: true,
+    },
+  };
+}
+
+async function navigationWriteHistory(serviceClient: SupabaseClientAny, organizationId: string, profileId: string | null, eventType: string, actorEmail: string, note: string, snapshot: JsonRecord): Promise<void> {
+  try {
+    await serviceClient.from("core_navigation_settings_history").insert({
+      navigation_profile_id: profileId,
+      organization_id: organizationId,
+      event_type: eventType,
+      snapshot_json: snapshot,
+      saved_by_email: actorEmail,
+      note,
+    });
+  } catch (error) {
+    console.warn("navigation_history_write_failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function navigationSaveSetup(serviceClient: SupabaseClientAny, body: JsonRecord, actorEmail: string): Promise<JsonRecord> {
+  const organizationId = requireString(body, "organization_id");
+  const before = await navigationBuildSetup(serviceClient, organizationId);
+  const beforeProfile = (before.profile || {}) as JsonRecord;
+  const profileInput = optionalJsonObject(body, "profile");
+  const profileId = navString(profileInput.navigation_profile_id || beforeProfile.navigation_profile_id);
+  if (!profileId) throw new Error("Missing navigation profile id.");
+  const recipe = navCanonicalRecipe(profileInput.header_recipe_key || profileInput.header_layout_key || beforeProfile.header_recipe_key);
+  const profilePayload: JsonRecord = {
+    profile_name: navString(profileInput.profile_name || beforeProfile.profile_name || "Default header"),
+    header_layout_key: navLegacyLayoutForRecipe(recipe),
+    header_recipe_key: recipe,
+    nav_display_mode: navDisplayForRecipe(recipe, profileInput.nav_display_mode),
+    header_recipe_version: "0109-B",
+    show_logo: navBool(profileInput.show_logo, true),
+    show_large_title: navBool(profileInput.show_large_title, true),
+    show_org_context_row: navBool(profileInput.show_org_context_row, false),
+    show_user_badge: navBool(profileInput.show_user_badge, true),
+    show_logout_button: navBool(profileInput.show_logout_button, true),
+    header_settings_json: profileInput.header_settings_json && typeof profileInput.header_settings_json === "object" ? profileInput.header_settings_json : {},
+    updated_at: nowIso(),
+  };
+  await navUpdateSingleWithFallback(serviceClient, "core_navigation_profiles", "navigation_profile_id", profileId, [
+    profilePayload,
+    (() => { const p = { ...profilePayload }; delete p.updated_at; delete p.header_settings_json; return p; })(),
+    (() => { const p = { ...profilePayload }; delete p.updated_at; delete p.header_settings_json; delete p.header_recipe_key; delete p.nav_display_mode; delete p.header_recipe_version; return p; })(),
+  ], "*");
+
+  const rowInputs = Array.isArray(body.rows) ? body.rows as JsonRecord[] : [];
+  for (const row of rowInputs) {
+    const rowId = navString(row.navigation_row_id);
+    if (!rowId) continue;
+    const rowKey = navNormalizeKey(row.row_key || "");
+    if (rowKey === "platform") continue;
+    const payload: JsonRecord = {
+      row_label: navString(row.row_label || rowKey.toUpperCase(), rowKey.toUpperCase()),
+      sort_order: navNumber(row.sort_order, 100),
+      visibility_rule: navNormalizeVisibilityRule(row.visibility_rule || "always", rowKey),
+      is_enabled: rowKey === "public" ? true : navBool(row.is_enabled, true),
+      updated_at: nowIso(),
+    };
+    await navUpdateSingleWithFallback(serviceClient, "core_navigation_rows", "navigation_row_id", rowId, [
+      payload,
+      (() => { const p = { ...payload }; delete p.updated_at; return p; })(),
+    ], "navigation_row_id");
+  }
+
+  const itemInputs = Array.isArray(body.items) ? body.items as JsonRecord[] : [];
+  const beforeItemsById = new Map((before.items as JsonRecord[]).map((item) => [navString(item.navigation_item_id), item]));
+  for (const item of itemInputs) {
+    const itemId = navString(item.navigation_item_id);
+    if (!itemId) continue;
+    const existing = beforeItemsById.get(itemId) || {};
+    const pageKey = navNormalizeKey(existing.page_key || item.page_key || item.item_key || "");
+    const isHome = pageKey === "home" || navString(existing.href) === "/";
+    const isPlatform = existing.is_platform_protected === true || NAV_PLATFORM_PAGE_KEYS.has(pageKey) || navNormalizeKey(existing.row_key) === "platform";
+    if (isPlatform) continue;
+    const rowKey = navNormalizeKey(item.row_key || existing.row_key || "public", "public");
+    const payload: JsonRecord = {
+      nav_label: navString(item.nav_label || existing.nav_label || pageKey, pageKey),
+      href: navString(item.href || existing.href || (pageKey === "home" ? "/" : `/${pageKey}`)),
+      row_key: rowKey === "platform" ? "admin" : rowKey,
+      sort_order: navNumber(item.sort_order, navNumber(existing.sort_order, 100)),
+      show_in_header: isHome ? true : navBool(item.show_in_header, true),
+      open_in_new_tab: item.open_in_new_tab === true,
+      status: navNormalizeKey(item.status || existing.status || "published", "published"),
+      updated_at: nowIso(),
+    };
+    await navUpdateSingleWithFallback(serviceClient, "core_navigation_items", "navigation_item_id", itemId, [
+      payload,
+      (() => { const p = { ...payload }; delete p.updated_at; return p; })(),
+      (() => { const p = { ...payload }; delete p.updated_at; delete p.open_in_new_tab; return p; })(),
+      (() => { const p = { ...payload }; delete p.updated_at; delete p.open_in_new_tab; delete p.href; delete p.status; return p; })(),
+    ], "navigation_item_id");
+  }
+
+  const accessInputs = Array.isArray(body.access_settings) ? body.access_settings as JsonRecord[] : [];
+  const dangerousConfirmation = navString(body.dangerous_confirmation).toLowerCase();
+  const beforeAccessById = new Map((before.access_settings as JsonRecord[]).map((setting) => [navString(setting.page_access_setting_id), setting]));
+  for (const setting of accessInputs) {
+    const settingId = navString(setting.page_access_setting_id);
+    if (!settingId) continue;
+    const existing = beforeAccessById.get(settingId) || {};
+    const pageKey = navNormalizeKey(existing.page_key || setting.page_key || "");
+    if (NAV_PLATFORM_PAGE_KEYS.has(pageKey)) continue;
+    const accessLevel = navNormalizeAccessLevel(setting.access_level || existing.access_level || "user", "user");
+    const riskLevel = navNormalizeUnderscoreKey(existing.risk_level || setting.risk_level || navDefaultRiskForAccess(accessLevel), "normal_restricted");
+    const isSensitive = ["sensitive_user_data", "sensitive_admin_data", "platform_system"].includes(riskLevel);
+    const publicAttempt = accessLevel === "public" && existing.access_level !== "public" && isSensitive;
+    if (publicAttempt && dangerousConfirmation !== "i am sure") throw new Error(`Dangerous public access change for ${pageKey}. Type I AM SURE to continue.`);
+    if (publicAttempt && (existing.public_renderer_enabled !== true || existing.dangerous_public_allowed !== true)) {
+      throw new Error(`Cannot make ${pageKey} public because it does not have an approved public-safe renderer.`);
+    }
+    const payload: JsonRecord = { access_level: accessLevel, updated_at: nowIso() };
+    await navUpdateSingleWithFallback(serviceClient, "core_page_access_settings", "page_access_setting_id", settingId, [
+      payload,
+      (() => { const p = { ...payload }; delete p.updated_at; return p; })(),
+    ], "page_access_setting_id");
+  }
+
+  const after = await navigationBuildSetup(serviceClient, organizationId);
+  await navigationWriteHistory(serviceClient, organizationId, profileId, "after_save", actorEmail, navString(body.note || "Header & Navigation Manager save"), { before, after });
+  return after;
+}
+
+async function navigationResetDefaults(serviceClient: SupabaseClientAny, body: JsonRecord, actorEmail: string): Promise<JsonRecord> {
+  const organizationId = requireString(body, "organization_id");
+  const before = await navigationBuildSetup(serviceClient, organizationId);
+  const beforeProfile = (before.profile || {}) as JsonRecord;
+  const profileId = navString(beforeProfile.navigation_profile_id);
+  for (const row of before.rows as JsonRecord[]) {
+    const rowKey = navNormalizeKey(row.row_key);
+    if (rowKey === "platform") continue;
+    const def = NAV_ROW_DEFAULTS.find((r) => r.row_key === rowKey);
+    if (!def) continue;
+    await navUpdateSingleWithFallback(serviceClient, "core_navigation_rows", "navigation_row_id", navString(row.navigation_row_id), [
+      { row_label: def.row_label, sort_order: def.sort_order, visibility_rule: navNormalizeVisibilityRule(def.visibility_rule, rowKey), is_enabled: def.is_enabled, updated_at: nowIso() },
+      { row_label: def.row_label, sort_order: def.sort_order, visibility_rule: navNormalizeVisibilityRule(def.visibility_rule, rowKey), is_enabled: def.is_enabled },
+    ], "navigation_row_id");
+  }
+  for (const item of before.items as JsonRecord[]) {
+    if (item.is_platform_protected === true) continue;
+    const isHome = item.is_home === true;
+    await navUpdateSingleWithFallback(serviceClient, "core_navigation_items", "navigation_item_id", navString(item.navigation_item_id), [
+      {
+        nav_label: item.page_key === "home" ? "Home" : navString(item.page_key).split("-").map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" "),
+        row_key: item.page_key === "home" ? "public" : (item.row_key || "public"),
+        show_in_header: isHome ? true : true,
+        status: "published",
+        updated_at: nowIso(),
+      },
+      {
+        nav_label: item.page_key === "home" ? "Home" : navString(item.page_key).split("-").map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" "),
+        row_key: item.page_key === "home" ? "public" : (item.row_key || "public"),
+        show_in_header: isHome ? true : true,
+      },
+    ], "navigation_item_id");
+  }
+  const after = await navigationBuildSetup(serviceClient, organizationId);
+  await navigationWriteHistory(serviceClient, organizationId, profileId, "reset_to_defaults", actorEmail, navString(body.note || "Header & Navigation Manager reset to defaults"), { before, after });
+  return after;
+}
+
+
+
+const ORGANIZATION_SETTINGS_VERSION = "2026-06-14-112-A";
+
+const ORGANIZATION_SETTINGS_DEFAULT_QUICK_LINKS: JsonRecord[] = [
+  { key: "my-profile", label: "My Profile", description: "Update contact details and photo", href: "/my-profile", sort_order: 10, status: "active", placeholder: false },
+  { key: "member-documents", label: "Member Documents", description: "Member-only documents and resources", href: "/member-documents", sort_order: 20, status: "active", placeholder: false },
+  { key: "roster", label: "Roster", description: "Member directory", href: "/roster", sort_order: 30, status: "active", placeholder: false },
+  { key: "calendar-events", label: "Calendar / Events", description: "Open the full club calendar", href: "/calendar", sort_order: 40, status: "active", placeholder: false },
+  { key: "submit-gallery", label: "Submit to Gallery", description: "Photos and media links", href: "/submit-gallery", sort_order: 50, status: "active", placeholder: false },
+  { key: "flight-scheduler", label: "Flight Scheduler", description: "Reservations and aircraft schedule", href: "#", sort_order: 60, status: "active", placeholder: true },
+  { key: "maintenance-squawk", label: "Report Maintenance Squawk", description: "Aircraft maintenance reporting", href: "#", sort_order: 70, status: "active", placeholder: true },
+  { key: "forum", label: "Message Board", description: "Member discussions, polls, and trip planning", href: "/forum", sort_order: 80, status: "active", placeholder: false },
+];
+
+const ORGANIZATION_SETTINGS_DEFAULT_WEATHER_AIRPORTS: JsonRecord[] = [
+  { station: "KFFA", label: "First Flight Airport", time_zone: "America/New_York", sort_order: 10, status: "active" },
+  { station: "KICT", label: "Wichita Dwight D. Eisenhower National Airport", time_zone: "America/Chicago", sort_order: 20, status: "active" },
+];
+
+function orgSettingsString(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function orgSettingsBool(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function orgSettingsNumber(value: unknown, fallback = 100): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.trunc(n) : fallback;
+}
+
+function orgSettingsObj(value: unknown): JsonRecord {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
+}
+
+function orgSettingsArray(value: unknown): JsonRecord[] {
+  return Array.isArray(value) ? value.filter((row) => row && typeof row === "object" && !Array.isArray(row)) as JsonRecord[] : [];
+}
+
+function orgSettingsNormalizeStatus(value: unknown, fallback = "active"): string {
+  const raw = orgSettingsString(value || fallback).toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
+  if (["active", "hidden", "inactive", "archived"].includes(raw)) return raw;
+  return fallback;
+}
+
+function orgSettingsNormalizeHref(value: unknown): string {
+  const raw = orgSettingsString(value);
+  if (!raw) return "#";
+  if (raw === "#") return "#";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `/${raw.replace(/^\/+/, "")}`;
+}
+
+function orgSettingsNormalizeHex(value: unknown, fallback: string): string {
+  const raw = orgSettingsString(value);
+  return /^#[0-9a-f]{6}$/i.test(raw) ? raw : fallback;
+}
+
+function orgSettingsSanitizeQuickLinks(value: unknown): JsonRecord[] {
+  const source = orgSettingsArray(value).length ? orgSettingsArray(value) : ORGANIZATION_SETTINGS_DEFAULT_QUICK_LINKS;
+  return source.slice(0, 16).map((row, index) => {
+    const label = orgSettingsString(row.label || row.title || "Link") || "Link";
+    const key = normalizeKey(row.key || label) || `link-${index + 1}`;
+    return {
+      key,
+      label,
+      description: orgSettingsString(row.description || row.subtitle || ""),
+      href: orgSettingsNormalizeHref(row.href || row.url || "#"),
+      sort_order: orgSettingsNumber(row.sort_order, (index + 1) * 10),
+      status: orgSettingsNormalizeStatus(row.status, "active"),
+      placeholder: orgSettingsBool(row.placeholder, false),
+      open_in_new_tab: orgSettingsBool(row.open_in_new_tab, false),
+    };
+  }).sort((a, b) => orgSettingsNumber(a.sort_order, 100) - orgSettingsNumber(b.sort_order, 100));
+}
+
+function orgSettingsSanitizeWeatherAirports(value: unknown): JsonRecord[] {
+  const source = orgSettingsArray(value).length ? orgSettingsArray(value) : ORGANIZATION_SETTINGS_DEFAULT_WEATHER_AIRPORTS;
+  return source.slice(0, 8).map((row, index) => {
+    const station = orgSettingsString(row.station || row.station_id || row.icao || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+    return {
+      station,
+      label: orgSettingsString(row.label || row.station_label || station),
+      time_zone: orgSettingsString(row.time_zone || row.station_time_zone || "America/New_York"),
+      sort_order: orgSettingsNumber(row.sort_order, (index + 1) * 10),
+      status: orgSettingsNormalizeStatus(row.status, "active"),
+    };
+  }).filter((row) => orgSettingsString(row.station));
+}
+
+function orgSettingsDefaults(): JsonRecord {
+  return {
+    dashboard_settings_json: { dashboard_recipe_key: "flying_club_default", show_next_event: true, show_weather: true, show_profile_update_card: true },
+    dashboard_quick_links_json: ORGANIZATION_SETTINGS_DEFAULT_QUICK_LINKS,
+    dashboard_weather_airports_json: ORGANIZATION_SETTINGS_DEFAULT_WEATHER_AIRPORTS,
+    profile_requirements_json: { member_editable_required_fields: ["name", "email", "phone", "address", "profile_photo"], admin_managed_fields: ["pilot_certificate", "medical_basicmed"] },
+    alert_colors_json: { attention: "#dc2626", warning: "#d97706", success: "#16a34a", info: "#2563eb" },
+    forum_settings_json: { default_category_model: "organization_admin_managed", member_topics_enabled: true, mentions_enabled: true, email_alerts_enabled: false },
+    settings_json: { managed_by: "organization_settings_hub", seeded_by: "0112-A" },
+  };
+}
+
+async function organizationSettingsListOrganizations(serviceClient: SupabaseClientAny): Promise<JsonRecord[]> {
+  const { data, error } = await serviceClient
+    .from("core_organizations")
+    .select("organization_id, organization_key, display_name, legal_name, status, archived_at, updated_at")
+    .is("archived_at", null)
+    .order("display_name", { ascending: true });
+  if (error) throw error;
+  return (data || []) as JsonRecord[];
+}
+
+async function organizationSettingsEnsure(serviceClient: SupabaseClientAny, organizationId: string): Promise<JsonRecord> {
+  const defaults = orgSettingsDefaults();
+  const { data, error } = await serviceClient
+    .from("core_organization_settings")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  if (data) return data as JsonRecord;
+  const payload = { organization_id: organizationId, ...defaults };
+  const { data: inserted, error: insertError } = await serviceClient.from("core_organization_settings").insert(payload).select("*").single();
+  if (insertError) throw insertError;
+  return inserted as JsonRecord;
+}
+
+async function organizationSettingsSeedWeatherRows(serviceClient: SupabaseClientAny, organizationId: string, airports: JsonRecord[]): Promise<void> {
+  const active = orgSettingsSanitizeWeatherAirports(airports).filter((row) => row.status === "active");
+  for (const airport of active) {
+    try {
+      await serviceClient.from("core_weather_metar_latest").upsert({
+        organization_id: organizationId,
+        station_id: orgSettingsString(airport.station).toUpperCase(),
+        station_label: orgSettingsString(airport.label || airport.station),
+        station_time_zone: orgSettingsString(airport.time_zone || "America/New_York"),
+        source_provider: "aviationweather.gov",
+        fetch_status: "pending",
+        metadata_json: { seeded_by: "0112-A-organization-settings-hub", provider_hook: "checkwx_future_backup" },
+        updated_at: nowIso(),
+      }, { onConflict: "organization_id,station_id" });
+    } catch (error) {
+      console.warn("organization_settings_weather_seed_failed", error instanceof Error ? error.message : String(error));
+    }
+  }
+}
+
+async function organizationSettingsGet(serviceClient: SupabaseClientAny, body: JsonRecord): Promise<JsonRecord> {
+  const organizationId = requireString(body, "organization_id");
+  const organizations = await organizationSettingsListOrganizations(serviceClient);
+  const settings = await organizationSettingsEnsure(serviceClient, organizationId);
+  return { version: ORGANIZATION_SETTINGS_VERSION, organizations, settings };
+}
+
+async function organizationSettingsSave(serviceClient: SupabaseClientAny, body: JsonRecord, actorEmail: string): Promise<JsonRecord> {
+  const organizationId = requireString(body, "organization_id");
+  const before = await organizationSettingsEnsure(serviceClient, organizationId);
+  const quickLinks = orgSettingsSanitizeQuickLinks(body.dashboard_quick_links_json);
+  const airports = orgSettingsSanitizeWeatherAirports(body.dashboard_weather_airports_json);
+  const alertColorsInput = orgSettingsObj(body.alert_colors_json);
+  const alertColors = {
+    attention: orgSettingsNormalizeHex(alertColorsInput.attention, "#dc2626"),
+    warning: orgSettingsNormalizeHex(alertColorsInput.warning, "#d97706"),
+    success: orgSettingsNormalizeHex(alertColorsInput.success, "#16a34a"),
+    info: orgSettingsNormalizeHex(alertColorsInput.info, "#2563eb"),
+  };
+  const dashboardSettings = orgSettingsObj(body.dashboard_settings_json);
+  const profileRequirements = orgSettingsObj(body.profile_requirements_json);
+  const forumSettings = orgSettingsObj(body.forum_settings_json);
+  const payload = {
+    dashboard_settings_json: dashboardSettings,
+    dashboard_quick_links_json: quickLinks,
+    dashboard_weather_airports_json: airports,
+    profile_requirements_json: profileRequirements,
+    alert_colors_json: alertColors,
+    forum_settings_json: forumSettings,
+    settings_json: { ...orgSettingsObj(body.settings_json), updated_by: "0112-A-organization-settings-hub", updated_by_email: actorEmail, updated_at: nowIso() },
+    updated_at: nowIso(),
+  };
+  const { data, error } = await serviceClient
+    .from("core_organization_settings")
+    .update(payload)
+    .eq("organization_id", organizationId)
+    .select("*")
+    .single();
+  if (error) throw error;
+  await organizationSettingsSeedWeatherRows(serviceClient, organizationId, airports);
+  await writeAudit(serviceClient, actorEmail, "organization_settings_save", "core_organization_settings", String((data as JsonRecord).organization_settings_id || organizationId), body, { organization_id: organizationId }, before, data as JsonRecord);
+  const organizations = await organizationSettingsListOrganizations(serviceClient);
+  return { version: ORGANIZATION_SETTINGS_VERSION, organizations, settings: data as JsonRecord };
+}
+
+async function organizationSettingsResetDefaults(serviceClient: SupabaseClientAny, body: JsonRecord, actorEmail: string): Promise<JsonRecord> {
+  const organizationId = requireString(body, "organization_id");
+  const before = await organizationSettingsEnsure(serviceClient, organizationId);
+  const defaults = orgSettingsDefaults();
+  const payload = { ...defaults, updated_at: nowIso() };
+  const { data, error } = await serviceClient
+    .from("core_organization_settings")
+    .update(payload)
+    .eq("organization_id", organizationId)
+    .select("*")
+    .single();
+  if (error) throw error;
+  await organizationSettingsSeedWeatherRows(serviceClient, organizationId, ORGANIZATION_SETTINGS_DEFAULT_WEATHER_AIRPORTS);
+  await writeAudit(serviceClient, actorEmail, "organization_settings_reset_defaults", "core_organization_settings", String((data as JsonRecord).organization_settings_id || organizationId), body, { organization_id: organizationId }, before, data as JsonRecord);
+  const organizations = await organizationSettingsListOrganizations(serviceClient);
+  return { version: ORGANIZATION_SETTINGS_VERSION, organizations, settings: data as JsonRecord };
+}
+
 serve(async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -1878,6 +2742,51 @@ serve(async (req: Request): Promise<Response> => {
         actor_email: actorEmail,
         message: "core-admin-action is reachable and authenticated.",
       });
+    }
+
+    if (action === "organization_settings_list_organizations") {
+      const organizations = await organizationSettingsListOrganizations(serviceClient);
+      return jsonResponse(200, { ok: true, action, version: ORGANIZATION_SETTINGS_VERSION, organizations });
+    }
+
+    if (action === "organization_settings_get") {
+      const result = await organizationSettingsGet(serviceClient, body);
+      return jsonResponse(200, { ok: true, action, ...result });
+    }
+
+    if (action === "organization_settings_save") {
+      const result = await organizationSettingsSave(serviceClient, body, actorEmail);
+      return jsonResponse(200, { ok: true, action, ...result });
+    }
+
+    if (action === "organization_settings_reset_defaults") {
+      const result = await organizationSettingsResetDefaults(serviceClient, body, actorEmail);
+      return jsonResponse(200, { ok: true, action, ...result });
+    }
+
+    if (action === "navigation_list_organizations") {
+      const organizations = await navigationListOrganizations(serviceClient);
+      const recipes = await navigationListRecipes(serviceClient);
+      return jsonResponse(200, { ok: true, action, version: NAV_MANAGER_VERSION, organizations, recipes });
+    }
+
+    if (action === "navigation_get_setup") {
+      const organizationId = requireString(body, "organization_id");
+      const organizations = await navigationListOrganizations(serviceClient);
+      const setup = await navigationBuildSetup(serviceClient, organizationId);
+      return jsonResponse(200, { ok: true, action, version: NAV_MANAGER_VERSION, organizations, setup });
+    }
+
+    if (action === "navigation_save_setup") {
+      const setup = await navigationSaveSetup(serviceClient, body, actorEmail);
+      const organizations = await navigationListOrganizations(serviceClient);
+      return jsonResponse(200, { ok: true, action, version: NAV_MANAGER_VERSION, organizations, setup });
+    }
+
+    if (action === "navigation_reset_defaults") {
+      const setup = await navigationResetDefaults(serviceClient, body, actorEmail);
+      const organizations = await navigationListOrganizations(serviceClient);
+      return jsonResponse(200, { ok: true, action, version: NAV_MANAGER_VERSION, organizations, setup });
     }
 
     if (action === "list_customers") {
@@ -2861,7 +3770,8 @@ serve(async (req: Request): Promise<Response> => {
       ok: false,
       error: "action_failed",
       action,
-      message: error instanceof Error ? error.message : String(error),
+      message: navErrorMessage(error),
+      detail: error && typeof error === "object" ? error : null,
     });
   }
 });

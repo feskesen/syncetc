@@ -1,7 +1,7 @@
 // index.ts
 // Deploy target: Supabase Edge Function named core-public-render
 // JWT verification: OFF
-// Internal Version: 2026-06-10-107-C
+// Internal Version: 2026-06-12-108-I
 // Purpose: public-safe render payloads for SyncEtc pages, including Home, Aircraft, Gallery, Info/FAQ, Documents, Calendar/Events, applicant intake, and privacy-first contact inquiry intake.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
@@ -24,6 +24,17 @@ function jsonResponse(status: number, body: JsonRecord): Response {
       ...corsHeaders,
       "Content-Type": "application/json",
       "Cache-Control": status === 200 ? "public, max-age=60" : "no-store",
+    },
+  });
+}
+
+function jsonNoStoreResponse(status: number, body: JsonRecord): Response {
+  return new Response(JSON.stringify(body, null, 2), {
+    status,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
     },
   });
 }
@@ -612,12 +623,17 @@ async function getPublicNavigationBundle(
       return {
         navigation_profile: {
           navigation_profile_id: first.navigation_profile_id || null,
-          header_layout_key: first.header_layout_key || "pill-rows",
+          header_layout_key: first.header_layout_key || first.header_recipe_key || "standard_horizontal",
+          header_recipe_key: first.header_recipe_key || first.header_layout_key || "standard_horizontal",
+          nav_display_mode: first.nav_display_mode || null,
+          header_recipe_version: first.header_recipe_version || "0108-A",
           show_logo: first.show_logo !== false,
           show_large_title: first.show_large_title !== false,
           show_org_context_row: first.show_org_context_row === true,
           show_user_badge: first.show_user_badge !== false,
           show_logout_button: first.show_logout_button !== false,
+          settings_json: { ...jsonObject(first.profile_settings_json), ...jsonObject(first.header_settings_json) },
+          header_settings_json: jsonObject(first.header_settings_json),
         },
         navigation_rows: Array.from(rowMap.values()),
         navigation_items: items,
@@ -652,7 +668,7 @@ async function getPublicNavigationBundle(
   }));
 
   return {
-    navigation_profile: { header_layout_key: "pill-rows", show_org_context_row: false },
+    navigation_profile: { header_layout_key: "standard_horizontal", header_recipe_key: "standard_horizontal", header_recipe_version: "0108-A", show_org_context_row: false },
     navigation_rows: [{ row_key: "public", row_label: "PUBLIC", sort_order: 10, visibility_rule: "always" }],
     navigation_items: items,
     nav_items: items,
@@ -901,6 +917,8 @@ async function getHomePagePayload(serviceClient: SupabaseClientAny, supabaseUrl:
   const settings = context.settings as JsonRecord | null;
   const style = context.style as JsonRecord | null;
 
+  const organizationId = String(organization.organization_id);
+
   const appPortalSettings0107 = await getApplicantSettingsPublic0107(serviceClient, organizationId);
 
   const pageSettings = settings ? {
@@ -1079,6 +1097,8 @@ async function getGalleryPagePayload(serviceClient: SupabaseClientAny, supabaseU
   const template = context.template as JsonRecord;
   const settings = context.settings as JsonRecord | null;
   const style = context.style as JsonRecord | null;
+
+  const organizationId = String(organization.organization_id);
 
   const appPortalSettings0107 = await getApplicantSettingsPublic0107(serviceClient, organizationId);
 
@@ -1278,6 +1298,8 @@ async function getInfoPagePayload(serviceClient: SupabaseClientAny, supabaseUrl:
   const settings = context.settings as JsonRecord | null;
   const style = context.style as JsonRecord | null;
 
+  const organizationId = String(organization.organization_id);
+
   const appPortalSettings0107 = await getApplicantSettingsPublic0107(serviceClient, organizationId);
 
   const pageSettings = settings ? {
@@ -1413,6 +1435,8 @@ async function getDocumentsPagePayload(serviceClient: SupabaseClientAny, supabas
   const template = context.template as JsonRecord;
   const settings = context.settings as JsonRecord | null;
   const style = context.style as JsonRecord | null;
+
+  const organizationId = String(organization.organization_id);
 
   const appPortalSettings0107 = await getApplicantSettingsPublic0107(serviceClient, organizationId);
 
@@ -1601,6 +1625,52 @@ function applicantPortalAllowedPublic0107(settings: JsonRecord, app: JsonRecord)
   return Boolean(app.portal_access_granted) || ["onboarding", "ready_for_final_review"].includes(status);
 }
 
+function applicantPortalEmailOrPublic0107D(email: string): string {
+  const safe = publicValidEmail(email).replace(/[,()]/g, "");
+  return `email.ilike.${safe},primary_email.ilike.${safe}`;
+}
+
+function publicRenderErrorMessage0107E(error: unknown): string {
+  if (error instanceof Error && cleanLimited(error.message)) return cleanLimited(error.message, 1000);
+  if (error && typeof error === "object") {
+    const obj = error as JsonRecord;
+    const direct = cleanLimited(obj.message || obj.error_description || obj.error || obj.hint || obj.code, 1000);
+    if (direct && direct !== "[object Object]") return direct;
+    try {
+      const json = JSON.stringify(obj);
+      if (json && json !== "{}") return cleanLimited(json, 1000);
+    } catch (_) {
+      /* fall through */
+    }
+  }
+  const fallback = cleanLimited(String(error), 1000);
+  return fallback && fallback !== "[object Object]" ? fallback : "The public render action failed, but Supabase did not return a readable error message.";
+}
+
+async function applicantPortalLookupAppsByEmailPublic0107E(serviceClient: SupabaseClientAny, organizationId: string, email: string): Promise<JsonRecord[]> {
+  const rowsById = new Map<string, JsonRecord>();
+  for (const column of ["email", "primary_email"] as const) {
+    const { data, error } = await serviceClient
+      .from("core_applications")
+      .select("*")
+      .eq("organization_id", organizationId)
+      .eq(column, email)
+      .is("archived_at", null)
+      .order("submitted_at", { ascending: false })
+      .limit(5);
+    if (error) throw new Error(`Applicant portal public lookup by ${column} failed: ${publicRenderErrorMessage0107E(error)}`);
+    for (const row of (data || []) as JsonRecord[]) {
+      const applicationId = cleanLimited(row.application_id, 100);
+      if (applicationId && !rowsById.has(applicationId)) rowsById.set(applicationId, row);
+    }
+  }
+  return Array.from(rowsById.values()).sort((a, b) => {
+    const aTime = Date.parse(cleanLimited(a.submitted_at || a.created_at, 100)) || 0;
+    const bTime = Date.parse(cleanLimited(b.submitted_at || b.created_at, 100)) || 0;
+    return bTime - aTime;
+  });
+}
+
 async function getApplicantPortalPublicPayload0107(serviceClient: SupabaseClientAny, supabaseUrl: string, body: JsonRecord): Promise<JsonRecord> {
   const organizationKey = normalizeKey(body.organization_key || body.customer_key || body.org_key);
   const siteKey = normalizeKey(body.site_key || "primary") || "primary";
@@ -1617,7 +1687,7 @@ async function getApplicantPortalPublicPayload0107(serviceClient: SupabaseClient
   return {
     ok: true,
     action: "get_applicant_portal_public",
-    version: "2026-06-10-107-C",
+    version: "2026-06-12-108-I",
     organization: {
       organization_id: organization.organization_id,
       organization_key: organization.organization_key,
@@ -1692,9 +1762,8 @@ async function requestApplicantPortalAccessPublic0107(serviceClient: SupabaseCli
   if (!organization?.organization_id) return { ok: true, action: "request_applicant_portal_access", message: "If an eligible application exists for that email, we will send applicant portal instructions." };
   const organizationId = String(organization.organization_id);
   const settings = await getApplicantSettingsPublic0107(serviceClient, organizationId);
-  const { data: apps, error } = await serviceClient.from("core_applications").select("*").eq("organization_id", organizationId).eq("email", email).is("archived_at", null).order("submitted_at", { ascending: false }).limit(5);
-  if (error) throw error;
-  const app = ((apps || []) as JsonRecord[]).find((row) => applicantPortalAllowedPublic0107(settings, row));
+  const apps = await applicantPortalLookupAppsByEmailPublic0107E(serviceClient, organizationId, email);
+  const app = apps.find((row) => applicantPortalAllowedPublic0107(settings, row));
   if (!app) return { ok: true, action: "request_applicant_portal_access", message: "If an eligible application exists for that email, we will send applicant portal instructions." };
   try {
     const origin = cleanLimited(req.headers.get("origin") || "https://syncetc.webflow.io", 500) || "https://syncetc.webflow.io";
@@ -1704,10 +1773,71 @@ async function requestApplicantPortalAccessPublic0107(serviceClient: SupabaseCli
     await serviceClient.from("core_applications").update({ portal_access_granted: true, portal_access_granted_at: new Date().toISOString(), portal_invite_last_requested_at: new Date().toISOString(), portal_invite_sent_at: new Date().toISOString(), portal_invite_request_count: Number(app.portal_invite_request_count || 0) + 1, updated_at: new Date().toISOString() }).eq("application_id", app.application_id);
     try { await serviceClient.from("core_applicant_events").insert({ application_id: app.application_id, organization_id: organizationId, event_type: "applicant_portal_link_requested", actor_email: email, note: "Applicant portal login link requested from public portal page.", metadata_json: { source: "public_applicant_portal", send_result: sendResult } }); } catch (_) {}
   } catch (sendError) {
-    console.warn("applicant_portal_request_send_failed", sendError instanceof Error ? sendError.message : String(sendError));
-    try { await serviceClient.from("core_applicant_events").insert({ application_id: app.application_id, organization_id: organizationId, event_type: "applicant_portal_link_failed", actor_email: email, note: "Applicant portal link request could not send email.", metadata_json: { error: sendError instanceof Error ? sendError.message : String(sendError) } }); } catch (_) {}
+    console.warn("applicant_portal_request_send_failed", publicRenderErrorMessage0107E(sendError));
+    try { await serviceClient.from("core_applicant_events").insert({ application_id: app.application_id, organization_id: organizationId, event_type: "applicant_portal_link_failed", actor_email: email, note: "Applicant portal link request could not send email.", metadata_json: { error: publicRenderErrorMessage0107E(sendError) } }); } catch (_) {}
   }
   return { ok: true, action: "request_applicant_portal_access", message: "If an eligible application exists for that email, we will send applicant portal instructions." };
+}
+
+
+async function requestApplicantPortalAccessFromPrecheck0108I(serviceClient: SupabaseClientAny, body: JsonRecord, req: Request): Promise<JsonRecord> {
+  const organizationKey = normalizeKey(body.organization_key || body.customer_key || body.org_key);
+  const firstName = cleanLimited(body.first_name, 120);
+  const lastName = cleanLimited(body.last_name, 120);
+  const dob = optionalDate(body.date_of_birth || body.dob);
+  const email = publicValidEmail(body.email);
+  const confirmedEmail = publicValidEmail(body.confirmed_email || body.email_confirmation || body.email_on_file || "");
+  const phone = cleanLimited(body.phone || body.mobile_phone, 80);
+  const neutral = { ok: true, action: "request_applicant_portal_access_from_precheck", version: "2026-06-12-108-I", message: "If this matches an eligible application, we will send applicant portal instructions to the email address on file." };
+  if (!organizationKey || !firstName || !lastName || !dob || !email || !phone) return neutral;
+  const origin = cleanLimited(req.headers.get("origin") || "https://syncetc.webflow.io", 500) || "https://syncetc.webflow.io";
+  const { data: organization, error: organizationError } = await serviceClient
+    .from("core_organizations")
+    .select("organization_id, organization_key, display_name, status, archived_at")
+    .eq("organization_key", organizationKey)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (organizationError) throw organizationError;
+  if (!organization?.organization_id || organization.status === "archived" || organization.status === "paused") return neutral;
+  const organizationId = String(organization.organization_id);
+  const settings = await getApplicantSettingsPublic0107(serviceClient, organizationId);
+  const assessment = await assessApplicantPrecheck0108F(serviceClient, organizationId, settings, { first_name: firstName, last_name: lastName, date_of_birth: dob, email, phone });
+  const internal = jsonObject(assessment.internal_duplicate_check);
+  const applicationId = cleanString(internal.matched_application_id);
+  const portal = jsonObject(assessment.portal);
+  if (!applicationId || portal.available === false) return neutral;
+  if (!(assessment.result === "active_match" || assessment.result === "possible_match" || assessment.result === "prior_match")) return neutral;
+  const { data: app, error: appError } = await serviceClient
+    .from("core_applications")
+    .select("application_id, organization_id, email, primary_email, applicant_status, status, stage_key, archived_at, portal_access_granted, portal_invite_request_count")
+    .eq("organization_id", organizationId)
+    .eq("application_id", applicationId)
+    .maybeSingle();
+  if (appError) throw appError;
+  if (!app?.application_id) return neutral;
+  const fileEmail = publicValidEmail(app.email) || publicValidEmail(app.primary_email);
+  if (!fileEmail) return neutral;
+  if (confirmedEmail && confirmedEmail !== fileEmail) {
+    return { ...neutral, masked_email: maskApplicantEmail0098(fileEmail), message: "If the email confirmation matches the application on file, we will send applicant portal instructions to that address." };
+  }
+  if (!confirmedEmail && assessment.result === "active_match") {
+    return { ...neutral, masked_email: maskApplicantEmail0098(fileEmail), message: "Confirm the full email address on file before requesting a secure applicant portal link." };
+  }
+  if (!applicantPortalAllowedPublic0107(settings, jsonObject(app))) {
+    return { ...neutral, masked_email: maskApplicantEmail0098(fileEmail) };
+  }
+  try {
+    const redirectTo = cleanLimited(body.redirect_to, 1000) || `${origin.replace(/\/$/, "")}/applicant-portal`;
+    const link = await ensureApplicantPortalAuthLink0107(serviceClient, fileEmail, redirectTo);
+    const sendResult = await sendApplicantPortalAccessEmail0107(serviceClient, fileEmail, cleanLimited(organization.display_name, 200), link);
+    const now = new Date().toISOString();
+    await serviceClient.from("core_applications").update({ portal_access_granted: true, portal_access_granted_at: now, portal_invite_last_requested_at: now, portal_invite_sent_at: now, portal_invite_request_count: Number(app.portal_invite_request_count || 0) + 1, updated_at: now }).eq("application_id", app.application_id);
+    try { await serviceClient.from("core_applicant_events").insert({ application_id: app.application_id, organization_id: organizationId, event_type: "applicant_portal_link_requested_from_precheck", actor_email: email, note: "Applicant portal login link requested from Apply Now precheck; link sent to email on file.", metadata_json: { source: "public_apply_precheck", masked_email: maskApplicantEmail0098(fileEmail), send_result: sendResult } }); } catch (_) {}
+  } catch (sendError) {
+    console.warn("applicant_portal_precheck_request_send_failed", publicRenderErrorMessage0107E(sendError));
+    try { await serviceClient.from("core_applicant_events").insert({ application_id: app.application_id, organization_id: organizationId, event_type: "applicant_portal_link_failed_from_precheck", actor_email: email, note: "Applicant portal link request from Apply Now precheck could not send email.", metadata_json: { error: publicRenderErrorMessage0107E(sendError), masked_email: maskApplicantEmail0098(fileEmail) } }); } catch (_) {}
+  }
+  return { ...neutral, masked_email: maskApplicantEmail0098(fileEmail) };
 }
 
 async function getApplyPagePayload(serviceClient: SupabaseClientAny, supabaseUrl: string, body: JsonRecord): Promise<JsonRecord> {
@@ -1748,7 +1878,7 @@ async function getApplyPagePayload(serviceClient: SupabaseClientAny, supabaseUrl
     updated_at: settings.updated_at,
   } : {
     title: page.nav_label || "Apply Now",
-    intro_text: "Start your application for review.",
+    intro_text: "Apply for membership or continue/update an application already on file.",
     labels_json: {},
     options_json: {},
     visibility_json: {},
@@ -1760,7 +1890,7 @@ async function getApplyPagePayload(serviceClient: SupabaseClientAny, supabaseUrl
   return {
     ok: true,
     action: "get_apply_page",
-    version: "2026-06-10-107-C",
+    version: "2026-06-12-108-I",
     render_mode: renderMode,
     organization: {
       organization_id: organization.organization_id,
@@ -1802,6 +1932,8 @@ async function getApplyPagePayload(serviceClient: SupabaseClientAny, supabaseUrl
       portal_access_mode: appPortalSettings0107.portal_access_mode || "accepted_onboarding",
       applicant_account_mode: appPortalSettings0107.applicant_account_mode || appPortalSettings0107.portal_access_mode || "accepted_onboarding",
       portal_url: "/applicant-portal",
+      precheck_enabled: true,
+      public_apply_label: "Apply or update your application",
     },
     debug: renderMode === "debug" ? { page_settings_found: Boolean(settings), active_style_profile_found: Boolean(style), custom_question_count: (questions || []).length } : undefined,
   };
@@ -1844,7 +1976,9 @@ function maskApplicantEmail0098(email: unknown): string {
   const domainParts = (domainFull || "").split(".");
   const domain = domainParts[0] || "";
   const suffix = domainParts.slice(1).join(".");
-  return `${(local || "").slice(0,1) || "•"}••••@${(domain || "").slice(0,1) || "•"}•••••••${suffix ? `.${suffix}` : ""}`;
+  const localMask = `${(local || "").slice(0,1) || "*"}${"*".repeat(Math.max(6, Math.min(10, Math.max(0, (local || "").length - 1))))}`;
+  const domainMask = `${(domain || "").slice(0,1) || "*"}${"*".repeat(Math.max(6, Math.min(10, Math.max(0, (domain || "").length - 1))))}`;
+  return `${localMask}@${domainMask}${suffix ? `.${suffix}` : ""}`;
 }
 
 async function findPossibleApplicantDuplicate0098(serviceClient: SupabaseClientAny, organizationId: string, firstName: string, lastName: string, dob: string | null, email: string, phone: string): Promise<JsonRecord | null> {
@@ -1868,6 +2002,258 @@ async function findPossibleApplicantDuplicate0098(serviceClient: SupabaseClientA
     if (byNameDob || byEmail || byPhone) return row;
   }
   return null;
+}
+
+function normalizeApplicantPhone0108F(value: unknown): string {
+  return cleanLimited(value, 80).replace(/[^0-9]+/g, "");
+}
+
+function normalizeApplicantName0108F(value: unknown): string {
+  return cleanLimited(value, 160).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function isPriorOrClosedApplication0108F(row: JsonRecord): boolean {
+  const status = normalizeKey(row.applicant_status || row.status || row.stage_key || "");
+  const archiveReason = normalizeKey(row.archive_reason_key || row.archive_reason || "");
+  if (row.archived_at) return true;
+  if (archiveReason) return true;
+  return ["archived", "closed", "converted", "added-as-member", "added-as-member", "applicant-withdrew", "withdrawn", "club-declined", "declined", "duplicate-application", "no-response"].includes(status);
+}
+
+function portalSummaryForApplicantFlow0108F(settings: JsonRecord): JsonRecord {
+  const portalMode = applicantPortalAccessMode0107(settings.portal_access_mode || settings.applicant_account_mode || "after_submitted");
+  return {
+    available: portalMode !== "none",
+    portal_access_mode: portalMode,
+    applicant_account_mode: settings.applicant_account_mode || settings.portal_access_mode || portalMode,
+    portal_url: "/applicant-portal",
+  };
+}
+
+async function fetchApplicantPrecheckCandidates0108F(
+  serviceClient: SupabaseClientAny,
+  organizationId: string,
+  firstName: string,
+  lastName: string,
+  dob: string | null,
+  email: string,
+  phone: string,
+): Promise<JsonRecord[]> {
+  const seen = new Map<string, JsonRecord>();
+  const select = "application_id, organization_id, first_name, last_name, display_name, date_of_birth, email, primary_email, phone, primary_phone, submitted_at, created_at, applicant_status, status, stage_key, archived_at, archive_reason_key, archive_reason, portal_access_granted, portal_invite_request_count";
+  async function add(query: any): Promise<void> {
+    const { data, error } = await query;
+    if (error) throw error;
+    for (const row of ((data || []) as JsonRecord[])) {
+      const id = cleanString(row.application_id);
+      if (id && !seen.has(id)) seen.set(id, row);
+    }
+  }
+  if (dob) {
+    await add(serviceClient.from("core_applications").select(select).eq("organization_id", organizationId).eq("date_of_birth", dob).limit(100));
+  }
+  if (email) {
+    await add(serviceClient.from("core_applications").select(select).eq("organization_id", organizationId).eq("email", email).limit(50));
+    await add(serviceClient.from("core_applications").select(select).eq("organization_id", organizationId).eq("primary_email", email).limit(50));
+  }
+  const cleanPhone = cleanLimited(phone, 80);
+  if (cleanPhone) {
+    await add(serviceClient.from("core_applications").select(select).eq("organization_id", organizationId).eq("phone", cleanPhone).limit(50));
+    await add(serviceClient.from("core_applications").select(select).eq("organization_id", organizationId).eq("primary_phone", cleanPhone).limit(50));
+  }
+  return Array.from(seen.values());
+}
+
+function scoreApplicantPrecheckCandidate0108F(row: JsonRecord, firstName: string, lastName: string, dob: string | null, email: string, phone: string): JsonRecord {
+  const inputFirst = normalizeApplicantName0108F(firstName);
+  const inputLast = normalizeApplicantName0108F(lastName);
+  const rowFirst = normalizeApplicantName0108F(row.first_name);
+  const rowLast = normalizeApplicantName0108F(row.last_name);
+  const sameName = Boolean(inputFirst && inputLast && rowFirst === inputFirst && rowLast === inputLast);
+  const sameDob = Boolean(dob && cleanString(row.date_of_birth) === dob);
+  const rowEmail = publicValidEmail(row.email) || publicValidEmail(row.primary_email);
+  const sameEmail = Boolean(email && rowEmail === email);
+  const inputPhone = normalizeApplicantPhone0108F(phone);
+  const rowPhone = normalizeApplicantPhone0108F(row.phone) || normalizeApplicantPhone0108F(row.primary_phone);
+  const samePhone = Boolean(inputPhone && rowPhone && inputPhone === rowPhone);
+  const reasons: string[] = [];
+  if (sameName) reasons.push("same_first_last_name");
+  if (sameDob) reasons.push("same_date_of_birth");
+  if (sameEmail) reasons.push("same_email");
+  if (samePhone) reasons.push("same_phone");
+  const strong = sameDob && (sameEmail || samePhone);
+  const partial = !strong && ((sameDob && sameName) || sameEmail || samePhone);
+  const prior = isPriorOrClosedApplication0108F(row);
+  const score = (sameName ? 2 : 0) + (sameDob ? 3 : 0) + (sameEmail ? 3 : 0) + (samePhone ? 3 : 0) + (strong ? 10 : partial ? 4 : 0);
+  return { row, strong, partial, active: !prior, prior, score, reasons };
+}
+
+async function assessApplicantPrecheck0108F(serviceClient: SupabaseClientAny, organizationId: string, settings: JsonRecord, inputs: JsonRecord): Promise<JsonRecord> {
+  const firstName = cleanLimited(inputs.first_name, 120);
+  const lastName = cleanLimited(inputs.last_name, 120);
+  const dob = optionalDate(inputs.date_of_birth || inputs.dob);
+  const email = publicValidEmail(inputs.email);
+  const phone = cleanLimited(inputs.phone || inputs.mobile_phone, 80);
+  const portal = portalSummaryForApplicantFlow0108F(settings);
+  const candidates = await fetchApplicantPrecheckCandidates0108F(serviceClient, organizationId, firstName, lastName, dob, email, phone);
+  const scored = candidates
+    .map((row) => scoreApplicantPrecheckCandidate0108F(row, firstName, lastName, dob, email, phone))
+    .filter((item) => item.strong === true || item.partial === true)
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+  const activeStrong = scored.find((item) => item.active === true && item.strong === true);
+  const activePartial = scored.find((item) => item.active === true && item.partial === true);
+  const priorStrong = scored.find((item) => item.prior === true && item.strong === true);
+  const priorPartial = scored.find((item) => item.prior === true && item.partial === true);
+  const matched = (activeStrong || activePartial || priorStrong || priorPartial || null) as JsonRecord | null;
+  const row = matched ? jsonObject(matched.row) : {};
+  const reasons = matched ? ((matched.reasons || []) as string[]) : [];
+  const checkedAt = new Date().toISOString();
+  const maskedEmail = maskApplicantEmail0098(row.email || row.primary_email || email);
+  const base = {
+    portal,
+    prefill: { first_name: firstName, last_name: lastName, date_of_birth: dob, email, phone },
+    duplicate_check: {
+      version: "2026-06-12-108-I",
+      checked_at: checkedAt,
+      candidate_count: scored.length,
+      reasons,
+      matched: Boolean(matched),
+    },
+    internal_duplicate_check: {
+      version: "2026-06-12-108-I",
+      checked_at: checkedAt,
+      candidate_count: scored.length,
+      reasons,
+      matched: Boolean(matched),
+      matched_application_id: cleanString(row.application_id) || null,
+      matched_archived_at: row.archived_at || null,
+      matched_status: row.applicant_status || row.status || row.stage_key || null,
+    },
+  };
+  if (activeStrong) {
+    return {
+      ...base,
+      result: "active_match",
+      match_strength: "strong",
+      allow_new_application: false,
+      route_to_portal: true,
+      flag_for_review: false,
+      masked_email: maskedEmail,
+      message: portal.available === false
+        ? "This information appears to match an existing application. Please contact the organization for help continuing."
+        : "This information appears to match an existing application. We did not open a duplicate application form. If this is your application, use the secure applicant portal link sent to the email address on file.",
+    };
+  }
+  if (activePartial) {
+    return {
+      ...base,
+      result: "possible_match",
+      match_strength: "partial",
+      allow_new_application: true,
+      route_to_portal: false,
+      flag_for_review: true,
+      masked_email: maskedEmail,
+      message: "This information may match an existing application. You may continue, but the organization may review this as a possible duplicate.",
+    };
+  }
+  if (priorStrong || priorPartial) {
+    return {
+      ...base,
+      result: "prior_match",
+      match_strength: priorStrong ? "strong" : "partial",
+      allow_new_application: true,
+      route_to_portal: false,
+      flag_for_review: true,
+      masked_email: maskedEmail,
+      message: "This information may match a prior application. You may continue, and the organization may review this as a reapplication.",
+    };
+  }
+  return {
+    ...base,
+    result: "no_match",
+    match_strength: "none",
+    allow_new_application: true,
+    route_to_portal: false,
+    flag_for_review: false,
+    masked_email: "",
+    message: "No existing application was found. Continue with the application below.",
+  };
+}
+
+async function precheckApplicantApplication0108F(serviceClient: SupabaseClientAny, body: JsonRecord): Promise<JsonRecord> {
+  const organizationKey = normalizeKey(body.organization_key || body.customer_key || body.org_key);
+  if (!organizationKey) return { ok: false, error: "missing_organization_key", message: "Missing organization key." };
+  const firstName = cleanLimited(body.first_name, 120);
+  const lastName = cleanLimited(body.last_name, 120);
+  const dob = optionalDate(body.date_of_birth || body.dob);
+  const email = publicValidEmail(body.email);
+  const phone = cleanLimited(body.phone || body.mobile_phone, 80);
+  if (!firstName) return { ok: false, error: "missing_first_name", message: "First name is required." };
+  if (!lastName) return { ok: false, error: "missing_last_name", message: "Last name is required." };
+  if (!dob) return { ok: false, error: "missing_date_of_birth", message: "Date of birth is required." };
+  if (!email) return { ok: false, error: "invalid_email", message: "A valid email is required." };
+  if (!phone) return { ok: false, error: "missing_phone", message: "Phone is required." };
+  const { data: organization, error: organizationError } = await serviceClient
+    .from("core_organizations")
+    .select("organization_id, organization_key, display_name, status, archived_at")
+    .eq("organization_key", organizationKey)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (organizationError) throw organizationError;
+  if (!organization) return { ok: false, error: "organization_not_found", message: "Organization not found." };
+  if (organization.status === "archived" || organization.status === "paused") return { ok: false, error: "organization_unavailable", message: "Organization is not available." };
+  const organizationId = String(organization.organization_id);
+  const settings = await getApplicantSettingsPublic0107(serviceClient, organizationId);
+  const assessment = await assessApplicantPrecheck0108F(serviceClient, organizationId, settings, { first_name: firstName, last_name: lastName, date_of_birth: dob, email, phone });
+  const duplicateCheck = jsonObject(assessment.duplicate_check);
+  const portal = jsonObject(assessment.portal);
+  const frontendOutcome = assessment.result === "active_match"
+    ? "strong_active_match"
+    : assessment.result === "possible_match"
+      ? "possible_active_match"
+      : assessment.result === "prior_match"
+        ? "prior_match"
+        : "no_match";
+  const precheckPublic = {
+    outcome: frontendOutcome,
+    match_quality: assessment.match_strength || "none",
+    match_reasons: duplicateCheck.reasons || [],
+    active_application_found: assessment.result === "active_match" || assessment.result === "possible_match",
+    prior_application_found: assessment.result === "prior_match",
+    allow_new_application: assessment.allow_new_application !== false,
+    duplicate_review_recommended: assessment.flag_for_review === true,
+    recommend_applicant_portal: assessment.route_to_portal === true || assessment.result === "active_match",
+    portal_available: portal.available !== false,
+    portal_url: portal.portal_url || "/applicant-portal",
+    masked_email: assessment.masked_email || "",
+    message: assessment.message,
+  };
+  return {
+    ok: true,
+    action: "precheck_applicant_application",
+    version: "2026-06-12-108-I",
+    organization: { organization_id: organization.organization_id, organization_key: organization.organization_key, display_name: organization.display_name },
+    result: assessment.result,
+    match_strength: assessment.match_strength,
+    allow_new_application: assessment.allow_new_application,
+    route_to_portal: assessment.route_to_portal,
+    flag_for_review: assessment.flag_for_review,
+    masked_email: assessment.masked_email || "",
+    message: assessment.message,
+    portal,
+    applicant_portal: portal,
+    prefill: assessment.prefill,
+    precheck: precheckPublic,
+    duplicate_check: {
+      version: duplicateCheck.version,
+      checked_at: duplicateCheck.checked_at,
+      candidate_count: duplicateCheck.candidate_count,
+      reasons: duplicateCheck.reasons,
+      matched: duplicateCheck.matched,
+      result: assessment.result,
+      match_strength: assessment.match_strength,
+    },
+  };
 }
 
 async function submitApplicantApplication(serviceClient: SupabaseClientAny, body: JsonRecord, req: Request): Promise<JsonRecord> {
@@ -1941,22 +2327,48 @@ async function submitApplicantApplication(serviceClient: SupabaseClientAny, body
 
   const applicantKey = normalizeKey(`${lastName}-${firstName}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`) || `applicant-${Date.now().toString(36)}`;
 
-  const possibleDuplicate = await findPossibleApplicantDuplicate0098(serviceClient, organizationId, firstName, lastName, dob, email, phone);
-  if (possibleDuplicate) {
+  const appSettingsPrecheck0108F = await getApplicantSettingsPublic0107(serviceClient, organizationId);
+  const precheck0108F = await assessApplicantPrecheck0108F(serviceClient, organizationId, appSettingsPrecheck0108F, { first_name: firstName, last_name: lastName, date_of_birth: dob, email, phone });
+  if (precheck0108F.result === "active_match") {
     return {
       ok: false,
       action: "submit_applicant_application",
       error: "possible_duplicate_application",
       possible_duplicate: true,
-      message: `This may match an existing application. If this is you, please use applicant login or password reset for ${maskApplicantEmail0098(possibleDuplicate.email || email)} rather than submitting another application.`,
-      masked_email: maskApplicantEmail0098(possibleDuplicate.email || email),
-      submitted_at: possibleDuplicate.submitted_at || null,
+      message: cleanLimited(precheck0108F.message || "This information appears to match an existing active application. Please continue through the secure applicant portal rather than submitting another application.", 1000),
+      masked_email: precheck0108F.masked_email || maskApplicantEmail0098(email),
+      precheck: {
+        outcome: "strong_active_match",
+        result: precheck0108F.result,
+        match_quality: precheck0108F.match_strength || "strong",
+        match_strength: precheck0108F.match_strength,
+        duplicate_check: precheck0108F.duplicate_check,
+        allow_new_application: false,
+        duplicate_review_recommended: false,
+        recommend_applicant_portal: true,
+        portal_available: jsonObject(precheck0108F.portal).available !== false,
+        portal_url: jsonObject(precheck0108F.portal).portal_url || "/applicant-portal",
+        masked_email: precheck0108F.masked_email || maskApplicantEmail0098(email),
+        message: precheck0108F.message,
+      },
+      applicant_portal: precheck0108F.portal || { available: true, portal_url: "/applicant-portal" },
     };
   }
 
+  const duplicateCheckJson0108F = {
+    source: "submit_applicant_application",
+    checked_at: new Date().toISOString(),
+    client_precheck_result_json: jsonObject(body.precheck_result_json || body.precheck_json),
+    result: precheck0108F.result,
+    match_strength: precheck0108F.match_strength,
+    flag_for_review: precheck0108F.flag_for_review === true,
+    internal_duplicate_check: jsonObject(precheck0108F.internal_duplicate_check),
+  };
+  const needsAttention0108F = precheck0108F.flag_for_review === true;
+
   const { data: inserted, error: insertError } = await serviceClient
     .from("core_applications")
-    .insert({ organization_id: organizationId, site_id: site?.site_id || null, customer_page_id: page?.customer_page_id || null, applicant_key: applicantKey, source_page_key: pageKey, source_url: cleanLimited(body.source_url || body.sourceUrl, 1000), applicant_status: "new", status: "new", stage_key: "new", first_name: firstName, last_name: lastName, display_name: `${firstName} ${lastName}`.trim(), email, primary_email: email, phone, primary_phone: phone, date_of_birth: dob, address_json: addressJson, background_json: backgroundJson, employment_json: backgroundJson, aviation_json: aviationJson, safety_json: safetyJson, interest_json: interestJson, custom_answers_json: jsonObject(body.custom_answers_json), metadata_json: metadata, spam_score: spamScore, spam_reason: spamSignals.join(", ") })
+    .insert({ organization_id: organizationId, site_id: site?.site_id || null, customer_page_id: page?.customer_page_id || null, applicant_key: applicantKey, source_page_key: pageKey, source_url: cleanLimited(body.source_url || body.sourceUrl, 1000), applicant_status: "new", status: "new", stage_key: "new", first_name: firstName, last_name: lastName, display_name: `${firstName} ${lastName}`.trim(), email, primary_email: email, phone, primary_phone: phone, date_of_birth: dob, address_json: addressJson, background_json: backgroundJson, employment_json: backgroundJson, aviation_json: aviationJson, safety_json: safetyJson, interest_json: interestJson, custom_answers_json: jsonObject(body.custom_answers_json), metadata_json: { ...metadata, precheck: { result: precheck0108F.result, match_strength: precheck0108F.match_strength, flag_for_review: precheck0108F.flag_for_review === true } }, spam_score: spamScore, spam_reason: spamSignals.join(", "), duplicate_check_json: duplicateCheckJson0108F, needs_attention: needsAttention0108F })
     .select("application_id, created_at")
     .single();
   if (insertError) throw insertError;
@@ -2319,6 +2731,8 @@ async function getCalendarPagePayload(serviceClient: SupabaseClientAny, supabase
   const template = context.template as JsonRecord;
   const settings = context.settings as JsonRecord | null;
   const style = context.style as JsonRecord | null;
+
+  const organizationId = String(organization.organization_id);
 
   const appPortalSettings0107 = await getApplicantSettingsPublic0107(serviceClient, organizationId);
 
@@ -2787,7 +3201,17 @@ serve(async (req: Request): Promise<Response> => {
 
     if (action === "request_applicant_portal_access") {
       const result = await requestApplicantPortalAccessPublic0107(serviceClient, body, req);
-      return jsonResponse(200, result);
+      return jsonNoStoreResponse(200, result);
+    }
+
+    if (action === "request_applicant_portal_access_from_precheck") {
+      const result = await requestApplicantPortalAccessFromPrecheck0108I(serviceClient, body, req);
+      return jsonNoStoreResponse(200, result);
+    }
+
+    if (action === "precheck_applicant_application") {
+      const result = await precheckApplicantApplication0108F(serviceClient, body);
+      return jsonNoStoreResponse(result.ok === false ? 400 : 200, result);
     }
 
     if (action === "get_apply_page") {
@@ -2797,7 +3221,7 @@ serve(async (req: Request): Promise<Response> => {
 
     if (action === "submit_apply_now" || action === "submit_applicant_application") {
       const result = await submitApplicantApplication(serviceClient, body, req);
-      return jsonResponse(result.ok === false ? 400 : 200, result);
+      return jsonNoStoreResponse(result.ok === false ? 400 : 200, result);
     }
 
     if (action === "submit_contact_inquiry") {
@@ -2815,7 +3239,7 @@ serve(async (req: Request): Promise<Response> => {
     return jsonResponse(500, {
       ok: false,
       error: "public_render_failed",
-      message: error instanceof Error ? error.message : String(error),
+      message: publicRenderErrorMessage0107E(error),
     });
   }
 });

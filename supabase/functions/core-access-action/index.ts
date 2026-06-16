@@ -1,7 +1,7 @@
 // index.ts
 // Deploy target: Supabase Edge Function named core-access-action
 // JWT verification: ON
-// Internal Version: 2026-06-10-107-C
+// Internal Version: 2026-06-15-115-B
 // Purpose: secured user/organization-admin access foundation for SyncEtc. Separates lifecycle status, membership class, onboarding/application stage, roles, permissions, and future RSVP audience rules.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
@@ -11,7 +11,7 @@ type JsonRecord = Record<string, unknown>;
 type SupabaseClientAny = any;
 declare const Deno: { env: { get: (key: string) => string | undefined } };
 
-const VERSION = "2026-06-10-107-C";
+const VERSION = "2026-06-15-115-B";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -54,6 +54,14 @@ const EVENT_IMAGE_MIME_TO_EXTENSION: Record<string, string> = {
   "image/png": "png",
   "image/webp": "webp",
 };
+
+const MEMBER_DASHBOARD_METAR_STATIONS_0110B = [
+  { station: "KFFA", label: "First Flight Airport", time_zone: "America/New_York" },
+  { station: "KICT", label: "Wichita Dwight D. Eisenhower National Airport", time_zone: "America/Chicago" },
+];
+const MEMBER_DASHBOARD_METAR_STALE_MS_0110B = 15 * 60 * 1000;
+const MEMBER_DASHBOARD_METAR_SOURCE_0110B = "aviationweather.gov";
+const MEMBER_DASHBOARD_METAR_PROVIDER_HOOK_0110B = "checkwx_future_backup";
 
 const PLATFORM_SYNTHETIC_PERMISSION_KEYS = [
   "organization.admin.open",
@@ -104,9 +112,41 @@ function jsonResponse(status: number, body: JsonRecord): Response {
   });
 }
 
+class AccessActionError extends Error {
+  status: number;
+  errorCode: string;
+  details?: JsonRecord;
+
+  constructor(status: number, errorCode: string, message: string, details?: JsonRecord) {
+    super(message);
+    this.name = "AccessActionError";
+    this.status = status;
+    this.errorCode = errorCode;
+    this.details = details;
+  }
+}
+
 function clean(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
+
+function accessActionErrorMessage0107E(error: unknown): string {
+  if (error instanceof Error && clean(error.message)) return clean(error.message);
+  if (error && typeof error === "object") {
+    const obj = error as JsonRecord;
+    const direct = clean(obj.message || obj.error_description || obj.error || obj.hint || obj.code);
+    if (direct && direct !== "[object Object]") return direct;
+    try {
+      const json = JSON.stringify(obj);
+      if (json && json !== "{}") return clean(json).slice(0, 1000);
+    } catch (_) {
+      /* fall through */
+    }
+  }
+  const fallback = clean(String(error));
+  return fallback && fallback !== "[object Object]" ? fallback : "The access action failed, but Supabase did not return a readable error message.";
+}
+
 
 function normalizeEmail(value: unknown): string {
   return clean(value).toLowerCase();
@@ -365,13 +405,17 @@ function buildNavigationBundle(rows: JsonRecord[]): JsonRecord {
     navigation_profile: {
       navigation_profile_id: first.navigation_profile_id || null,
       profile_name: first.profile_name || null,
-      header_layout_key: first.header_layout_key || "pill-rows",
+      header_layout_key: first.header_layout_key || first.header_recipe_key || "standard_horizontal",
+      header_recipe_key: first.header_recipe_key || first.header_layout_key || "standard_horizontal",
+      nav_display_mode: first.nav_display_mode || null,
+      header_recipe_version: first.header_recipe_version || "0108-A",
       show_logo: first.show_logo !== false,
       show_large_title: first.show_large_title !== false,
       show_org_context_row: first.show_org_context_row === true,
       show_user_badge: first.show_user_badge !== false,
       show_logout_button: first.show_logout_button !== false,
-      settings_json: jsonObject(first.profile_settings_json),
+      settings_json: { ...jsonObject(first.profile_settings_json), ...jsonObject(first.header_settings_json) },
+      header_settings_json: jsonObject(first.header_settings_json),
     },
     navigation_rows: navRows,
     navigation_items: navItems,
@@ -602,7 +646,7 @@ async function ensurePersonForAuthUser(serviceClient: SupabaseClientAny, user: J
       .insert({
         display_name: displayName,
         primary_email: email,
-        status: "auth_unlinked",
+        status: "active",
         profile_json: { created_by: "core-access-action", source: "auth_user_first_login", note: "Auth login exists but no organization membership has been granted." },
       })
       .select("*")
@@ -622,6 +666,43 @@ async function ensurePersonForAuthUser(serviceClient: SupabaseClientAny, user: J
   if (createLinkError && !String(createLinkError.message || "").includes("duplicate")) throw createLinkError;
 
   return person;
+}
+
+async function applicantAuthOnlyPerson0107F(user: JsonRecord): JsonRecord {
+  const metadata = (user.user_metadata && typeof user.user_metadata === "object") ? user.user_metadata as JsonRecord : {};
+  const email = normalizeEmail(user.email);
+  const displayName = clean(metadata.full_name || metadata.name || email || "Applicant");
+  return {
+    person_id: "",
+    auth_user_id: clean(user.id),
+    primary_email: email,
+    email,
+    display_name: displayName,
+    status: "applicant_auth_only",
+    profile_json: { source: "applicant_portal_auth", note: "Applicant portal login is intentionally not a core_people/member login." },
+  };
+}
+
+function isApplicantAuthOnlyUser0107F(user: JsonRecord): boolean {
+  const userMeta = (user.user_metadata && typeof user.user_metadata === "object") ? user.user_metadata as JsonRecord : {};
+  const appMeta = (user.app_metadata && typeof user.app_metadata === "object") ? user.app_metadata as JsonRecord : {};
+  const accountType = normalizeKey(userMeta.syncetc_account_type || appMeta.syncetc_account_type || userMeta.account_type || appMeta.account_type);
+  return accountType === "applicant";
+}
+
+async function findExistingPersonForAuthUser0107F(serviceClient: SupabaseClientAny, user: JsonRecord): Promise<JsonRecord | null> {
+  const authUserId = clean(user.id);
+  if (!authUserId) return null;
+  const { data, error } = await serviceClient
+    .from("core_person_user_links")
+    .select("person_id, core_people(*)")
+    .eq("auth_user_id", authUserId)
+    .eq("status", "active")
+    .is("archived_at", null)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data?.person_id) return null;
+  return (data.core_people || { person_id: data.person_id, primary_email: normalizeEmail(user.email) }) as JsonRecord;
 }
 
 async function fetchStyleProfiles(serviceClient: SupabaseClientAny, organizationIds: string[]): Promise<Map<string, JsonRecord>> {
@@ -4958,7 +5039,7 @@ function maskApplicantEmail0098(email: unknown): string {
 }
 
 function applicantPortalAllowed0098(settings: JsonRecord, app: JsonRecord): boolean {
-  const mode = portalAccessMode0098(settings.portal_access_mode || settings.applicant_portal_access_rule);
+  const mode = portalAccessMode0098(settings.portal_access_mode || settings.applicant_portal_access_rule || settings.applicant_account_mode);
   const status = normalizeApplicantStatus(app.applicant_status || app.status, "new");
   if (mode === "none") return false;
   if (mode === "after_submitted") return true;
@@ -5011,6 +5092,44 @@ function enrichApplicantTasksWithUploads0098(tasks: JsonRecord[], uploadsMap: Ma
     return { ...task, uploads, latest_upload: newest, upload_required: task.upload_required === true || jsonObject(task.settings_json).upload_required === true || ["upload", "document"].includes(clean(task.task_type)) };
   });
 }
+
+function applicantTaskVisibleToApplicant0107G(task: JsonRecord): boolean {
+  const responsible = normalizeKey(task.responsible_party || task.completion_actor || "");
+  return task.applicant_visible !== false && responsible === "applicant";
+}
+
+function applicantPortalTaskStageMatches0107G(task: JsonRecord, stageKey: string): boolean {
+  const taskStage = normalizeApplicantStatus(task.stage_key || stageKey, stageKey || "new");
+  return taskStage === normalizeApplicantStatus(stageKey || "new", "new");
+}
+
+function applicantPortalPublicApplication0107G(application: JsonRecord): JsonRecord {
+  const stageKey = normalizeApplicantStatus(application.stage_key || application.applicant_status || application.status || "new", "new");
+  const allTasks = Array.isArray(application.tasks) ? application.tasks as JsonRecord[] : [];
+  const applicantActionTasks = allTasks
+    .filter(applicantTaskVisibleToApplicant0107G)
+    .filter((task) => applicantPortalTaskStageMatches0107G(task, stageKey));
+  const out: JsonRecord = {
+    ...application,
+    tasks: applicantActionTasks,
+    current_stage_tasks: applicantActionTasks,
+    events: [],
+    timeline_notes: [],
+    applicant_portal_task_counts: {
+      current_stage_applicant_tasks: applicantActionTasks.length,
+    },
+  };
+  delete out.internal_notes;
+  delete out.metadata_json;
+  delete out.spam_score;
+  delete out.spam_reason;
+  delete out.last_reply_at;
+  delete out.last_reply_by_email;
+  delete out.ready_for_final_review;
+  delete out.ready_for_final_review_at;
+  return out;
+}
+
 
 
 function escapeHtml0107(value: unknown): string {
@@ -5095,26 +5214,216 @@ async function applicantPortalResolveOrganizationId0106(serviceClient: SupabaseC
   return clean(data?.organization_id);
 }
 
-async function applicantPortalFindApplication0098(serviceClient: SupabaseClientAny, actorEmail: string, authUserId: string, organizationId = ""): Promise<{ app: JsonRecord; settings: JsonRecord; organization: JsonRecord; page: JsonRecord | null; }> {
-  let query = serviceClient.from("core_applications").select("*").eq("email", actorEmail).is("archived_at", null).order("submitted_at", { ascending: false }).limit(25);
-  if (organizationId) query = query.eq("organization_id", organizationId);
-  const { data, error } = await query;
-  if (error) throw error;
-  const candidates = (data || []) as JsonRecord[];
-  if (!candidates.length) throw new Error("No applicant record was found for this login email.");
-  for (const candidate of candidates) {
-    const settings = await getApplicantSettings(serviceClient, clean(candidate.organization_id));
-    if (!applicantPortalAllowed0098(settings, candidate)) continue;
-    if (authUserId && !candidate.applicant_user_id) {
-      await serviceClient.from("core_applications").update({ applicant_user_id: authUserId, updated_at: new Date().toISOString() }).eq("application_id", candidate.application_id);
-      candidate.applicant_user_id = authUserId;
+function applicantPortalLookupDiagnostics0107D(actorEmail: string, authUserId: string, organizationId: string): JsonRecord {
+  return {
+    diagnostic_version: "2026-06-12-108-A",
+    auth_email: actorEmail,
+    auth_user_id: authUserId,
+    requested_organization_id: organizationId || "",
+    lookup_order: ["applicant_user_id", "email", "primary_email"],
+    lookup_attempts: [] as JsonRecord[],
+    rejected_candidates: [] as JsonRecord[],
+    match_method: "",
+    applicant_id: "",
+    organization_id: "",
+    access_allowed: false,
+    access_block_reason: "",
+    applicant_user_id_linked: false,
+    applicant_user_id_link_skipped_reason: "",
+    portal_access_mode: "",
+    applicant_account_mode: "",
+  };
+}
+
+function applicantPortalPushDiagnostic0107D(diagnostics: JsonRecord, key: "lookup_attempts" | "rejected_candidates", row: JsonRecord): void {
+  const list = Array.isArray(diagnostics[key]) ? diagnostics[key] as JsonRecord[] : [];
+  list.push(row);
+  diagnostics[key] = list;
+}
+
+function applicantPortalEmailOr0107D(email: string): string {
+  const safe = normalizeEmail(email).replace(/[,()]/g, "");
+  return `email.ilike.${safe},primary_email.ilike.${safe}`;
+}
+
+function applicantPortalCandidateSort0107D(a: JsonRecord, b: JsonRecord): number {
+  const aSubmitted = Date.parse(clean(a.submitted_at || a.created_at || "")) || 0;
+  const bSubmitted = Date.parse(clean(b.submitted_at || b.created_at || "")) || 0;
+  return bSubmitted - aSubmitted;
+}
+
+function applicantPortalVisibleCandidate0107D(candidate: JsonRecord): JsonRecord {
+  return {
+    application_id: clean(candidate.application_id),
+    organization_id: clean(candidate.organization_id),
+    email_matched: Boolean(clean(candidate.email)),
+    primary_email_matched: Boolean(clean(candidate.primary_email)),
+    applicant_user_id_present: Boolean(clean(candidate.applicant_user_id)),
+    status: clean(candidate.applicant_status || candidate.status || candidate.stage_key),
+    stage_key: clean(candidate.stage_key),
+    portal_access_granted: candidate.portal_access_granted === true,
+  };
+}
+
+async function applicantPortalFindApplication0098(serviceClient: SupabaseClientAny, actorEmail: string, authUserId: string, organizationId = ""): Promise<{ app: JsonRecord; settings: JsonRecord; organization: JsonRecord; page: JsonRecord | null; diagnostics: JsonRecord; }> {
+  const normalizedEmail = normalizeEmail(actorEmail);
+  const normalizedUserId = clean(authUserId);
+  const normalizedOrgId = clean(organizationId);
+  const diagnostics = applicantPortalLookupDiagnostics0107D(normalizedEmail, normalizedUserId, normalizedOrgId);
+  const candidatesById = new Map<string, { row: JsonRecord; method: string }>();
+
+  const addCandidates = (rows: JsonRecord[], method: string) => {
+    for (const row of rows || []) {
+      const appId = clean(row.application_id);
+      if (!appId) continue;
+      if (!candidatesById.has(appId)) candidatesById.set(appId, { row, method });
     }
+  };
+
+  if (normalizedUserId) {
+    let byUserQuery = serviceClient.from("core_applications").select("*").eq("applicant_user_id", normalizedUserId).is("archived_at", null).order("submitted_at", { ascending: false }).limit(25);
+    if (normalizedOrgId) byUserQuery = byUserQuery.eq("organization_id", normalizedOrgId);
+    const { data: byUser, error: byUserError } = await byUserQuery;
+    if (byUserError) throw byUserError;
+    const byUserRows = ((byUser || []) as JsonRecord[]).sort(applicantPortalCandidateSort0107D);
+    applicantPortalPushDiagnostic0107D(diagnostics, "lookup_attempts", { method: "applicant_user_id", count: byUserRows.length, organization_id: normalizedOrgId || null });
+    addCandidates(byUserRows, "applicant_user_id");
+  }
+
+  if (normalizedEmail) {
+    const emailRows: JsonRecord[] = [];
+    const addEmailLookupRows = async (column: "email" | "primary_email", method: string) => {
+      let query = serviceClient
+        .from("core_applications")
+        .select("*")
+        .eq(column, normalizedEmail)
+        .is("archived_at", null)
+        .order("submitted_at", { ascending: false })
+        .limit(25);
+      if (normalizedOrgId) query = query.eq("organization_id", normalizedOrgId);
+      const { data, error } = await query;
+      if (error) throw new Error(`Applicant lookup by ${column} failed: ${accessActionErrorMessage0107E(error)}`);
+      const rows = ((data || []) as JsonRecord[]).sort(applicantPortalCandidateSort0107D);
+      applicantPortalPushDiagnostic0107D(diagnostics, "lookup_attempts", { method, column, count: rows.length, organization_id: normalizedOrgId || null });
+      emailRows.push(...rows);
+    };
+    await addEmailLookupRows("email", "email");
+    await addEmailLookupRows("primary_email", "primary_email");
+    const byEmailRows = emailRows.sort(applicantPortalCandidateSort0107D);
+    applicantPortalPushDiagnostic0107D(diagnostics, "lookup_attempts", { method: "email_or_primary_email_combined", count: byEmailRows.length, organization_id: normalizedOrgId || null });
+    addCandidates(byEmailRows, "email_or_primary_email");
+  }
+
+  const candidates = Array.from(candidatesById.values()).sort((a, b) => applicantPortalCandidateSort0107D(a.row, b.row));
+  if (!candidates.length) {
+    diagnostics.access_block_reason = "no_matching_application";
+    throw new AccessActionError(
+      404,
+      "applicant_record_not_linked",
+      `You are logged in as ${normalizedEmail || "this user"}, but no applicant portal record is linked to this login. Use the same email address from the application or ask the organization to resend portal access.`,
+      diagnostics,
+    );
+  }
+
+  let sawLinkedDifferentUser = false;
+  let sawPortalBlocked = false;
+  for (const wrapped of candidates) {
+    const candidate = wrapped.row;
+    const candidateUserId = clean(candidate.applicant_user_id);
+    const candidateEmail = normalizeEmail(candidate.email);
+    const candidatePrimaryEmail = normalizeEmail(candidate.primary_email);
+    const method = candidateUserId && candidateUserId === normalizedUserId
+      ? "applicant_user_id"
+      : candidateEmail === normalizedEmail
+        ? "email"
+        : candidatePrimaryEmail === normalizedEmail
+          ? "primary_email"
+          : wrapped.method;
+
+    if (candidateUserId && normalizedUserId && candidateUserId !== normalizedUserId) {
+      sawLinkedDifferentUser = true;
+      applicantPortalPushDiagnostic0107D(diagnostics, "rejected_candidates", { ...applicantPortalVisibleCandidate0107D(candidate), method, reason: "applicant_user_id_belongs_to_different_auth_user" });
+      continue;
+    }
+
+    const settings = await getApplicantSettings(serviceClient, clean(candidate.organization_id));
+    const portalMode = portalAccessMode0098(settings.portal_access_mode || settings.applicant_portal_access_rule || settings.applicant_account_mode);
+    const accountMode = portalAccessMode0098(settings.applicant_account_mode || settings.portal_access_mode || settings.applicant_portal_access_rule);
+    diagnostics.portal_access_mode = portalMode;
+    diagnostics.applicant_account_mode = accountMode;
+
+    if (!applicantPortalAllowed0098(settings, candidate)) {
+      sawPortalBlocked = true;
+      applicantPortalPushDiagnostic0107D(diagnostics, "rejected_candidates", { ...applicantPortalVisibleCandidate0107D(candidate), method, portal_access_mode: portalMode, applicant_account_mode: accountMode, reason: "portal_access_blocked_by_settings_or_stage" });
+      continue;
+    }
+
+    const exactEmailMatch = candidateEmail === normalizedEmail || candidatePrimaryEmail === normalizedEmail;
+    const emailLinkedMatches = !candidateUserId && exactEmailMatch;
+    const matchByUserId = candidateUserId && candidateUserId === normalizedUserId;
+    if (!matchByUserId && !emailLinkedMatches) {
+      applicantPortalPushDiagnostic0107D(diagnostics, "rejected_candidates", { ...applicantPortalVisibleCandidate0107D(candidate), method, reason: "candidate_did_not_match_current_auth_email_or_user" });
+      continue;
+    }
+
+    if (normalizedUserId && !candidateUserId && exactEmailMatch) {
+      const sameEmailCandidates = candidates.filter((item) => {
+        const row = item.row;
+        return normalizeEmail(row.email) === normalizedEmail || normalizeEmail(row.primary_email) === normalizedEmail;
+      });
+      const canSafelyLink = Boolean(normalizedOrgId) || sameEmailCandidates.length === 1;
+      if (canSafelyLink) {
+        const { data: linked, error: linkError } = await serviceClient
+          .from("core_applications")
+          .update({ applicant_user_id: normalizedUserId, updated_at: new Date().toISOString() })
+          .eq("application_id", candidate.application_id)
+          .is("applicant_user_id", null)
+          .select("application_id, applicant_user_id")
+          .maybeSingle();
+        if (linkError) throw linkError;
+        if (linked?.application_id) {
+          candidate.applicant_user_id = normalizedUserId;
+          diagnostics.applicant_user_id_linked = true;
+        } else {
+          const { data: refreshed, error: refreshError } = await serviceClient.from("core_applications").select("applicant_user_id").eq("application_id", candidate.application_id).maybeSingle();
+          if (refreshError) throw refreshError;
+          const refreshedUserId = clean(refreshed?.applicant_user_id);
+          if (refreshedUserId && refreshedUserId !== normalizedUserId) {
+            applicantPortalPushDiagnostic0107D(diagnostics, "rejected_candidates", { ...applicantPortalVisibleCandidate0107D(candidate), method, reason: "applicant_user_id_was_claimed_by_different_auth_user_during_link" });
+            continue;
+          }
+          if (refreshedUserId === normalizedUserId) {
+            candidate.applicant_user_id = normalizedUserId;
+            diagnostics.applicant_user_id_linked = true;
+          } else {
+            diagnostics.applicant_user_id_link_skipped_reason = "link_update_returned_no_row";
+          }
+        }
+      } else {
+        diagnostics.applicant_user_id_link_skipped_reason = "multiple_email_matches_without_requested_organization";
+      }
+    }
+
     const { data: org, error: orgError } = await serviceClient.from("core_organizations").select("organization_id, organization_key, display_name, organization_type, vertical, status").eq("organization_id", clean(candidate.organization_id)).maybeSingle();
     if (orgError) throw orgError;
     const { data: page } = await serviceClient.from("core_customer_pages").select("*").eq("organization_id", clean(candidate.organization_id)).eq("page_key", "applicant-portal").maybeSingle();
-    return { app: candidate, settings, organization: org || {}, page: page || null };
+
+    diagnostics.match_method = method;
+    diagnostics.applicant_id = clean(candidate.application_id);
+    diagnostics.organization_id = clean(candidate.organization_id);
+    diagnostics.access_allowed = true;
+    diagnostics.access_block_reason = "";
+
+    return { app: candidate, settings, organization: org || {}, page: page || null, diagnostics };
   }
-  throw new Error("Applicant portal access is not currently available for this application.");
+
+  diagnostics.access_block_reason = sawLinkedDifferentUser ? "matching_application_linked_to_different_auth_user" : sawPortalBlocked ? "portal_access_blocked_by_settings_or_stage" : "no_accessible_matching_application";
+  const message = sawLinkedDifferentUser
+    ? `You are logged in as ${normalizedEmail || "this user"}, but the matching applicant portal record is linked to a different login. Ask the organization to resend portal access or unlink the old applicant login.`
+    : sawPortalBlocked
+      ? "Applicant portal access is not currently available for this application."
+      : `You are logged in as ${normalizedEmail || "this user"}, but no applicant portal record is linked to this login.`;
+  throw new AccessActionError(sawPortalBlocked ? 403 : 404, sawPortalBlocked ? "applicant_portal_not_available" : "applicant_record_not_linked", message, diagnostics);
 }
 
 async function applicantGetPortal0098(serviceClient: SupabaseClientAny, actorEmail: string, authUserId: string, organizationId = ""): Promise<JsonRecord> {
@@ -5122,6 +5431,7 @@ async function applicantGetPortal0098(serviceClient: SupabaseClientAny, actorEma
   const application = await getApplicantApplication(serviceClient, clean(found.app.organization_id), clean(found.app.application_id));
   const uploadsMap = await listApplicantUploadsMap0098(serviceClient, [clean(found.app.application_id)]);
   application.tasks = enrichApplicantTasksWithUploads0098(Array.isArray(application.tasks) ? application.tasks as JsonRecord[] : [], uploadsMap);
+  const applicantPublicApplication = applicantPortalPublicApplication0107G(application);
   const { data: style } = await serviceClient.from("core_customer_style_profiles").select("*").eq("organization_id", clean(found.app.organization_id)).eq("is_active", true).order("updated_at", { ascending: false }).limit(1).maybeSingle();
   const showWaitlist = found.settings.show_waitlist_position === true;
   return {
@@ -5130,10 +5440,26 @@ async function applicantGetPortal0098(serviceClient: SupabaseClientAny, actorEma
     style_profile: style || null,
     settings: {
       portal_access_mode: found.settings.portal_access_mode || "accepted_onboarding",
+      applicant_account_mode: found.settings.applicant_account_mode || found.settings.portal_access_mode || "accepted_onboarding",
       allow_applicant_updates: found.settings.allow_applicant_updates !== false,
       show_waitlist_position: showWaitlist,
     },
-    application: { ...application, can_update: applicantCanUpdate0098(found.settings, found.app), waitlist_order: showWaitlist ? found.app.waitlist_order || null : null },
+    access: {
+      access_level: "applicant",
+      is_applicant: true,
+      is_member: false,
+      is_organization_admin: false,
+      is_platform_admin: false,
+      application_id: clean(found.app.application_id),
+      organization_id: clean(found.app.organization_id),
+      match_method: clean(found.diagnostics.match_method),
+    },
+    diagnostics: {
+      ...found.diagnostics,
+      applicant_portal_visibility_version: "2026-06-12-108-A",
+      applicant_tasks_returned: Array.isArray(applicantPublicApplication.tasks) ? applicantPublicApplication.tasks.length : 0,
+    },
+    application: { ...applicantPublicApplication, can_update: applicantCanUpdate0098(found.settings, found.app), waitlist_order: showWaitlist ? found.app.waitlist_order || null : null },
   };
 }
 
@@ -5163,7 +5489,7 @@ async function applicantSavePortal0098(serviceClient: SupabaseClientAny, actorEm
   const before = await getApplicantApplication(serviceClient, clean(found.app.organization_id), clean(found.app.application_id));
   const payload = applicantPortalUpdatePayload0098(body);
   if (!clean(payload.first_name || before.first_name) || !clean(payload.last_name || before.last_name)) throw new Error("First and last name are required.");
-  const { error } = await serviceClient.from("core_applications").update(payload).eq("application_id", found.app.application_id).eq("email", actorEmail);
+  const { error } = await serviceClient.from("core_applications").update(payload).eq("application_id", found.app.application_id).eq("organization_id", clean(found.app.organization_id));
   if (error) throw error;
   await writeApplicantEvent(serviceClient, "applicant_self_updated", clean(found.app.application_id), clean(found.app.organization_id), actorEmail, "Applicant updated application from applicant portal.", before, payload, {});
   return await applicantGetPortal0098(serviceClient, actorEmail, authUserId, clean(found.app.organization_id));
@@ -5201,6 +5527,11 @@ async function applicantUploadTaskFile0098(serviceClient: SupabaseClientAny, act
   const { data: task, error: taskError } = await serviceClient.from("core_applicant_tasks").select("*").eq("application_id", applicationId).eq("applicant_task_id", taskId).maybeSingle();
   if (taskError) throw taskError;
   if (!task) throw new Error("Applicant task was not found.");
+  const safeTaskForApplicant = safeApplicantTask(task as JsonRecord);
+  const currentStageKey = normalizeApplicantStatus(found.app.stage_key || found.app.applicant_status || found.app.status || "new", "new");
+  if (!applicantTaskVisibleToApplicant0107G(safeTaskForApplicant) || !applicantPortalTaskStageMatches0107G(safeTaskForApplicant, currentStageKey)) {
+    throw new Error("This task is not available in the applicant portal.");
+  }
   const fileName = clean(body.file_name || "upload");
   const mime = safeApplicantUploadMime0098(body.mime_type || body.content_type);
   const bytes = decodeApplicantUpload0098(body.file_base64 || body.data_url);
@@ -5211,7 +5542,7 @@ async function applicantUploadTaskFile0098(serviceClient: SupabaseClientAny, act
   const path = `organizations/${clean(found.app.organization_id)}/applicants/${applicationId}/tasks/${clean(task.task_key || taskId)}/${Date.now()}-${normalizeKey(fileName) || "upload"}.${ext}`;
   const { error: uploadError } = await serviceClient.storage.from(bucket).upload(path, bytes, { contentType: mime, upsert: false });
   if (uploadError) throw uploadError;
-  const { data: upload, error } = await serviceClient.from("core_applicant_task_uploads").insert({ application_id: applicationId, organization_id: clean(found.app.organization_id), applicant_task_id: taskId, applicant_user_id: authUserId || null, task_key: clean(task.task_key), storage_bucket: bucket, storage_path: path, original_file_name: fileName, mime_type: mime, file_size_bytes: bytes.length, upload_status: "submitted", visibility: "private", applicant_note: clean(body.applicant_note), uploaded_by_email: actorEmail, metadata_json: { version: "2026-06-10-107-C", source: "applicant_portal" } }).select("*").single();
+  const { data: upload, error } = await serviceClient.from("core_applicant_task_uploads").insert({ application_id: applicationId, organization_id: clean(found.app.organization_id), applicant_task_id: taskId, applicant_user_id: authUserId || null, task_key: clean(task.task_key), storage_bucket: bucket, storage_path: path, original_file_name: fileName, mime_type: mime, file_size_bytes: bytes.length, upload_status: "submitted", visibility: "private", applicant_note: clean(body.applicant_note), uploaded_by_email: actorEmail, metadata_json: { version: "2026-06-12-108-A", source: "applicant_portal" } }).select("*").single();
   if (error) throw error;
   await serviceClient.from("core_applicant_tasks").update({ status: "in_progress", upload_status: "submitted", review_status: "submitted", updated_at: new Date().toISOString() }).eq("applicant_task_id", taskId);
   await serviceClient.from("core_applications").update({ ready_for_final_review: false, updated_at: new Date().toISOString() }).eq("application_id", applicationId);
@@ -5379,6 +5710,797 @@ async function listApplicantConversionLookups0102(serviceClient: SupabaseClientA
     application_stages: stages.data || [],
   };
 }
+
+
+function forumIsModerator0111A(accessRow: JsonRecord, platformAdmin: boolean): boolean {
+  if (platformAdmin) return true;
+  const caps = jsonObject(accessRow.capabilities);
+  const permissions = stringArray(accessRow.permission_keys);
+  return Boolean(caps.can_view_organization_admin)
+    || permissions.includes("organization.admin.open")
+    || permissions.includes("organization.view_admin")
+    || permissions.includes("communications.manage")
+    || permissions.includes("content.manage_pages");
+}
+
+async function forumAccessContext0111A(
+  serviceClient: SupabaseClientAny,
+  organizationId: string,
+  personId: string,
+  platformAdmin: boolean,
+): Promise<{ accessRow: JsonRecord; canModerate: boolean }> {
+  if (!organizationId) throw new Error("Missing organization context.");
+  const rows = platformAdmin ? await buildPlatformAccess(serviceClient, organizationId) : await buildAccess(serviceClient, personId);
+  const accessRow = rows.find((row: JsonRecord) => clean(row.organization_id) === organizationId || clean(row.organization_key) === organizationId);
+  if (!accessRow) throw new Error("You are not linked to this organization.");
+  if (!platformAdmin && accessRow.blocks_access) throw new Error("Your organization access is blocked by the current lifecycle status.");
+  const caps = jsonObject(accessRow.capabilities);
+  const permissions = stringArray(accessRow.permission_keys);
+  const canRead = platformAdmin || Boolean(caps.can_view_user_dashboard) || Boolean(caps.can_view_organization_admin) || permissions.includes("member.portal.view") || permissions.includes("organization.admin.open");
+  if (!canRead) throw new Error("You do not have message board access for this organization.");
+  return { accessRow, canModerate: forumIsModerator0111A(accessRow, platformAdmin) };
+}
+
+function forumSafeCategory0111A(row: JsonRecord): JsonRecord {
+  return {
+    forum_category_id: clean(row.forum_category_id),
+    organization_id: clean(row.organization_id),
+    category_key: normalizeKey(row.category_key),
+    label: clean(row.label),
+    description: clean(row.description),
+    category_type: normalizeKey(row.category_type || "discussion"),
+    visibility: normalizeKey(row.visibility || "members"),
+    posting_mode: normalizeKey(row.posting_mode || "members"),
+    sort_order: Number(row.sort_order || 100),
+    status: normalizeKey(row.status || "active"),
+  };
+}
+
+function forumSafeMember0111A(row: JsonRecord): JsonRecord {
+  const profile = jsonObject(row.profile_json);
+  const name = clean(row.display_name || `${clean(row.first_name)} ${clean(row.last_name)}` || row.primary_email);
+  return {
+    person_id: clean(row.person_id),
+    display_name: name || normalizeEmail(row.primary_email),
+    first_name: clean(row.first_name || jsonObject(profile.name).preferred_first_name),
+    last_name: clean(row.last_name),
+    email: normalizeEmail(row.primary_email),
+  };
+}
+
+async function forumMembers0111A(serviceClient: SupabaseClientAny, organizationId: string): Promise<JsonRecord[]> {
+  const { data: memberships, error: memberError } = await serviceClient
+    .from("core_organization_memberships")
+    .select("person_id")
+    .eq("organization_id", organizationId)
+    .is("archived_at", null)
+    .limit(500);
+  if (memberError) throw memberError;
+  const personIds = Array.from(new Set((memberships || []).map((m: JsonRecord) => clean(m.person_id)).filter(Boolean)));
+  if (!personIds.length) return [];
+  const { data: people, error: peopleError } = await serviceClient
+    .from("core_people")
+    .select("person_id, display_name, first_name, last_name, primary_email, profile_json, archived_at")
+    .in("person_id", personIds)
+    .is("archived_at", null)
+    .order("display_name", { ascending: true })
+    .limit(500);
+  if (peopleError) throw peopleError;
+  return (people || []).map(forumSafeMember0111A).filter((p: JsonRecord) => clean(p.person_id));
+}
+
+function forumReactionKey0111E(kind: "topic" | "reply", id: string): string {
+  return `${kind}:${clean(id)}`;
+}
+
+function forumReactionInfo0111E(reactionMap: Map<string, JsonRecord>, kind: "topic" | "reply", id: string): JsonRecord {
+  return reactionMap.get(forumReactionKey0111E(kind, id)) || { like_count: 0, viewer_liked: false };
+}
+
+function forumSafeTopic0111A(row: JsonRecord, categoryMap: Map<string, JsonRecord>, pollMap: Map<string, JsonRecord>, viewerReadMap: Map<string, string>, reactionMap: Map<string, JsonRecord> = new Map()): JsonRecord {
+  const topicId = clean(row.forum_topic_id);
+  const reactions = forumReactionInfo0111E(reactionMap, "topic", topicId);
+  return {
+    forum_topic_id: topicId,
+    organization_id: clean(row.organization_id),
+    forum_category_id: clean(row.forum_category_id),
+    category: categoryMap.get(clean(row.forum_category_id)) || null,
+    topic_type: normalizeKey(row.topic_type || "discussion"),
+    title: clean(row.title),
+    body: clean(row.body),
+    trip_json: jsonObject(row.trip_json),
+    created_by_person_id: clean(row.created_by_person_id),
+    created_by_name: clean(row.created_by_name || row.created_by_email),
+    created_by_email: normalizeEmail(row.created_by_email),
+    pinned: Boolean(row.pinned),
+    locked: Boolean(row.locked),
+    reply_count: Number(row.reply_count || 0),
+    mention_count: Number(row.mention_count || 0),
+    like_count: Number(reactions.like_count || 0),
+    reaction_count: Number(reactions.like_count || 0),
+    viewer_liked: Boolean(reactions.viewer_liked),
+    last_reply_at: row.last_reply_at || null,
+    last_activity_at: row.last_activity_at || row.created_at || null,
+    status: normalizeKey(row.status || "active"),
+    hidden_reason: clean(row.hidden_reason),
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+    poll: pollMap.get(topicId) || null,
+    viewer_last_read_at: viewerReadMap.get(topicId) || null,
+  };
+}
+
+function forumSafeReply0111A(row: JsonRecord, reactionMap: Map<string, JsonRecord> = new Map()): JsonRecord {
+  const replyId = clean(row.forum_reply_id);
+  const reactions = forumReactionInfo0111E(reactionMap, "reply", replyId);
+  return {
+    forum_reply_id: replyId,
+    forum_topic_id: clean(row.forum_topic_id),
+    body: clean(row.body),
+    created_by_person_id: clean(row.created_by_person_id),
+    created_by_name: clean(row.created_by_name || row.created_by_email),
+    created_by_email: normalizeEmail(row.created_by_email),
+    mention_count: Number(row.mention_count || 0),
+    like_count: Number(reactions.like_count || 0),
+    reaction_count: Number(reactions.like_count || 0),
+    viewer_liked: Boolean(reactions.viewer_liked),
+    status: normalizeKey(row.status || "active"),
+    hidden_reason: clean(row.hidden_reason),
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+    edited_at: row.edited_at || null,
+  };
+}
+
+async function forumReactionStatsMap0111E(
+  serviceClient: SupabaseClientAny,
+  organizationId: string,
+  topicIdsRaw: string[],
+  replyIdsRaw: string[],
+  viewerPersonId: string,
+): Promise<Map<string, JsonRecord>> {
+  const map = new Map<string, JsonRecord>();
+  const topicIds = Array.from(new Set(topicIdsRaw.map(clean).filter(Boolean))).slice(0, 200);
+  const replyIds = Array.from(new Set(replyIdsRaw.map(clean).filter(Boolean))).slice(0, 300);
+  async function pull(kind: "topic" | "reply", ids: string[]) {
+    if (!ids.length) return;
+    let query = serviceClient
+      .from("core_forum_reactions")
+      .select("forum_topic_id,forum_reply_id,person_id,reaction_type")
+      .eq("organization_id", organizationId)
+      .eq("reaction_type", "like")
+      .eq("status", "active")
+      .is("archived_at", null);
+    if (kind === "topic") query = query.in("forum_topic_id", ids).is("forum_reply_id", null);
+    else query = query.in("forum_reply_id", ids);
+    const { data, error } = await query;
+    if (error) {
+      // 0111-E compatibility: if the SQL has not been installed yet, do not break the whole forum.
+      if (String(error.message || "").includes("core_forum_reactions")) return;
+      throw error;
+    }
+    for (const row of data || []) {
+      const id = kind === "topic" ? clean(row.forum_topic_id) : clean(row.forum_reply_id);
+      if (!id) continue;
+      const key = forumReactionKey0111E(kind, id);
+      const current = jsonObject(map.get(key));
+      current.like_count = Number(current.like_count || 0) + 1;
+      if (clean(row.person_id) === viewerPersonId) current.viewer_liked = true;
+      map.set(key, current);
+    }
+  }
+  await pull("topic", topicIds);
+  await pull("reply", replyIds);
+  return map;
+}
+
+async function forumPollMap0111A(serviceClient: SupabaseClientAny, topicIds: string[], viewerPersonId: string): Promise<Map<string, JsonRecord>> {
+  const map = new Map<string, JsonRecord>();
+  if (!topicIds.length) return map;
+  const { data: polls, error: pollError } = await serviceClient
+    .from("core_forum_polls")
+    .select("*")
+    .in("forum_topic_id", topicIds)
+    .is("archived_at", null);
+  if (pollError) throw pollError;
+  const pollRows = polls || [];
+  const pollIds = pollRows.map((p: JsonRecord) => clean(p.forum_poll_id)).filter(Boolean);
+  if (!pollIds.length) return map;
+  const [{ data: options, error: optionsError }, { data: votes, error: votesError }] = await Promise.all([
+    serviceClient.from("core_forum_poll_options").select("*").in("forum_poll_id", pollIds).is("archived_at", null).order("sort_order", { ascending: true }),
+    serviceClient.from("core_forum_poll_votes").select("*").in("forum_poll_id", pollIds),
+  ]);
+  if (optionsError) throw optionsError;
+  if (votesError) throw votesError;
+  const votesByOption = new Map<string, number>();
+  const viewerVotesByPoll = new Map<string, string[]>();
+  for (const vote of votes || []) {
+    const optionId = clean(vote.forum_poll_option_id);
+    const pollId = clean(vote.forum_poll_id);
+    votesByOption.set(optionId, (votesByOption.get(optionId) || 0) + 1);
+    if (clean(vote.person_id) === viewerPersonId) viewerVotesByPoll.set(pollId, [...(viewerVotesByPoll.get(pollId) || []), optionId]);
+  }
+  const optionsByPoll = new Map<string, JsonRecord[]>();
+  for (const option of options || []) {
+    const pollId = clean(option.forum_poll_id);
+    const optionId = clean(option.forum_poll_option_id);
+    const safe = {
+      forum_poll_option_id: optionId,
+      option_text: clean(option.option_text),
+      sort_order: Number(option.sort_order || 100),
+      vote_count: votesByOption.get(optionId) || 0,
+    };
+    optionsByPoll.set(pollId, [...(optionsByPoll.get(pollId) || []), safe]);
+  }
+  for (const poll of pollRows) {
+    const pollId = clean(poll.forum_poll_id);
+    const topicId = clean(poll.forum_topic_id);
+    map.set(topicId, {
+      forum_poll_id: pollId,
+      question: clean(poll.question),
+      allow_multiple: Boolean(poll.allow_multiple),
+      closes_at: poll.closes_at || null,
+      status: normalizeKey(poll.status || "active"),
+      options: optionsByPoll.get(pollId) || [],
+      viewer_vote_option_ids: viewerVotesByPoll.get(pollId) || [],
+    });
+  }
+  return map;
+}
+
+async function forumCreateMentions0111A(
+  serviceClient: SupabaseClientAny,
+  organizationId: string,
+  topicId: string,
+  replyId: string | null,
+  mentionedPersonIdsRaw: unknown,
+  actorPersonId: string,
+  actorAuthUserId: string,
+  actorEmail: string,
+): Promise<number> {
+  const ids = Array.from(new Set((Array.isArray(mentionedPersonIdsRaw) ? mentionedPersonIdsRaw : []).map((id) => clean(id)).filter(Boolean))).filter((id) => id !== actorPersonId).slice(0, 20);
+  if (!ids.length) return 0;
+  const { data: memberships, error: membershipError } = await serviceClient
+    .from("core_organization_memberships")
+    .select("person_id")
+    .eq("organization_id", organizationId)
+    .in("person_id", ids)
+    .is("archived_at", null);
+  if (membershipError) throw membershipError;
+  const validIds: string[] = Array.from(new Set((memberships || []).map((m: JsonRecord) => clean(m.person_id)).filter(Boolean))) as string[];
+  if (!validIds.length) return 0;
+  const { data: people, error: peopleError } = await serviceClient
+    .from("core_people")
+    .select("person_id, primary_email")
+    .in("person_id", validIds)
+    .is("archived_at", null);
+  if (peopleError) throw peopleError;
+  const emailByPerson = new Map<string, string>((people || []).map((p: JsonRecord) => [clean(p.person_id), normalizeEmail(p.primary_email)]));
+  const rows = validIds.map((id) => ({
+    organization_id: organizationId,
+    forum_topic_id: topicId || null,
+    forum_reply_id: replyId || null,
+    mentioned_person_id: id,
+    mentioned_email: emailByPerson.get(id) || null,
+    created_by_person_id: actorPersonId || null,
+    created_by_auth_user_id: actorAuthUserId || null,
+    created_by_email: actorEmail || null,
+    status: "active",
+    metadata_json: { source: "0111-A-forum-message-board-foundation" },
+  }));
+  const { error: insertError } = await serviceClient.from("core_forum_mentions").insert(rows);
+  if (insertError) throw insertError;
+  return rows.length;
+}
+
+async function forumEvent0111A(serviceClient: SupabaseClientAny, organizationId: string, topicId: string | null, replyId: string | null, eventType: string, actorPersonId: string, actorAuthUserId: string, actorEmail: string, note = "", afterJson: JsonRecord = {}): Promise<void> {
+  try {
+    await serviceClient.from("core_forum_events").insert({
+      organization_id: organizationId,
+      forum_topic_id: topicId || null,
+      forum_reply_id: replyId || null,
+      event_type: eventType,
+      actor_person_id: actorPersonId || null,
+      actor_auth_user_id: actorAuthUserId || null,
+      actor_email: actorEmail || null,
+      note,
+      after_json: afterJson,
+      metadata_json: { version: "2026-06-13-111-A" },
+    });
+  } catch (error) {
+    console.error("forum_event_write_failed", error);
+  }
+}
+
+async function forumGetContext0111A(
+  serviceClient: SupabaseClientAny,
+  organizationId: string,
+  personId: string,
+  platformAdmin: boolean,
+  body: JsonRecord,
+): Promise<JsonRecord> {
+  const { accessRow, canModerate } = await forumAccessContext0111A(serviceClient, organizationId, personId, platformAdmin);
+  const selectedTopicId = clean(body.forum_topic_id || body.topic_id);
+  const selectedCategoryId = clean(body.forum_category_id || body.category_id);
+  const [{ data: categoryRows, error: categoryError }, members] = await Promise.all([
+    serviceClient.from("core_forum_categories").select("*").eq("organization_id", organizationId).is("archived_at", null).order("sort_order", { ascending: true }).order("label", { ascending: true }),
+    forumMembers0111A(serviceClient, organizationId),
+  ]);
+  if (categoryError) throw categoryError;
+  const categories = (categoryRows || []).filter((c: JsonRecord) => canModerate || normalizeKey(c.status) === "active").map(forumSafeCategory0111A);
+  const categoryMap = new Map<string, JsonRecord>(categories.map((c: JsonRecord) => [clean(c.forum_category_id), c]));
+
+  let topicQuery = serviceClient.from("core_forum_topics").select("*").eq("organization_id", organizationId).is("archived_at", null).order("pinned", { ascending: false }).order("last_activity_at", { ascending: false }).limit(80);
+  if (!canModerate) topicQuery = topicQuery.eq("status", "active");
+  if (selectedCategoryId) topicQuery = topicQuery.eq("forum_category_id", selectedCategoryId);
+  const { data: topicRows, error: topicError } = await topicQuery;
+  if (topicError) throw topicError;
+  const topicIds = (topicRows || []).map((t: JsonRecord) => clean(t.forum_topic_id)).filter(Boolean);
+
+  const readResult = topicIds.length
+    ? await serviceClient.from("core_forum_topic_reads").select("forum_topic_id,last_read_at").eq("organization_id", organizationId).eq("person_id", personId).in("forum_topic_id", topicIds)
+    : { data: [], error: null };
+  if (readResult.error) throw readResult.error;
+  const pollMap = await forumPollMap0111A(serviceClient, topicIds, personId);
+  const readMap = new Map<string, string>((readResult.data || []).map((r: JsonRecord) => [clean(r.forum_topic_id), clean(r.last_read_at)]));
+  const topics = (topicRows || []).map((t: JsonRecord) => forumSafeTopic0111A(t, categoryMap, pollMap, readMap));
+
+  let selectedTopic: JsonRecord | null = null;
+  let replies: JsonRecord[] = [];
+  const topicToLoad = selectedTopicId;
+  if (topicToLoad) {
+    selectedTopic = topics.find((t: JsonRecord) => clean(t.forum_topic_id) === topicToLoad) || null;
+    if (!selectedTopic) {
+      const { data: oneTopic, error: oneTopicError } = await serviceClient.from("core_forum_topics").select("*").eq("organization_id", organizationId).eq("forum_topic_id", topicToLoad).maybeSingle();
+      if (oneTopicError) throw oneTopicError;
+      if (oneTopic && (canModerate || normalizeKey(oneTopic.status) === "active")) {
+        const onePollMap = await forumPollMap0111A(serviceClient, [topicToLoad], personId);
+        const oneReactionMap = await forumReactionStatsMap0111E(serviceClient, organizationId, [selectedTopicId], [], personId);
+        selectedTopic = forumSafeTopic0111A(oneTopic, categoryMap, onePollMap, readMap, oneReactionMap);
+      }
+    }
+    if (selectedTopic) {
+      let replyQuery = serviceClient.from("core_forum_replies").select("*").eq("organization_id", organizationId).eq("forum_topic_id", clean(selectedTopic.forum_topic_id)).is("archived_at", null).order("created_at", { ascending: true }).limit(200);
+      if (!canModerate) replyQuery = replyQuery.eq("status", "active");
+      const { data: replyRows, error: replyError } = await replyQuery;
+      if (replyError) throw replyError;
+      const replyIds = (replyRows || []).map((r: JsonRecord) => clean(r.forum_reply_id)).filter(Boolean);
+      const replyReactionMap = await forumReactionStatsMap0111E(serviceClient, organizationId, [], replyIds, personId);
+      replies = (replyRows || []).map((r: JsonRecord) => forumSafeReply0111A(r, replyReactionMap));
+      try {
+        await serviceClient.from("core_forum_topic_reads").upsert({ organization_id: organizationId, forum_topic_id: clean(selectedTopic.forum_topic_id), person_id: personId, last_read_at: new Date().toISOString(), updated_at: new Date().toISOString() }, { onConflict: "forum_topic_id,person_id" });
+      } catch (_) {}
+    }
+  }
+
+  const { count: unreadMentionCount, error: mentionCountError } = await serviceClient
+    .from("core_forum_mentions")
+    .select("forum_mention_id", { count: "exact", head: true })
+    .eq("organization_id", organizationId)
+    .eq("mentioned_person_id", personId)
+    .is("read_at", null)
+    .is("archived_at", null)
+    .eq("status", "active");
+  if (mentionCountError) throw mentionCountError;
+
+  const { data: prefRow, error: prefError } = await serviceClient
+    .from("core_forum_user_preferences")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .eq("person_id", personId)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (prefError) throw prefError;
+
+  return {
+    access: accessRow,
+    can_moderate: canModerate,
+    categories,
+    topics,
+    selected_topic: selectedTopic,
+    replies,
+    members,
+    unread_mention_count: unreadMentionCount || 0,
+    preferences: prefRow || { mention_alert_mode: "in_app", email_mentions: false },
+    provider_hooks: { email_mentions: "resend_future_no_reply", backup: "none" },
+  };
+}
+
+
+async function forumGetContext0111C(
+  serviceClient: SupabaseClientAny,
+  organizationId: string,
+  personId: string,
+  platformAdmin: boolean,
+  body: JsonRecord,
+): Promise<JsonRecord> {
+  const { accessRow, canModerate } = await forumAccessContext0111A(serviceClient, organizationId, personId, platformAdmin);
+  const selectedTopicId = clean(body.forum_topic_id || body.topic_id);
+  const selectedCategoryId = clean(body.forum_category_id || body.category_id || body.category);
+  const searchTerm = clean(body.search || body.q).toLowerCase();
+  const [{ data: categoryRows, error: categoryError }, members] = await Promise.all([
+    serviceClient.from("core_forum_categories").select("*").eq("organization_id", organizationId).is("archived_at", null).order("sort_order", { ascending: true }).order("label", { ascending: true }),
+    forumMembers0111A(serviceClient, organizationId),
+  ]);
+  if (categoryError) throw categoryError;
+  const categories = (categoryRows || []).filter((c: JsonRecord) => canModerate || normalizeKey(c.status) === "active").map(forumSafeCategory0111A);
+  const categoryMap = new Map<string, JsonRecord>(categories.map((c: JsonRecord) => [clean(c.forum_category_id), c]));
+  const allowedCategoryIds = new Set(categories.map((c: JsonRecord) => clean(c.forum_category_id)).filter(Boolean));
+
+  let allTopicQuery = serviceClient
+    .from("core_forum_topics")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .is("archived_at", null)
+    .order("pinned", { ascending: false })
+    .order("last_activity_at", { ascending: false })
+    .limit(500);
+  if (!canModerate) allTopicQuery = allTopicQuery.eq("status", "active");
+  const { data: allTopicRowsRaw, error: topicError } = await allTopicQuery;
+  if (topicError) throw topicError;
+  const allTopicRows = (allTopicRowsRaw || []).filter((t: JsonRecord) => allowedCategoryIds.has(clean(t.forum_category_id)));
+
+  const categoryStats: JsonRecord = {};
+  for (const category of categories) {
+    categoryStats[clean(category.forum_category_id)] = {
+      forum_category_id: clean(category.forum_category_id),
+      topic_count: 0,
+      reply_count: 0,
+      latest_topic_id: "",
+      latest_topic_title: "",
+      latest_activity_at: null,
+      latest_by_name: "",
+    };
+  }
+  for (const topic of allTopicRows) {
+    const catId = clean(topic.forum_category_id);
+    const stat = jsonObject(categoryStats[catId]);
+    if (!stat.forum_category_id) continue;
+    stat.topic_count = Number(stat.topic_count || 0) + 1;
+    stat.reply_count = Number(stat.reply_count || 0) + Number(topic.reply_count || 0);
+    const existingAt = stat.latest_activity_at ? new Date(String(stat.latest_activity_at)).getTime() : 0;
+    const nextAt = (topic.last_activity_at || topic.created_at) ? new Date(String(topic.last_activity_at || topic.created_at)).getTime() : 0;
+    if (nextAt >= existingAt) {
+      stat.latest_topic_id = clean(topic.forum_topic_id);
+      stat.latest_topic_title = clean(topic.title);
+      stat.latest_activity_at = topic.last_activity_at || topic.created_at || null;
+      stat.latest_by_name = clean(topic.created_by_name || topic.created_by_email || "Member");
+    }
+    categoryStats[catId] = stat;
+  }
+
+  let filteredTopicRows = allTopicRows;
+  if (selectedCategoryId) filteredTopicRows = filteredTopicRows.filter((t: JsonRecord) => clean(t.forum_category_id) === selectedCategoryId);
+  if (searchTerm) {
+    filteredTopicRows = filteredTopicRows.filter((t: JsonRecord) => {
+      const haystack = `${clean(t.title)} ${clean(t.body)} ${clean(t.created_by_name)} ${clean(t.created_by_email)}`.toLowerCase();
+      return haystack.includes(searchTerm);
+    });
+  }
+  filteredTopicRows = filteredTopicRows.slice(0, 100);
+
+  const selectedTopicRow = selectedTopicId ? allTopicRows.find((t: JsonRecord) => clean(t.forum_topic_id) === selectedTopicId) : null;
+  const topicIds = Array.from(new Set([
+    ...filteredTopicRows.map((t: JsonRecord) => clean(t.forum_topic_id)),
+    selectedTopicRow ? clean(selectedTopicRow.forum_topic_id) : "",
+    selectedTopicId,
+  ].filter(Boolean)));
+
+  const readResult = topicIds.length
+    ? await serviceClient.from("core_forum_topic_reads").select("forum_topic_id,last_read_at").eq("organization_id", organizationId).eq("person_id", personId).in("forum_topic_id", topicIds)
+    : { data: [], error: null };
+  if (readResult.error) throw readResult.error;
+  const pollMap = await forumPollMap0111A(serviceClient, topicIds, personId);
+  const topicReactionMap = await forumReactionStatsMap0111E(serviceClient, organizationId, topicIds, [], personId);
+  const readMap = new Map<string, string>((readResult.data || []).map((r: JsonRecord) => [clean(r.forum_topic_id), clean(r.last_read_at)]));
+  const topics = filteredTopicRows.map((t: JsonRecord) => forumSafeTopic0111A(t, categoryMap, pollMap, readMap, topicReactionMap));
+
+  let selectedTopic: JsonRecord | null = null;
+  let replies: JsonRecord[] = [];
+  if (selectedTopicId) {
+    const topicRow = selectedTopicRow || null;
+    if (topicRow && allowedCategoryIds.has(clean(topicRow.forum_category_id)) && (canModerate || normalizeKey(topicRow.status) === "active")) {
+      selectedTopic = forumSafeTopic0111A(topicRow, categoryMap, pollMap, readMap, topicReactionMap);
+    } else {
+      const { data: oneTopic, error: oneTopicError } = await serviceClient.from("core_forum_topics").select("*").eq("organization_id", organizationId).eq("forum_topic_id", selectedTopicId).maybeSingle();
+      if (oneTopicError) throw oneTopicError;
+      if (oneTopic && allowedCategoryIds.has(clean(oneTopic.forum_category_id)) && (canModerate || normalizeKey(oneTopic.status) === "active")) {
+        const onePollMap = await forumPollMap0111A(serviceClient, [selectedTopicId], personId);
+        const oneReactionMap = await forumReactionStatsMap0111E(serviceClient, organizationId, [selectedTopicId], [], personId);
+        selectedTopic = forumSafeTopic0111A(oneTopic, categoryMap, onePollMap, readMap, oneReactionMap);
+      }
+    }
+    if (selectedTopic) {
+      let replyQuery = serviceClient.from("core_forum_replies").select("*").eq("organization_id", organizationId).eq("forum_topic_id", clean(selectedTopic.forum_topic_id)).is("archived_at", null).order("created_at", { ascending: true }).limit(200);
+      if (!canModerate) replyQuery = replyQuery.eq("status", "active");
+      const { data: replyRows, error: replyError } = await replyQuery;
+      if (replyError) throw replyError;
+      const replyIds = (replyRows || []).map((r: JsonRecord) => clean(r.forum_reply_id)).filter(Boolean);
+      const replyReactionMap = await forumReactionStatsMap0111E(serviceClient, organizationId, [], replyIds, personId);
+      replies = (replyRows || []).map((r: JsonRecord) => forumSafeReply0111A(r, replyReactionMap));
+      try {
+        await serviceClient.from("core_forum_topic_reads").upsert({ organization_id: organizationId, forum_topic_id: clean(selectedTopic.forum_topic_id), person_id: personId, last_read_at: new Date().toISOString(), updated_at: new Date().toISOString() }, { onConflict: "forum_topic_id,person_id" });
+      } catch (_) {}
+    }
+  }
+
+  const { count: unreadMentionCount, error: mentionCountError } = await serviceClient
+    .from("core_forum_mentions")
+    .select("forum_mention_id", { count: "exact", head: true })
+    .eq("organization_id", organizationId)
+    .eq("mentioned_person_id", personId)
+    .is("read_at", null)
+    .is("archived_at", null)
+    .eq("status", "active");
+  if (mentionCountError) throw mentionCountError;
+
+  const { data: prefRow, error: prefError } = await serviceClient
+    .from("core_forum_user_preferences")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .eq("person_id", personId)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (prefError) throw prefError;
+
+  return {
+    access: accessRow,
+    can_moderate: canModerate,
+    categories,
+    category_stats: categoryStats,
+    topics,
+    selected_topic: selectedTopic,
+    replies,
+    members,
+    unread_mention_count: unreadMentionCount || 0,
+    preferences: prefRow || { mention_alert_mode: "in_app", email_mentions: false },
+    provider_hooks: { email_mentions: "resend_future_no_reply", backup: "none" },
+  };
+}
+
+
+async function forumCreateTopic0111A(serviceClient: SupabaseClientAny, organizationId: string, person: JsonRecord, authUserId: string, actorEmail: string, platformAdmin: boolean, body: JsonRecord): Promise<JsonRecord> {
+  const personId = clean(person.person_id);
+  const { canModerate } = await forumAccessContext0111A(serviceClient, organizationId, personId, platformAdmin);
+  const categoryId = requireString(body, "forum_category_id");
+  const title = clean(body.title).slice(0, 180);
+  const topicBody = clean(body.body).slice(0, 12000);
+  if (!title) throw new Error("Enter a topic title.");
+  if (!topicBody) throw new Error("Enter a message.");
+  const { data: category, error: categoryError } = await serviceClient.from("core_forum_categories").select("*").eq("organization_id", organizationId).eq("forum_category_id", categoryId).is("archived_at", null).maybeSingle();
+  if (categoryError) throw categoryError;
+  if (!category?.forum_category_id || normalizeKey(category.status) !== "active") throw new Error("Choose an active category.");
+  const postingMode = normalizeKey(category.posting_mode || "members");
+  if (postingMode === "locked") throw new Error("This category is locked.");
+  if (postingMode === "admins_only" && !canModerate) throw new Error("Only organization admins can post in this category.");
+  const topicTypeRaw = normalizeKey(body.topic_type || category.category_type || "discussion");
+  const topicType = ["discussion", "announcement", "trip", "poll"].includes(topicTypeRaw) ? topicTypeRaw : "discussion";
+  if (topicType === "announcement" && !canModerate) throw new Error("Only organization admins can create announcements.");
+  const tripJson = topicType === "trip" ? {
+    destination: clean(body.trip_destination).slice(0, 140),
+    proposed_date: clean(body.trip_date).slice(0, 40),
+    notes: clean(body.trip_notes).slice(0, 1000),
+  } : {};
+  const pollQuestion = clean(body.poll_question || title).slice(0, 220);
+  const pollOptions = (Array.isArray(body.poll_options) ? body.poll_options : []).map((o) => clean(o).slice(0, 160)).filter(Boolean).slice(0, 8);
+  if (topicType === "poll" && (!pollQuestion || pollOptions.length < 2)) throw new Error("Poll topics need a question and at least two options.");
+  const actorName = clean(person.display_name || person.first_name || actorEmail);
+  const { data: topic, error: topicError } = await serviceClient.from("core_forum_topics").insert({
+    organization_id: organizationId,
+    forum_category_id: categoryId,
+    topic_type: topicType,
+    title,
+    body: topicBody,
+    trip_json: tripJson,
+    created_by_person_id: personId || null,
+    created_by_auth_user_id: authUserId || null,
+    created_by_email: actorEmail,
+    created_by_name: actorName,
+    pinned: topicType === "announcement" && canModerate ? Boolean(body.pinned) : false,
+    locked: false,
+    status: "active",
+    last_activity_at: new Date().toISOString(),
+    settings_json: { source: "0111-A-forum-message-board-foundation" },
+  }).select("*").single();
+  if (topicError) throw topicError;
+  const topicId = clean(topic.forum_topic_id);
+  if (topicType === "poll") {
+    const { data: poll, error: pollError } = await serviceClient.from("core_forum_polls").insert({ organization_id: organizationId, forum_topic_id: topicId, question: pollQuestion, allow_multiple: Boolean(body.poll_allow_multiple), status: "active", settings_json: { source: "0111-A" } }).select("*").single();
+    if (pollError) throw pollError;
+    const optionRows = pollOptions.map((optionText, i) => ({ organization_id: organizationId, forum_poll_id: clean(poll.forum_poll_id), option_text: optionText, sort_order: (i + 1) * 10, status: "active" }));
+    const { error: optionsError } = await serviceClient.from("core_forum_poll_options").insert(optionRows);
+    if (optionsError) throw optionsError;
+  }
+  const mentionCount = await forumCreateMentions0111A(serviceClient, organizationId, topicId, null, body.mentioned_person_ids, personId, authUserId, actorEmail);
+  if (mentionCount) await serviceClient.from("core_forum_topics").update({ mention_count: mentionCount, updated_at: new Date().toISOString() }).eq("forum_topic_id", topicId);
+  await forumEvent0111A(serviceClient, organizationId, topicId, null, "topic_created", personId, authUserId, actorEmail, title, { topic_type: topicType, mention_count: mentionCount });
+  return await forumGetContext0111C(serviceClient, organizationId, personId, platformAdmin, { forum_topic_id: topicId });
+}
+
+async function forumCreateReply0111A(serviceClient: SupabaseClientAny, organizationId: string, person: JsonRecord, authUserId: string, actorEmail: string, platformAdmin: boolean, body: JsonRecord): Promise<JsonRecord> {
+  const personId = clean(person.person_id);
+  const { canModerate } = await forumAccessContext0111A(serviceClient, organizationId, personId, platformAdmin);
+  const topicId = requireString(body, "forum_topic_id");
+  const replyBody = clean(body.body).slice(0, 12000);
+  if (!replyBody) throw new Error("Enter a reply.");
+  const { data: topic, error: topicError } = await serviceClient.from("core_forum_topics").select("*").eq("organization_id", organizationId).eq("forum_topic_id", topicId).is("archived_at", null).maybeSingle();
+  if (topicError) throw topicError;
+  if (!topic?.forum_topic_id || normalizeKey(topic.status) !== "active") throw new Error("Topic was not found.");
+  if (Boolean(topic.locked) && !canModerate) throw new Error("This topic is locked.");
+  const actorName = clean(person.display_name || person.first_name || actorEmail);
+  const { data: reply, error: replyError } = await serviceClient.from("core_forum_replies").insert({
+    organization_id: organizationId,
+    forum_topic_id: topicId,
+    body: replyBody,
+    created_by_person_id: personId || null,
+    created_by_auth_user_id: authUserId || null,
+    created_by_email: actorEmail,
+    created_by_name: actorName,
+    status: "active",
+    settings_json: { source: "0111-A-forum-message-board-foundation" },
+  }).select("*").single();
+  if (replyError) throw replyError;
+  const replyId = clean(reply.forum_reply_id);
+  const mentionCount = await forumCreateMentions0111A(serviceClient, organizationId, topicId, replyId, body.mentioned_person_ids, personId, authUserId, actorEmail);
+  const now = new Date().toISOString();
+  if (mentionCount) await serviceClient.from("core_forum_replies").update({ mention_count: mentionCount, updated_at: now }).eq("forum_reply_id", replyId);
+  await serviceClient.from("core_forum_topics").update({ reply_count: Number(topic.reply_count || 0) + 1, last_reply_at: now, last_activity_at: now, last_reply_by_person_id: personId || null, updated_at: now }).eq("forum_topic_id", topicId);
+  await forumEvent0111A(serviceClient, organizationId, topicId, replyId, "reply_created", personId, authUserId, actorEmail, "Reply posted", { mention_count: mentionCount });
+  return await forumGetContext0111C(serviceClient, organizationId, personId, platformAdmin, { forum_topic_id: topicId });
+}
+
+async function forumVotePoll0111A(serviceClient: SupabaseClientAny, organizationId: string, person: JsonRecord, authUserId: string, actorEmail: string, platformAdmin: boolean, body: JsonRecord): Promise<JsonRecord> {
+  const personId = clean(person.person_id);
+  await forumAccessContext0111A(serviceClient, organizationId, personId, platformAdmin);
+  const pollId = requireString(body, "forum_poll_id");
+  const optionIds = Array.from(new Set((Array.isArray(body.option_ids) ? body.option_ids : [body.forum_poll_option_id]).map((id) => clean(id)).filter(Boolean))).slice(0, 8);
+  if (!optionIds.length) throw new Error("Choose a poll option.");
+  const { data: poll, error: pollError } = await serviceClient.from("core_forum_polls").select("*").eq("organization_id", organizationId).eq("forum_poll_id", pollId).is("archived_at", null).maybeSingle();
+  if (pollError) throw pollError;
+  if (!poll?.forum_poll_id || normalizeKey(poll.status) !== "active") throw new Error("Poll is not open.");
+  const chosenIds = Boolean(poll.allow_multiple) ? optionIds : [optionIds[0]];
+  const { data: options, error: optionsError } = await serviceClient.from("core_forum_poll_options").select("forum_poll_option_id").eq("forum_poll_id", pollId).in("forum_poll_option_id", chosenIds).is("archived_at", null);
+  if (optionsError) throw optionsError;
+  const validIds = (options || []).map((o: JsonRecord) => clean(o.forum_poll_option_id)).filter(Boolean);
+  if (!validIds.length) throw new Error("Poll option was not found.");
+  if (!Boolean(poll.allow_multiple)) await serviceClient.from("core_forum_poll_votes").delete().eq("forum_poll_id", pollId).eq("person_id", personId);
+  const rows = validIds.map((optionId) => ({ organization_id: organizationId, forum_poll_id: pollId, forum_poll_option_id: optionId, person_id: personId, auth_user_id: authUserId || null, updated_at: new Date().toISOString() }));
+  const { error: voteError } = await serviceClient.from("core_forum_poll_votes").upsert(rows, { onConflict: "forum_poll_id,forum_poll_option_id,person_id" });
+  if (voteError) throw voteError;
+  await forumEvent0111A(serviceClient, organizationId, clean(poll.forum_topic_id), null, "poll_vote", personId, authUserId, actorEmail, "Poll vote saved", { option_count: validIds.length });
+  return await forumGetContext0111C(serviceClient, organizationId, personId, platformAdmin, { forum_topic_id: clean(poll.forum_topic_id) });
+}
+
+async function forumToggleReaction0111E(serviceClient: SupabaseClientAny, organizationId: string, person: JsonRecord, authUserId: string, actorEmail: string, platformAdmin: boolean, body: JsonRecord): Promise<JsonRecord> {
+  const personId = clean(person.person_id);
+  const { canModerate } = await forumAccessContext0111A(serviceClient, organizationId, personId, platformAdmin);
+  const reactionType = normalizeKey(body.reaction_type || "like");
+  if (reactionType !== "like") throw new Error("Only like reactions are supported right now.");
+  const topicIdInput = clean(body.forum_topic_id || body.topic_id);
+  const replyId = clean(body.forum_reply_id || body.reply_id);
+  if (!topicIdInput && !replyId) throw new Error("Choose a topic or reply to like.");
+
+  let topicId = topicIdInput;
+  if (replyId) {
+    const { data: reply, error: replyError } = await serviceClient
+      .from("core_forum_replies")
+      .select("forum_reply_id,forum_topic_id,status")
+      .eq("organization_id", organizationId)
+      .eq("forum_reply_id", replyId)
+      .is("archived_at", null)
+      .maybeSingle();
+    if (replyError) throw replyError;
+    if (!reply?.forum_reply_id || (!canModerate && normalizeKey(reply.status) !== "active")) throw new Error("Reply was not found.");
+    topicId = clean(reply.forum_topic_id);
+  }
+
+  const { data: topic, error: topicError } = await serviceClient
+    .from("core_forum_topics")
+    .select("forum_topic_id,status")
+    .eq("organization_id", organizationId)
+    .eq("forum_topic_id", topicId)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (topicError) throw topicError;
+  if (!topic?.forum_topic_id || (!canModerate && normalizeKey(topic.status) !== "active")) throw new Error("Topic was not found.");
+
+  let existingQuery = serviceClient
+    .from("core_forum_reactions")
+    .select("forum_reaction_id")
+    .eq("organization_id", organizationId)
+    .eq("person_id", personId)
+    .eq("reaction_type", "like")
+    .eq("status", "active")
+    .is("archived_at", null)
+    .limit(1);
+  if (replyId) existingQuery = existingQuery.eq("forum_reply_id", replyId);
+  else existingQuery = existingQuery.eq("forum_topic_id", topicId).is("forum_reply_id", null);
+  const { data: existingRows, error: existingError } = await existingQuery;
+  if (existingError) throw existingError;
+  const existingId = clean((existingRows || [])[0]?.forum_reaction_id);
+  const now = new Date().toISOString();
+  let active = true;
+  if (existingId) {
+    const { error: archiveError } = await serviceClient.from("core_forum_reactions").update({ status: "archived", archived_at: now, updated_at: now }).eq("organization_id", organizationId).eq("forum_reaction_id", existingId);
+    if (archiveError) throw archiveError;
+    active = false;
+  } else {
+    const { error: insertError } = await serviceClient.from("core_forum_reactions").insert({
+      organization_id: organizationId,
+      forum_topic_id: topicId,
+      forum_reply_id: replyId || null,
+      person_id: personId,
+      auth_user_id: authUserId || null,
+      reaction_type: "like",
+      status: "active",
+      metadata_json: { source: "0111-E-forum-thread-ux-reactions" },
+    });
+    if (insertError) throw insertError;
+  }
+  await forumEvent0111A(serviceClient, organizationId, topicId, replyId || null, active ? "reaction_like" : "reaction_unlike", personId, authUserId, actorEmail, active ? "Liked" : "Like removed", { reaction_type: "like", target: replyId ? "reply" : "topic" });
+  const result = await forumGetContext0111C(serviceClient, organizationId, personId, platformAdmin, { forum_topic_id: topicId });
+  return { ...result, reaction_active: active };
+}
+
+async function forumMarkMentionsRead0111A(serviceClient: SupabaseClientAny, organizationId: string, personId: string, platformAdmin: boolean, body: JsonRecord): Promise<JsonRecord> {
+  await forumAccessContext0111A(serviceClient, organizationId, personId, platformAdmin);
+  const topicId = clean(body.forum_topic_id || body.topic_id);
+  let query = serviceClient.from("core_forum_mentions").update({ read_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("organization_id", organizationId).eq("mentioned_person_id", personId).is("read_at", null);
+  if (topicId) query = query.eq("forum_topic_id", topicId);
+  const { error } = await query;
+  if (error) throw error;
+  return await forumGetContext0111C(serviceClient, organizationId, personId, platformAdmin, { forum_topic_id: topicId });
+}
+
+async function forumSavePreferences0111A(serviceClient: SupabaseClientAny, organizationId: string, personId: string, authUserId: string, platformAdmin: boolean, body: JsonRecord): Promise<JsonRecord> {
+  await forumAccessContext0111A(serviceClient, organizationId, personId, platformAdmin);
+  const modeRaw = normalizeKey(body.mention_alert_mode || "in_app");
+  const mode = ["in_app", "email", "none"].includes(modeRaw) ? modeRaw : "in_app";
+  const row = { organization_id: organizationId, person_id: personId, auth_user_id: authUserId || null, mention_alert_mode: mode, email_mentions: mode === "email", updated_at: new Date().toISOString(), settings_json: { source: "0111-A", email_provider: "resend_future_no_reply" } };
+  const { error } = await serviceClient.from("core_forum_user_preferences").upsert(row, { onConflict: "organization_id,person_id" });
+  if (error) throw error;
+  return await forumGetContext0111C(serviceClient, organizationId, personId, platformAdmin, body);
+}
+
+async function forumModerateTopic0111A(serviceClient: SupabaseClientAny, organizationId: string, person: JsonRecord, authUserId: string, actorEmail: string, platformAdmin: boolean, body: JsonRecord): Promise<JsonRecord> {
+  const personId = clean(person.person_id);
+  const { canModerate } = await forumAccessContext0111A(serviceClient, organizationId, personId, platformAdmin);
+  if (!canModerate) throw new Error("Only organization admins can moderate topics.");
+  const topicId = requireString(body, "forum_topic_id");
+  const mode = normalizeKey(body.moderation_action || body.mode);
+  const patch: JsonRecord = { updated_at: new Date().toISOString() };
+  if (mode === "pin") patch.pinned = true;
+  else if (mode === "unpin") patch.pinned = false;
+  else if (mode === "lock") patch.locked = true;
+  else if (mode === "unlock") patch.locked = false;
+  else if (mode === "hide") { patch.status = "hidden"; patch.hidden_at = new Date().toISOString(); patch.hidden_by_person_id = personId || null; patch.hidden_reason = clean(body.reason || "Hidden by moderator"); }
+  else if (mode === "restore") { patch.status = "active"; patch.hidden_at = null; patch.hidden_by_person_id = null; patch.hidden_reason = null; patch.archived_at = null; }
+  else throw new Error("Unknown moderation action.");
+  const { error } = await serviceClient.from("core_forum_topics").update(patch).eq("organization_id", organizationId).eq("forum_topic_id", topicId);
+  if (error) throw error;
+  await forumEvent0111A(serviceClient, organizationId, topicId, null, `topic_${mode}`, personId, authUserId, actorEmail, clean(body.reason), patch);
+  return await forumGetContext0111C(serviceClient, organizationId, personId, platformAdmin, { forum_topic_id: topicId });
+}
+
+async function forumModerateReply0111A(serviceClient: SupabaseClientAny, organizationId: string, person: JsonRecord, authUserId: string, actorEmail: string, platformAdmin: boolean, body: JsonRecord): Promise<JsonRecord> {
+  const personId = clean(person.person_id);
+  const { canModerate } = await forumAccessContext0111A(serviceClient, organizationId, personId, platformAdmin);
+  if (!canModerate) throw new Error("Only organization admins can moderate replies.");
+  const replyId = requireString(body, "forum_reply_id");
+  const mode = normalizeKey(body.moderation_action || body.mode);
+  const patch: JsonRecord = { updated_at: new Date().toISOString() };
+  if (mode === "hide") { patch.status = "hidden"; patch.hidden_at = new Date().toISOString(); patch.hidden_by_person_id = personId || null; patch.hidden_reason = clean(body.reason || "Hidden by moderator"); }
+  else if (mode === "restore") { patch.status = "active"; patch.hidden_at = null; patch.hidden_by_person_id = null; patch.hidden_reason = null; patch.archived_at = null; }
+  else throw new Error("Unknown reply moderation action.");
+  const { data: reply, error: lookupError } = await serviceClient.from("core_forum_replies").select("forum_topic_id").eq("organization_id", organizationId).eq("forum_reply_id", replyId).maybeSingle();
+  if (lookupError) throw lookupError;
+  if (!reply?.forum_topic_id) throw new Error("Reply was not found.");
+  const { error } = await serviceClient.from("core_forum_replies").update(patch).eq("organization_id", organizationId).eq("forum_reply_id", replyId);
+  if (error) throw error;
+  await forumEvent0111A(serviceClient, organizationId, clean(reply.forum_topic_id), replyId, `reply_${mode}`, personId, authUserId, actorEmail, clean(body.reason), patch);
+  return await forumGetContext0111C(serviceClient, organizationId, personId, platformAdmin, { forum_topic_id: clean(reply.forum_topic_id) });
+}
+
 
 function memberStatusIdByKey0102(rows: JsonRecord[], keyValue: unknown): string | null {
   const k = normalizeKey(keyValue || "");
@@ -5634,6 +6756,1135 @@ async function organizationConvertApplicantToMember0102(serviceClient: SupabaseC
   return { applicant: enrichedApplicant, person, membership, conversion: conversionMeta };
 }
 
+
+function memberDashboardDefaultQuickLinks0112A(): JsonRecord[] {
+  return [
+    { key: "my-profile", label: "My Profile", description: "Update contact details and photo", href: "/my-profile", sort_order: 10, status: "active", placeholder: false },
+    { key: "member-documents", label: "Member Documents", description: "Member-only documents and resources", href: "/member-documents", sort_order: 20, status: "active", placeholder: false },
+    { key: "roster", label: "Roster", description: "Member directory", href: "/roster", sort_order: 30, status: "active", placeholder: false },
+    { key: "calendar-events", label: "Calendar / Events", description: "Open the full club calendar", href: "/calendar", sort_order: 40, status: "active", placeholder: false },
+    { key: "submit-gallery", label: "Submit to Gallery", description: "Photos and media links", href: "/submit-gallery", sort_order: 50, status: "active", placeholder: false },
+    { key: "flight-scheduler", label: "Flight Scheduler", description: "Reservations and aircraft schedule", href: "#", sort_order: 60, status: "active", placeholder: true },
+    { key: "maintenance-squawk", label: "Report Maintenance Squawk", description: "Aircraft maintenance reporting", href: "#", sort_order: 70, status: "active", placeholder: true },
+    { key: "forum", label: "Message Board", description: "Member discussions, polls, and trip planning", href: "/forum", sort_order: 80, status: "active", placeholder: false },
+  ];
+}
+
+function memberDashboardSanitizeQuickLinks0112A(value: unknown): JsonRecord[] {
+  const input = Array.isArray(value) && value.length ? value as JsonRecord[] : memberDashboardDefaultQuickLinks0112A();
+  return input.slice(0, 16).map((link, index) => {
+    const o = jsonObject(link);
+    const label = clean(o.label || o.title || o.key || "Link") || "Link";
+    const href = clean(o.href || o.url || "#") || "#";
+    return {
+      key: normalizeKey(o.key || label) || `link-${index + 1}`,
+      label,
+      description: clean(o.description || o.subtitle || ""),
+      href: href === "#" ? "#" : /^https?:\/\//i.test(href) ? href : `/${href.replace(/^\/+/, "")}`,
+      sort_order: Number.isFinite(Number(o.sort_order)) ? Math.trunc(Number(o.sort_order)) : (index + 1) * 10,
+      status: normalizeKey(o.status || "active") || "active",
+      placeholder: o.placeholder === true,
+      open_in_new_tab: o.open_in_new_tab === true,
+    };
+  }).sort((a, b) => Number(a.sort_order || 100) - Number(b.sort_order || 100));
+}
+
+function memberDashboardSanitizeWeatherAirports0112A(value: unknown): JsonRecord[] {
+  const input = Array.isArray(value) && value.length ? value as JsonRecord[] : MEMBER_DASHBOARD_METAR_STATIONS_0110B;
+  return input.slice(0, 8).map((airport, index) => {
+    const o = jsonObject(airport);
+    const station = clean(o.station || o.station_id || o.icao || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+    return {
+      station,
+      label: clean(o.label || o.station_label || station),
+      time_zone: clean(o.time_zone || o.station_time_zone || "America/New_York"),
+      sort_order: Number.isFinite(Number(o.sort_order)) ? Math.trunc(Number(o.sort_order)) : (index + 1) * 10,
+      status: normalizeKey(o.status || "active") || "active",
+    };
+  }).filter((airport) => clean(airport.station) && normalizeKey(airport.status) === "active")
+    .sort((a, b) => Number(a.sort_order || 100) - Number(b.sort_order || 100));
+}
+
+function memberDashboardDefaultOrganizationSettings0112A(): JsonRecord {
+  return {
+    dashboard_settings_json: { dashboard_recipe_key: "flying_club_default", show_next_event: true, show_weather: true, show_profile_update_card: true },
+    dashboard_quick_links_json: memberDashboardDefaultQuickLinks0112A(),
+    dashboard_weather_airports_json: MEMBER_DASHBOARD_METAR_STATIONS_0110B,
+    profile_requirements_json: { member_editable_required_fields: ["name", "email", "phone", "address", "profile_photo"], admin_managed_fields: ["pilot_certificate", "medical_basicmed"] },
+    alert_colors_json: { attention: "#dc2626", warning: "#d97706", success: "#16a34a", info: "#2563eb" },
+    forum_settings_json: { default_category_model: "organization_admin_managed", member_topics_enabled: true, mentions_enabled: true, email_alerts_enabled: false },
+    settings_json: { defaulted_by: "0112-A-member-dashboard-settings-fallback" },
+  };
+}
+
+async function memberDashboardOrganizationSettings0112A(serviceClient: SupabaseClientAny, organizationId: string): Promise<JsonRecord> {
+  try {
+    const { data, error } = await serviceClient
+      .from("core_organization_settings")
+      .select("*")
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (error) throw error;
+    const defaults = memberDashboardDefaultOrganizationSettings0112A();
+    const row = jsonObject(data || {});
+    return {
+      settings_available: Boolean(data),
+      organization_settings_id: clean(row.organization_settings_id),
+      organization_id: clean(row.organization_id || organizationId),
+      dashboard_settings_json: { ...jsonObject(defaults.dashboard_settings_json), ...jsonObject(row.dashboard_settings_json) },
+      dashboard_quick_links_json: memberDashboardSanitizeQuickLinks0112A(row.dashboard_quick_links_json || defaults.dashboard_quick_links_json),
+      dashboard_weather_airports_json: memberDashboardSanitizeWeatherAirports0112A(row.dashboard_weather_airports_json || defaults.dashboard_weather_airports_json),
+      profile_requirements_json: { ...jsonObject(defaults.profile_requirements_json), ...jsonObject(row.profile_requirements_json) },
+      alert_colors_json: { ...jsonObject(defaults.alert_colors_json), ...jsonObject(row.alert_colors_json) },
+      forum_settings_json: { ...jsonObject(defaults.forum_settings_json), ...jsonObject(row.forum_settings_json) },
+      settings_json: { ...jsonObject(defaults.settings_json), ...jsonObject(row.settings_json) },
+      updated_at: clean(row.updated_at),
+    };
+  } catch (error) {
+    const defaults = memberDashboardDefaultOrganizationSettings0112A();
+    return { ...defaults, settings_available: false, settings_error: accessActionErrorMessage0107E(error), organization_id: organizationId };
+  }
+}
+
+function memberDashboardHasText0110A(...values: unknown[]): boolean {
+  return values.some((v) => Boolean(clean(v)));
+}
+
+function memberDashboardPilotCertificate0110A(profile: JsonRecord): string {
+  const aviation = jsonObject(profile.aviation);
+  const pilot = jsonObject(profile.pilot);
+  const cert = jsonObject(profile.certificate);
+  return clean(
+    aviation.pilot_certificate_number || aviation.certificate_number || aviation.faa_certificate_number || aviation.pilot_certificate ||
+    pilot.certificate_number || pilot.pilot_certificate_number || pilot.faa_certificate_number ||
+    cert.pilot_certificate_number || cert.certificate_number || profile.pilot_certificate_number || profile.faa_certificate_number,
+  );
+}
+
+function memberDashboardProfileSummary0110A(profile: JsonRecord, accessRow: JsonRecord): JsonRecord {
+  const platformOverrideOnly = accessRow.platform_override === true && !clean(accessRow.membership_id);
+  const profileJson = jsonObject(profile.profile_json);
+  const missing: string[] = [];
+  if (platformOverrideOnly) {
+    return { needs_update: false, missing_keys: [], missing_labels: [], display_name: clean(profile.display_name || profile.primary_email), first_name: clean(profile.preferred_first_name || profile.first_name || profile.display_name || profile.primary_email) };
+  }
+
+  const hasName = memberDashboardHasText0110A(profile.display_name, profile.first_name, profile.preferred_first_name, profile.last_name);
+  const hasEmail = memberDashboardHasText0110A(profile.primary_email, profile.email);
+  const hasPhone = memberDashboardHasText0110A(profile.primary_phone, profile.phone, profile.mobile_phone, jsonObject(profileJson.contact).mobile_phone);
+  const hasAddress = memberDashboardHasText0110A(profile.address_1, jsonObject(profileJson.contact).address_1, jsonObject(profileJson.contact).address) &&
+    memberDashboardHasText0110A(profile.city, jsonObject(profileJson.contact).city) &&
+    memberDashboardHasText0110A(profile.state, jsonObject(profileJson.contact).state) &&
+    memberDashboardHasText0110A(profile.zip, jsonObject(profileJson.contact).zip, jsonObject(profileJson.contact).zip_code);
+  const hasPhoto = memberDashboardHasText0110A(profile.photo_url, personPhotoUrl(profileJson), profile.avatar_asset_id);
+  const hasPilotCertificate = memberDashboardHasText0110A(memberDashboardPilotCertificate0110A(profileJson));
+
+  if (!hasName) missing.push("Name");
+  if (!hasEmail) missing.push("Email");
+  if (!hasPhone) missing.push("Phone");
+  if (!hasAddress) missing.push("Address");
+  if (!hasPhoto) missing.push("Profile photo");
+  // Pilot certificate is currently admin-managed in this build, so it should not be listed as a member-fixable dashboard requirement.
+  // if (!hasPilotCertificate) missing.push("Pilot certificate");
+
+  const displayName = clean(profile.display_name || [profile.first_name, profile.last_name].map(clean).filter(Boolean).join(" ") || profile.primary_email || profile.email);
+  const firstName = clean(profile.preferred_first_name || profile.first_name || String(displayName).split(" ")[0] || displayName);
+  return {
+    needs_update: missing.length > 0,
+    missing_keys: missing.map(normalizeKey),
+    missing_labels: missing,
+    display_name: displayName,
+    first_name: firstName,
+  };
+}
+
+async function memberDashboardProfile0110A(serviceClient: SupabaseClientAny, organizationId: string, personId: string, platformAdmin: boolean, accessRow: JsonRecord): Promise<JsonRecord> {
+  try {
+    const profileResult = await memberGetMyProfile(serviceClient, organizationId, personId, platformAdmin);
+    const profile = jsonObject(profileResult.profile);
+    return { profile, profile_summary: memberDashboardProfileSummary0110A(profile, accessRow), profile_error: null };
+  } catch (error) {
+    const fallbackProfile = { display_name: clean(accessRow.display_name || ""), primary_email: "" } as JsonRecord;
+    return {
+      profile: fallbackProfile,
+      profile_summary: { needs_update: false, missing_keys: [], missing_labels: [], display_name: clean(accessRow.display_name || ""), first_name: clean(accessRow.display_name || "Member") },
+      profile_error: accessActionErrorMessage0107E(error),
+    };
+  }
+}
+
+async function memberDashboardNextEvent0110A(serviceClient: SupabaseClientAny, organizationId: string, accessRow: JsonRecord, platformAdmin: boolean): Promise<JsonRecord | null> {
+  const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const { data, error } = await serviceClient
+    .from("core_events")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .is("archived_at", null)
+    .eq("status", "published")
+    .gte("starts_at", since)
+    .order("starts_at", { ascending: true })
+    .order("sort_order", { ascending: true })
+    .limit(20);
+  if (error) throw error;
+  for (const event of data || []) {
+    if (accessRowCanSeeEvent(event, accessRow, platformAdmin)) return safeEventForPortal(event, {});
+  }
+  return null;
+}
+
+function memberDashboardFormatTime0110B(value: unknown, timeZone: string): string {
+  const raw = clean(value);
+  if (!raw) return "";
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  try { return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone }).format(d); }
+  catch { return d.toISOString(); }
+}
+
+function memberDashboardFormatUtc0110B(value: unknown): string {
+  const raw = clean(value);
+  if (!raw) return "";
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  return d.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function memberDashboardNum0110B(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function memberDashboardClouds0110B(record: JsonRecord): JsonRecord[] {
+  const raw = Array.isArray(record.clouds) ? record.clouds : Array.isArray(record.cloud) ? record.cloud : [];
+  return raw.map((c) => jsonObject(c));
+}
+
+function memberDashboardCeilingFeet0110B(record: JsonRecord): number | null {
+  let ceiling: number | null = null;
+  for (const cloud of memberDashboardClouds0110B(record)) {
+    const cover = normalizeKey(cloud.cover || cloud.coverage || cloud.type || cloud.sky_cover || "");
+    if (!["bkn", "ovc", "vv"].includes(cover)) continue;
+    const baseRaw = memberDashboardNum0110B(cloud.base || cloud.base_feet_agl || cloud.altitude || cloud.height);
+    if (baseRaw === null) continue;
+    const feet = baseRaw <= 500 ? baseRaw * 100 : baseRaw;
+    if (ceiling === null || feet < ceiling) ceiling = feet;
+  }
+  return ceiling;
+}
+
+function memberDashboardFlightCategory0110B(record: JsonRecord): string {
+  const direct = clean(record.flightCategory || record.flight_category || record.fltCat || record.flt_cat || record.category).toUpperCase();
+  if (["VFR", "MVFR", "IFR", "LIFR"].includes(direct)) return direct;
+  const vis = memberDashboardNum0110B(record.visib || record.visibility || record.vis_sm || record.visibility_statute_mi);
+  const ceiling = memberDashboardCeilingFeet0110B(record);
+  if ((vis !== null && vis < 1) || (ceiling !== null && ceiling < 500)) return "LIFR";
+  if ((vis !== null && vis < 3) || (ceiling !== null && ceiling < 1000)) return "IFR";
+  if ((vis !== null && vis <= 5) || (ceiling !== null && ceiling <= 3000)) return "MVFR";
+  return "VFR";
+}
+
+function memberDashboardWindText0110B(record: JsonRecord): string {
+  const dir = clean(record.wdir || record.wind_dir_degrees || record.wind_dir);
+  const speed = memberDashboardNum0110B(record.wspd || record.wind_speed_kt || record.wind_speed);
+  const gust = memberDashboardNum0110B(record.wgst || record.wind_gust_kt || record.wind_gust);
+  if (speed === null) return "";
+  if (speed === 0) return "Wind calm";
+  const d = dir === "VRB" || dir === "variable" ? "variable" : dir ? `${dir}°` : "unknown direction";
+  return `Wind ${d} at ${speed} kt${gust ? `, gusting ${gust} kt` : ""}`;
+}
+
+function memberDashboardVisibilityText0110B(record: JsonRecord): string {
+  const vis = clean(record.visib || record.visibility || record.vis_sm || record.visibility_statute_mi);
+  return vis ? `Visibility ${vis} SM` : "";
+}
+
+function memberDashboardCloudText0110B(record: JsonRecord): string {
+  const clouds = memberDashboardClouds0110B(record).map((cloud) => {
+    const cover = clean(cloud.cover || cloud.coverage || cloud.type || cloud.sky_cover).toUpperCase();
+    const baseRaw = memberDashboardNum0110B(cloud.base || cloud.base_feet_agl || cloud.altitude || cloud.height);
+    if (!cover) return "";
+    const feet = baseRaw === null ? "" : baseRaw <= 500 ? `${baseRaw * 100} ft` : `${baseRaw} ft`;
+    return [cover, feet].filter(Boolean).join(" ");
+  }).filter(Boolean);
+  return clouds.length ? `Clouds ${clouds.join(", ")}` : "";
+}
+
+function memberDashboardCeilingText0110B(record: JsonRecord): string {
+  const ceiling = memberDashboardCeilingFeet0110B(record);
+  return ceiling === null ? "Ceiling not reported" : `Ceiling ${ceiling} ft AGL`;
+}
+
+function memberDashboardTempText0110B(record: JsonRecord): string {
+  const temp = memberDashboardNum0110B(record.temp || record.temp_c || record.temperature);
+  const dew = memberDashboardNum0110B(record.dewp || record.dewpoint_c || record.dewpoint);
+  if (temp === null && dew === null) return "";
+  return `Temp ${temp !== null ? `${temp}°C` : "—"} / Dewpoint ${dew !== null ? `${dew}°C` : "—"}`;
+}
+
+function memberDashboardAltimeterText0110B(record: JsonRecord): string {
+  const alt = memberDashboardNum0110B(record.altim || record.altimeter || record.altimeter_in_hg || record.altimeter_hpa);
+  if (alt === null) return "";
+  // AviationWeather.gov JSON commonly returns altim in hPa even when the raw U.S. METAR uses A####.
+  // U.S. member-facing aviation display should show inches of mercury.
+  const inHg = alt > 100 ? alt / 33.8638866667 : alt;
+  return `Altimeter ${inHg.toFixed(2)} inHg`;
+}
+
+function memberDashboardRecordStation0110B(record: JsonRecord): string {
+  return normalizeKey(record.icaoId || record.icao_id || record.station_id || record.stationId || record.id || record.site || "").toUpperCase();
+}
+
+function memberDashboardRawMetar0110B(record: JsonRecord): string {
+  return clean(record.rawOb || record.raw_text || record.rawText || record.raw || record.metar || record.text || record.report);
+}
+
+function memberDashboardRemarksText0110B(rawText: string): string {
+  const raw = clean(rawText);
+  const idx = raw.indexOf(" RMK ");
+  if (idx < 0) return "";
+  return `Remarks: ${raw.slice(idx + 5).trim()}`;
+}
+
+function memberDashboardObservedAt0110B(record: JsonRecord): string {
+  return clean(record.reportTime || record.obsTime || record.observation_time || record.time || record.report_time || record.observed_at || record.receiptTime);
+}
+
+function memberDashboardFailureCard0110B(station: JsonRecord, error: unknown, endpoint: string, fetchedAt: string, cachedCard?: JsonRecord | null): JsonRecord {
+  const message = accessActionErrorMessage0107E(error);
+  if (cachedCard && cachedCard.ok !== false) {
+    return {
+      ...cachedCard,
+      ok: true,
+      stale: true,
+      cache_status: "stale_cache_refresh_failed",
+      warning: `Unable to reach the weather source. Showing the latest available METAR from ${clean(cachedCard.observed_local || cachedCard.fetched_local || "the latest available local time")} / ${clean(cachedCard.observed_utc || cachedCard.fetched_utc || cachedCard.last_success_at || "the latest available Zulu time")}.`,
+      last_error_message: message,
+      last_error_at: fetchedAt,
+      refresh_endpoint: endpoint,
+    };
+  }
+  return { ok: false, station: clean(station.station).toUpperCase(), label: clean(station.label), time_zone: clean(station.time_zone), source: MEMBER_DASHBOARD_METAR_SOURCE_0110B, error: message, endpoint, fetched_at: fetchedAt, fetched_utc: memberDashboardFormatUtc0110B(fetchedAt), fetched_local: memberDashboardFormatTime0110B(fetchedAt, clean(station.time_zone || "America/New_York")) };
+}
+
+function memberDashboardWeatherCardFromApi0110B(station: JsonRecord, record: JsonRecord | null, endpoint: string, fetchedAt: string): JsonRecord {
+  const stationId = clean(station.station).toUpperCase();
+  const tz = clean(station.time_zone || "America/New_York");
+  if (!record) return memberDashboardFailureCard0110B(station, new Error(`No METAR record returned for ${stationId}.`), endpoint, fetchedAt);
+  const observedAt = memberDashboardObservedAt0110B(record);
+  const rawText = memberDashboardRawMetar0110B(record);
+  return {
+    ok: true,
+    source: MEMBER_DASHBOARD_METAR_SOURCE_0110B,
+    provider_hook: MEMBER_DASHBOARD_METAR_PROVIDER_HOOK_0110B,
+    station: stationId,
+    label: clean(station.label || stationId),
+    time_zone: tz,
+    endpoint,
+    cache_status: "live_refresh",
+    stale: false,
+    raw_text: rawText,
+    raw_metar: rawText,
+    flight_category: memberDashboardFlightCategory0110B(record),
+    observed_at: observedAt,
+    observed_utc: memberDashboardFormatUtc0110B(observedAt),
+    observed_local: memberDashboardFormatTime0110B(observedAt, tz),
+    fetched_at: fetchedAt,
+    fetched_utc: memberDashboardFormatUtc0110B(fetchedAt),
+    fetched_local: memberDashboardFormatTime0110B(fetchedAt, tz),
+    details: {
+      wind_text: memberDashboardWindText0110B(record),
+      visibility_text: memberDashboardVisibilityText0110B(record),
+      ceiling_text: memberDashboardCeilingText0110B(record),
+      clouds_text: memberDashboardCloudText0110B(record),
+      temperature_text: memberDashboardTempText0110B(record),
+      altimeter_text: memberDashboardAltimeterText0110B(record),
+      remarks_text: memberDashboardRemarksText0110B(rawText),
+    },
+  };
+}
+
+function memberDashboardCardFromCacheRow0110B(row: JsonRecord, stationFallback?: JsonRecord, stale = false): JsonRecord | null {
+  const decoded = jsonObject(row.decoded_json);
+  if (!Object.keys(decoded).length && !clean(row.raw_metar)) return null;
+  const station = clean(row.station_id || decoded.station || stationFallback?.station).toUpperCase();
+  const tz = clean(row.station_time_zone || decoded.time_zone || stationFallback?.time_zone || "America/New_York");
+  const fetchedAt = clean(row.last_success_at || row.fetched_at || decoded.fetched_at);
+  return {
+    ...decoded,
+    ok: decoded.ok !== false,
+    source: clean(row.source_provider || decoded.source || MEMBER_DASHBOARD_METAR_SOURCE_0110B),
+    provider_hook: clean(jsonObject(row.metadata_json).provider_hook || decoded.provider_hook || MEMBER_DASHBOARD_METAR_PROVIDER_HOOK_0110B),
+    station,
+    label: clean(row.station_label || decoded.label || stationFallback?.label || station),
+    time_zone: tz,
+    raw_text: clean(decoded.raw_text || row.raw_metar),
+    raw_metar: clean(decoded.raw_metar || row.raw_metar),
+    flight_category: clean(row.flight_category || decoded.flight_category || "Unknown"),
+    observed_at: clean(row.observed_at || decoded.observed_at),
+    observed_utc: memberDashboardFormatUtc0110B(row.observed_at || decoded.observed_at),
+    observed_local: memberDashboardFormatTime0110B(row.observed_at || decoded.observed_at, tz),
+    fetched_at: fetchedAt,
+    fetched_utc: memberDashboardFormatUtc0110B(fetchedAt),
+    fetched_local: memberDashboardFormatTime0110B(fetchedAt, tz),
+    last_success_at: clean(row.last_success_at || fetchedAt),
+    stale,
+    cache_status: stale ? "stale_cache" : "fresh_cache",
+    last_error_message: clean(row.last_error_message),
+    last_error_at: clean(row.last_error_at),
+  };
+}
+
+function memberDashboardStationListFromRows0110B(rows: JsonRecord[], configuredStations: JsonRecord[] = []): JsonRecord[] {
+  const configured = memberDashboardSanitizeWeatherAirports0112A(configuredStations);
+  if (configured.length) return configured;
+  const fromRows = rows.map((row) => ({ station: clean(row.station_id).toUpperCase(), label: clean(row.station_label || row.station_id), time_zone: clean(row.station_time_zone || "America/New_York") })).filter((row) => clean(row.station));
+  return fromRows.length ? fromRows : MEMBER_DASHBOARD_METAR_STATIONS_0110B;
+}
+
+async function memberDashboardReadWeatherRows0110B(serviceClient: SupabaseClientAny, organizationId: string): Promise<{ rows: JsonRecord[]; tableAvailable: boolean; error?: string }> {
+  const { data, error } = await serviceClient
+    .from("core_weather_metar_latest")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .is("archived_at", null)
+    .order("station_id", { ascending: true });
+  if (error) {
+    const msg = accessActionErrorMessage0107E(error);
+    if (msg.includes("core_weather_metar_latest") || clean((error as JsonRecord).code) === "42P01") return { rows: [], tableAvailable: false, error: msg };
+    return { rows: [], tableAvailable: false, error: msg };
+  }
+  return { rows: (data || []) as JsonRecord[], tableAvailable: true };
+}
+
+async function memberDashboardUpsertWeatherSuccess0110B(serviceClient: SupabaseClientAny, organizationId: string, card: JsonRecord, endpoint: string): Promise<void> {
+  const stationId = clean(card.station).toUpperCase();
+  if (!stationId) return;
+  const fetchedAt = clean(card.fetched_at) || new Date().toISOString();
+  const staleAfter = new Date(new Date(fetchedAt).getTime() + MEMBER_DASHBOARD_METAR_STALE_MS_0110B).toISOString();
+  const row = {
+    organization_id: organizationId,
+    station_id: stationId,
+    station_label: clean(card.label || stationId),
+    station_time_zone: clean(card.time_zone || "America/New_York"),
+    source_provider: MEMBER_DASHBOARD_METAR_SOURCE_0110B,
+    source_url: endpoint,
+    raw_metar: clean(card.raw_text || card.raw_metar),
+    decoded_json: card,
+    flight_category: clean(card.flight_category || null),
+    observed_at: clean(card.observed_at) || null,
+    fetched_at: fetchedAt,
+    fetch_status: "success",
+    last_success_at: fetchedAt,
+    last_error_at: null,
+    last_error_message: null,
+    stale_after: staleAfter,
+    metadata_json: { updated_by: "0110-B", provider_hook: MEMBER_DASHBOARD_METAR_PROVIDER_HOOK_0110B },
+    updated_at: new Date().toISOString(),
+  };
+  const { error } = await serviceClient.from("core_weather_metar_latest").upsert(row, { onConflict: "organization_id,station_id" });
+  if (error) console.warn("member_dashboard_metar_success_upsert_failed", accessActionErrorMessage0107E(error));
+}
+
+async function memberDashboardRecordWeatherFailure0110B(serviceClient: SupabaseClientAny, organizationId: string, station: JsonRecord, endpoint: string, fetchedAt: string, error: unknown): Promise<void> {
+  const stationId = clean(station.station).toUpperCase();
+  if (!stationId) return;
+  const message = accessActionErrorMessage0107E(error);
+  const row = {
+    organization_id: organizationId,
+    station_id: stationId,
+    station_label: clean(station.label || stationId),
+    station_time_zone: clean(station.time_zone || "America/New_York"),
+    source_provider: MEMBER_DASHBOARD_METAR_SOURCE_0110B,
+    source_url: endpoint,
+    fetch_status: "failed",
+    last_error_at: fetchedAt,
+    last_error_message: message,
+    metadata_json: { updated_by: "0110-B", provider_hook: MEMBER_DASHBOARD_METAR_PROVIDER_HOOK_0110B },
+    updated_at: new Date().toISOString(),
+  };
+  const { error: upsertError } = await serviceClient.from("core_weather_metar_latest").upsert(row, { onConflict: "organization_id,station_id", ignoreDuplicates: false });
+  if (upsertError) console.warn("member_dashboard_metar_failure_upsert_failed", accessActionErrorMessage0107E(upsertError));
+}
+
+async function memberDashboardFetchAviationWeather0110B(stations: JsonRecord[]): Promise<{ endpoint: string; fetchedAt: string; recordsByStation: Map<string, JsonRecord> }> {
+  const ids = stations.map((s) => clean(s.station).toUpperCase()).filter(Boolean).join(",");
+  const endpoint = `https://aviationweather.gov/api/data/metar?ids=${encodeURIComponent(ids)}&format=json`;
+  const fetchedAt = new Date().toISOString();
+  const res = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      "Accept": "application/json",
+      "User-Agent": "SyncEtc-Member-Dashboard/0110-B (aviation club member convenience weather)",
+    },
+  });
+  if (res.status === 204) throw new Error("AviationWeather.gov returned 204 No Content for dashboard METAR request.");
+  const text = await res.text();
+  if (!res.ok) throw new Error(`AviationWeather.gov METAR request failed with HTTP ${res.status}: ${text.slice(0, 300)}`);
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { throw new Error(`AviationWeather.gov METAR response was not valid JSON: ${text.slice(0, 300)}`); }
+  const records = Array.isArray(parsed) ? parsed as JsonRecord[] : Array.isArray(jsonObject(parsed).data) ? jsonObject(parsed).data as JsonRecord[] : [];
+  const recordsByStation = new Map<string, JsonRecord>();
+  for (const record of records) {
+    const station = memberDashboardRecordStation0110B(record);
+    if (station && !recordsByStation.has(station)) recordsByStation.set(station, record);
+  }
+  return { endpoint, fetchedAt, recordsByStation };
+}
+
+async function memberDashboardWeather0110B(serviceClient: SupabaseClientAny, organizationId: string, forceRefresh = false, configuredStations: JsonRecord[] = []): Promise<JsonRecord[]> {
+  const { rows, tableAvailable, error: tableError } = await memberDashboardReadWeatherRows0110B(serviceClient, organizationId);
+  const stations = memberDashboardStationListFromRows0110B(rows, configuredStations);
+  const rowsByStation = new Map<string, JsonRecord>();
+  for (const row of rows) rowsByStation.set(clean(row.station_id).toUpperCase(), row);
+
+  const staleStations: JsonRecord[] = [];
+  const cachedCards = new Map<string, JsonRecord>();
+  const now = Date.now();
+  for (const station of stations) {
+    const stationId = clean(station.station).toUpperCase();
+    const row = rowsByStation.get(stationId);
+    const lastSuccess = row ? clean(row.last_success_at || row.fetched_at) : "";
+    const ageMs = lastSuccess ? now - new Date(lastSuccess).getTime() : Number.POSITIVE_INFINITY;
+    const stale = forceRefresh || !row || !Number.isFinite(ageMs) || ageMs < 0 || ageMs > MEMBER_DASHBOARD_METAR_STALE_MS_0110B;
+    const cached = row ? memberDashboardCardFromCacheRow0110B(row, station, stale) : null;
+    if (cached) cachedCards.set(stationId, cached);
+    if (stale) staleStations.push(station);
+  }
+
+  if (!tableAvailable) {
+    try {
+      const { endpoint, fetchedAt, recordsByStation } = await memberDashboardFetchAviationWeather0110B(stations);
+      return stations.map((station) => memberDashboardWeatherCardFromApi0110B(station, recordsByStation.get(clean(station.station).toUpperCase()) || null, endpoint, fetchedAt));
+    } catch (error) {
+      const fetchedAt = new Date().toISOString();
+      return stations.map((station) => memberDashboardFailureCard0110B(station, new Error(`${accessActionErrorMessage0107E(error)}${tableError ? ` | Cache table unavailable: ${tableError}` : ""}`), "aviationweather.gov", fetchedAt));
+    }
+  }
+
+  if (!staleStations.length) {
+    return stations.map((station) => cachedCards.get(clean(station.station).toUpperCase()) || memberDashboardFailureCard0110B(station, new Error("No cached METAR card found."), "cache", new Date().toISOString()));
+  }
+
+  try {
+    const { endpoint, fetchedAt, recordsByStation } = await memberDashboardFetchAviationWeather0110B(staleStations);
+    const refreshed = new Map<string, JsonRecord>();
+    for (const station of staleStations) {
+      const stationId = clean(station.station).toUpperCase();
+      const record = recordsByStation.get(stationId) || null;
+      const card = memberDashboardWeatherCardFromApi0110B(station, record, endpoint, fetchedAt);
+      if (card.ok) await memberDashboardUpsertWeatherSuccess0110B(serviceClient, organizationId, card, endpoint);
+      else await memberDashboardRecordWeatherFailure0110B(serviceClient, organizationId, station, endpoint, fetchedAt, card.error || "No METAR record returned.");
+      refreshed.set(stationId, card.ok ? { ...card, cache_status: "live_refresh_saved" } : memberDashboardFailureCard0110B(station, card.error || "No METAR record returned.", endpoint, fetchedAt, cachedCards.get(stationId)));
+    }
+    return stations.map((station) => refreshed.get(clean(station.station).toUpperCase()) || cachedCards.get(clean(station.station).toUpperCase()) || memberDashboardFailureCard0110B(station, new Error("No cached METAR card found after refresh."), endpoint, fetchedAt));
+  } catch (error) {
+    const endpoint = `https://aviationweather.gov/api/data/metar?ids=${encodeURIComponent(staleStations.map((s) => clean(s.station).toUpperCase()).join(","))}&format=json`;
+    const fetchedAt = new Date().toISOString();
+    await Promise.all(staleStations.map((station) => memberDashboardRecordWeatherFailure0110B(serviceClient, organizationId, station, endpoint, fetchedAt, error)));
+    return stations.map((station) => {
+      const stationId = clean(station.station).toUpperCase();
+      const cached = cachedCards.get(stationId) || null;
+      return memberDashboardFailureCard0110B(station, error, endpoint, fetchedAt, cached);
+    });
+  }
+}
+
+async function memberDashboardScheduledRefresh0110B(serviceClient: SupabaseClientAny, body: JsonRecord): Promise<JsonRecord> {
+  const organizationId = optionalString(body, "organization_id", "");
+  let orgIds: string[] = [];
+  if (organizationId) orgIds = [organizationId];
+  else {
+    const { data, error } = await serviceClient
+      .from("core_weather_metar_latest")
+      .select("organization_id")
+      .is("archived_at", null);
+    if (error) throw error;
+    orgIds = Array.from(new Set((data || []).map((row: JsonRecord) => clean(row.organization_id)).filter(Boolean)));
+  }
+  const results: JsonRecord[] = [];
+  for (const orgId of orgIds) {
+    try {
+      const orgSettings = await memberDashboardOrganizationSettings0112A(serviceClient, orgId);
+      const cards = await memberDashboardWeather0110B(serviceClient, orgId, true, memberDashboardSanitizeWeatherAirports0112A(orgSettings.dashboard_weather_airports_json));
+      results.push({ organization_id: orgId, ok: true, station_count: cards.length, success_count: cards.filter((c) => c.ok).length, failed_count: cards.filter((c) => !c.ok).length });
+    } catch (error) {
+      results.push({ organization_id: orgId, ok: false, error: accessActionErrorMessage0107E(error) });
+    }
+  }
+  return { refreshed_at: new Date().toISOString(), organization_count: orgIds.length, results };
+}
+
+async function buildMemberDashboard0110B(serviceClient: SupabaseClientAny, organizationId: string, personId: string, platformAdmin: boolean, accessRow: JsonRecord): Promise<JsonRecord> {
+  const [profileResult, nextEvent, orgSettings] = await Promise.all([
+    memberDashboardProfile0110A(serviceClient, organizationId, personId, platformAdmin, accessRow),
+    memberDashboardNextEvent0110A(serviceClient, organizationId, accessRow, platformAdmin).catch((error) => ({ error: accessActionErrorMessage0107E(error) })),
+    memberDashboardOrganizationSettings0112A(serviceClient, organizationId),
+  ]);
+  const dashboardSettings = jsonObject((orgSettings as JsonRecord).dashboard_settings_json);
+  const weather = dashboardSettings.show_weather === false
+    ? []
+    : await memberDashboardWeather0110B(serviceClient, organizationId, false, memberDashboardSanitizeWeatherAirports0112A((orgSettings as JsonRecord).dashboard_weather_airports_json));
+  return {
+    access: accessRow,
+    profile: profileResult.profile,
+    profile_summary: profileResult.profile_summary,
+    profile_error: profileResult.profile_error,
+    next_event: dashboardSettings.show_next_event === false || (nextEvent as JsonRecord)?.error ? null : nextEvent,
+    next_event_error: (nextEvent as JsonRecord)?.error || null,
+    weather,
+    organization_settings: orgSettings,
+    dashboard_settings_json: dashboardSettings,
+    quick_links: memberDashboardSanitizeQuickLinks0112A((orgSettings as JsonRecord).dashboard_quick_links_json),
+    weather_cache_mode: "latest_metar_0110B_refresh_if_older_than_15_minutes_with_0112A_organization_settings",
+    quick_links_mode: "organization_settings_0112A",
+  };
+}
+
+
+
+// 0113-A Customer-side aircraft / asset admin foundation helpers.
+function aircraftOptionalString0113A(body: JsonRecord, key: string, fallback = ""): string {
+  const value = body[key];
+  return typeof value === "string" ? value.trim() : fallback;
+}
+
+function aircraftNullableString0113A(body: JsonRecord, key: string): string | null {
+  const value = body[key];
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function aircraftOptionalNumber0113A(body: JsonRecord, key: string): number | null {
+  const value = body[key];
+  if (value === null || value === undefined || value === "") return null;
+  const n = typeof value === "number" ? value : Number(String(value).replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function aircraftOptionalBoolean0113A(body: JsonRecord, key: string, fallback = false): boolean {
+  const value = body[key];
+  if (typeof value === "boolean") return value;
+  const raw = clean(value).toLowerCase();
+  if (["true", "yes", "y", "1", "checked", "on"].includes(raw)) return true;
+  if (["false", "no", "n", "0", "unchecked", "off", ""].includes(raw)) return false;
+  return fallback;
+}
+
+function aircraftNullableDate0113A(body: JsonRecord, key: string): string | null {
+  const raw = aircraftNullableString0113A(body, key);
+  if (!raw) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
+function aircraftJsonObject0113A(body: JsonRecord, key: string): JsonRecord {
+  const value = body[key];
+  return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
+}
+
+function aircraftNormalizeVisibility0113A(value: unknown, fallback = "members"): string {
+  const raw = normalizeKey(value || fallback);
+  if (["public", "members", "admins", "hidden"].includes(raw)) return raw;
+  return fallback;
+}
+
+function aircraftNormalizeRecordStatus0113A(value: unknown, fallback = "active"): string {
+  const raw = normalizeKey(value || fallback);
+  if (["draft", "active", "hidden", "archived"].includes(raw)) return raw;
+  if (raw === "published") return "active";
+  return fallback;
+}
+
+function aircraftNormalizeStatusKey0113A(value: unknown, doNotDispatch = false): string {
+  if (doNotDispatch) return "do-not-dispatch";
+  const raw = normalizeKey(value || "available");
+  if (["active", "available", "dispatchable", "flying", "current"].includes(raw)) return "available";
+  if (["scheduled-maintenance", "maintenance", "in-maintenance"].includes(raw)) return "maintenance";
+  if (["do-not-dispatch", "dnd", "no-dispatch"].includes(raw)) return "do-not-dispatch";
+  if (["grounded", "down"].includes(raw)) return "grounded";
+  if (["inactive", "retired", "sold", "archived"].includes(raw)) return "inactive";
+  return raw || "available";
+}
+
+function aircraftNormalizeLocationStatus0113A(value: unknown): string {
+  const raw = normalizeKey(value || "active");
+  return ["active", "inactive", "archived"].includes(raw) ? raw : "active";
+}
+
+function aircraftNormalizeLocationType0114C(value: unknown): string {
+  const raw = normalizeKey(value || "other");
+  if (["airport", "hangar", "meeting-room", "office", "dock", "storage", "base", "other"].includes(raw)) return raw;
+  if (["meetingroom", "meeting-rooms", "conference-room", "conference"].includes(raw)) return "meeting-room";
+  if (["warehouse", "shed", "unit"].includes(raw)) return "storage";
+  return "other";
+}
+
+function aircraftNormalizeAssetTypeCategory0115A(value: unknown): string {
+  const raw = normalizeKey(value || "other");
+  if (["aircraft", "vehicle", "simulator", "vessel", "equipment", "other"].includes(raw)) return raw;
+  if (["boat", "boats", "ship"].includes(raw)) return "vessel";
+  if (["car", "truck", "auto", "automobile"].includes(raw)) return "vehicle";
+  if (["tool", "tools", "gear"].includes(raw)) return "equipment";
+  return "other";
+}
+
+function aircraftNormalizeAssetTypeStatus0115A(value: unknown): string {
+  const raw = normalizeKey(value || "active");
+  return ["active", "inactive", "archived"].includes(raw) ? raw : "active";
+}
+
+async function aircraftEnsureUniqueAssetTypeKey0115A(serviceClient: SupabaseClientAny, organizationId: string, proposedKey: string, currentId = ""): Promise<string> {
+  const base = normalizeKey(proposedKey) || "asset-type";
+  for (let i = 0; i < 100; i += 1) {
+    const candidate = i === 0 ? base : `${base}-${i}`;
+    const { data, error } = await serviceClient
+      .from("core_organization_asset_types")
+      .select("asset_type_id")
+      .eq("organization_id", organizationId)
+      .eq("asset_type_key", candidate)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data || clean(data.asset_type_id) === currentId) return candidate;
+  }
+  throw new Error("Could not generate a unique asset type key.");
+}
+
+async function aircraftListAssetTypes0115A(serviceClient: SupabaseClientAny, organizationId: string, includeArchived = false): Promise<JsonRecord[]> {
+  let query = serviceClient
+    .from("core_organization_asset_types")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .order("sort_order", { ascending: true })
+    .order("label", { ascending: true });
+  if (!includeArchived) query = query.is("archived_at", null).neq("status", "archived");
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
+async function aircraftSaveAssetType0115A(serviceClient: SupabaseClientAny, organizationId: string, body: JsonRecord): Promise<JsonRecord> {
+  const assetTypeId = aircraftNullableString0113A(body, "asset_type_id");
+  const label = aircraftOptionalString0113A(body, "label", aircraftOptionalString0113A(body, "display_name", ""));
+  const pluralLabel = aircraftNullableString0113A(body, "plural_label") || label;
+  const categoryKey = aircraftNormalizeAssetTypeCategory0115A(body.category_key || body.category);
+  if (!label) throw new Error("Enter an asset type name.");
+  if (!categoryKey) throw new Error("Choose an asset type category.");
+  const status = aircraftNormalizeAssetTypeStatus0115A(body.status);
+  const assetTypeKey = assetTypeId
+    ? aircraftOptionalString0113A(body, "asset_type_key", normalizeKey(label))
+    : await aircraftEnsureUniqueAssetTypeKey0115A(serviceClient, organizationId, aircraftOptionalString0113A(body, "asset_type_key", label));
+  const payload: JsonRecord = {
+    organization_id: organizationId,
+    asset_type_key: normalizeKey(assetTypeKey || label),
+    label,
+    plural_label: pluralLabel,
+    category_key: categoryKey,
+    description: aircraftNullableString0113A(body, "description"),
+    notes: aircraftNullableString0113A(body, "notes"),
+    sort_order: status === "archived" ? 999 : (aircraftOptionalNumber0113A(body, "sort_order") ?? 100),
+    status,
+    metadata_json: aircraftJsonObject0113A(body, "metadata_json"),
+    archived_at: status === "archived" ? new Date().toISOString() : null,
+    updated_at: new Date().toISOString(),
+  };
+  if (assetTypeId) {
+    const { data, error } = await serviceClient
+      .from("core_organization_asset_types")
+      .update(payload)
+      .eq("asset_type_id", assetTypeId)
+      .eq("organization_id", organizationId)
+      .select("*")
+      .single();
+    if (error) throw error;
+    return data;
+  }
+  const { data, error } = await serviceClient
+    .from("core_organization_asset_types")
+    .insert(payload)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function aircraftSetAssetTypeArchived0115A(serviceClient: SupabaseClientAny, organizationId: string, assetTypeId: string, archived: boolean): Promise<JsonRecord> {
+  const payload = archived ? { status: "archived", sort_order: 999, archived_at: new Date().toISOString(), updated_at: new Date().toISOString() } : { status: "active", archived_at: null, updated_at: new Date().toISOString() };
+  const { data, error } = await serviceClient
+    .from("core_organization_asset_types")
+    .update(payload)
+    .eq("asset_type_id", assetTypeId)
+    .eq("organization_id", organizationId)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function aircraftEnsureUniqueAssetKey0113A(serviceClient: SupabaseClientAny, organizationId: string, proposedKey: string): Promise<string> {
+  const base = normalizeKey(proposedKey) || "aircraft";
+  for (let i = 0; i < 100; i += 1) {
+    const candidate = i === 0 ? base : `${base}-${i}`;
+    const { data, error } = await serviceClient
+      .from("core_operational_assets")
+      .select("operational_asset_id")
+      .eq("organization_id", organizationId)
+      .eq("asset_key", candidate)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return candidate;
+  }
+  throw new Error("Could not generate a unique aircraft slug.");
+}
+
+async function aircraftRequireAdminAccess0113A(
+  serviceClient: SupabaseClientAny,
+  personId: string,
+  organizationId: string,
+  platformAdmin: boolean,
+): Promise<JsonRecord> {
+  if (platformAdmin) {
+    const access = await buildPlatformAccess(serviceClient, organizationId);
+    const selected = access.find((row: JsonRecord) => clean(row.organization_id) === organizationId) || access[0];
+    if (!selected) throw new Error("Organization not found.");
+    return selected;
+  }
+  return await requireAnyMembershipAccess(serviceClient, personId, organizationId, [
+    "assets.manage",
+    "organization.view_admin",
+    "organization.admin.open",
+    "organization.manage_settings",
+    "organization.super_admin",
+  ]);
+}
+
+async function aircraftListLocations0113A(serviceClient: SupabaseClientAny, organizationId: string, includeArchived = false): Promise<JsonRecord[]> {
+  let query = serviceClient
+    .from("core_organization_locations")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .order("sort_order", { ascending: true })
+    .order("display_name", { ascending: true });
+  if (!includeArchived) query = query.is("archived_at", null).neq("status", "archived");
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
+async function aircraftListAssets0113A(serviceClient: SupabaseClientAny, organizationId: string, includeArchived = false): Promise<JsonRecord[]> {
+  let query = serviceClient
+    .from("module_aircraft_admin_v1")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .order("sort_order", { ascending: true })
+    .order("tail_number", { ascending: true });
+  if (!includeArchived) query = query.is("archived_at", null).neq("asset_record_status", "archived");
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
+async function aircraftFetchAdminRecord0113A(serviceClient: SupabaseClientAny, aircraftId: string): Promise<JsonRecord | null> {
+  const { data, error } = await serviceClient
+    .from("module_aircraft_admin_v1")
+    .select("*")
+    .eq("operational_asset_id", aircraftId)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+async function aircraftUpsertRate0113A(
+  serviceClient: SupabaseClientAny,
+  operationalAssetId: string,
+  rateKey: string,
+  label: string,
+  amount: number | null,
+  rateType: string,
+  billingUnit: string,
+  extra: JsonRecord = {},
+): Promise<void> {
+  if (amount === null) return;
+  const payload: JsonRecord = {
+    operational_asset_id: operationalAssetId,
+    rate_key: rateKey,
+    label,
+    rate_type: rateType,
+    billing_unit: billingUnit,
+    amount,
+    currency_code: aircraftOptionalString0113A(extra, "currency_code", "USD"),
+    fuel_included: extra.fuel_included === null || extra.fuel_included === undefined ? null : Boolean(extra.fuel_included),
+    tax_behavior: aircraftNullableString0113A(extra, "tax_behavior"),
+    is_default: rateKey === "hourly-rental",
+    visibility: aircraftNormalizeVisibility0113A(extra.visibility, "members"),
+    status: "active",
+    archived_at: null,
+    settings_json: aircraftJsonObject0113A(extra, "settings_json"),
+  };
+  const { data: existing, error: existingError } = await serviceClient
+    .from("core_operational_asset_rates")
+    .select("asset_rate_id")
+    .eq("operational_asset_id", operationalAssetId)
+    .eq("rate_key", rateKey)
+    .maybeSingle();
+  if (existingError) throw existingError;
+  if (existing?.asset_rate_id) {
+    const { error } = await serviceClient.from("core_operational_asset_rates").update(payload).eq("asset_rate_id", clean(existing.asset_rate_id));
+    if (error) throw error;
+  } else {
+    const { error } = await serviceClient.from("core_operational_asset_rates").insert(payload);
+    if (error) throw error;
+  }
+}
+
+async function aircraftSaveLocation0113A(serviceClient: SupabaseClientAny, organizationId: string, body: JsonRecord): Promise<JsonRecord> {
+  const locationId = aircraftNullableString0113A(body, "organization_location_id") || aircraftNullableString0113A(body, "location_id");
+  const displayName = aircraftOptionalString0113A(body, "display_name", aircraftOptionalString0113A(body, "location_name", ""));
+  const airportIdentifier = aircraftOptionalString0113A(body, "airport_identifier", "").toUpperCase().replace(/\s+/g, "");
+  const locationType = aircraftNormalizeLocationType0114C(body.location_type || "other");
+  if (!displayName) throw new Error("Enter a display name for this location.");
+  if (!locationType) throw new Error("Choose a location type.");
+  const locationKey = locationId ? "" : normalizeKey(aircraftOptionalString0113A(body, "location_key", airportIdentifier || displayName));
+  const incomingAddress = aircraftJsonObject0113A(body, "address_json");
+  const addressLine1 = aircraftNullableString0113A(body, "address_line_1") || clean(incomingAddress.address_line_1 || incomingAddress.street || incomingAddress.address_1) || null;
+  const addressLine2 = aircraftNullableString0113A(body, "address_line_2") || clean(incomingAddress.address_line_2 || incomingAddress.address_2) || null;
+  const city = aircraftNullableString0113A(body, "city") || clean(incomingAddress.city) || null;
+  const stateRegion = aircraftNullableString0113A(body, "state_region") || clean(incomingAddress.state_region || incomingAddress.state) || null;
+  const postalCode = aircraftNullableString0113A(body, "postal_code") || clean(incomingAddress.postal_code || incomingAddress.zip) || null;
+  const country = aircraftNullableString0113A(body, "country") || clean(incomingAddress.country) || null;
+  const addressJson: JsonRecord = {
+    ...incomingAddress,
+    address_line_1: addressLine1,
+    address_line_2: addressLine2,
+    city,
+    state_region: stateRegion,
+    postal_code: postalCode,
+    country,
+  };
+  const payload: JsonRecord = {
+    organization_id: organizationId,
+    location_type: locationType,
+    airport_identifier: airportIdentifier || null,
+    display_name: displayName,
+    legal_name: aircraftNullableString0113A(body, "legal_name"),
+    time_zone: aircraftOptionalString0113A(body, "time_zone", "America/New_York") || "America/New_York",
+    address_line_1: addressLine1,
+    address_line_2: addressLine2,
+    city,
+    state_region: stateRegion,
+    postal_code: postalCode,
+    country,
+    address_json: addressJson,
+    notes: aircraftNullableString0113A(body, "notes"),
+    sort_order: aircraftOptionalNumber0113A(body, "sort_order") ?? 100,
+    status: aircraftNormalizeLocationStatus0113A(body.status),
+    metadata_json: aircraftJsonObject0113A(body, "metadata_json"),
+    archived_at: aircraftNormalizeLocationStatus0113A(body.status) === "archived" ? new Date().toISOString() : null,
+    updated_at: new Date().toISOString(),
+  };
+  if (!locationId) payload.location_key = locationKey || "location";
+  if (locationId) {
+    const { data, error } = await serviceClient
+      .from("core_organization_locations")
+      .update(payload)
+      .eq("organization_location_id", locationId)
+      .eq("organization_id", organizationId)
+      .select("*")
+      .single();
+    if (error) throw error;
+    return data;
+  }
+  const { data, error } = await serviceClient
+    .from("core_organization_locations")
+    .upsert(payload, { onConflict: "organization_id,location_key" })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function aircraftSetLocationArchived0113A(serviceClient: SupabaseClientAny, organizationId: string, locationId: string, archived: boolean): Promise<JsonRecord> {
+  const payload = archived ? { status: "archived", sort_order: 999, archived_at: new Date().toISOString(), updated_at: new Date().toISOString() } : { status: "active", archived_at: null, updated_at: new Date().toISOString() };
+  const { data, error } = await serviceClient
+    .from("core_organization_locations")
+    .update(payload)
+    .eq("organization_location_id", locationId)
+    .eq("organization_id", organizationId)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function aircraftSaveAsset0113A(serviceClient: SupabaseClientAny, organizationId: string, body: JsonRecord): Promise<JsonRecord> {
+  const operationalAssetId = aircraftNullableString0113A(body, "operational_asset_id") || aircraftNullableString0113A(body, "aircraft_id");
+  const tailNumber = aircraftOptionalString0113A(body, "tail_number", "").toUpperCase().replace(/\s+/g, "");
+  const preferredName = aircraftOptionalString0113A(body, "preferred_name", aircraftOptionalString0113A(body, "display_name", ""));
+  const make = aircraftNullableString0113A(body, "aircraft_make") || aircraftNullableString0113A(body, "manufacturer");
+  const model = aircraftNullableString0113A(body, "aircraft_model") || aircraftNullableString0113A(body, "model");
+  const displayName = preferredName || tailNumber || [make, model].filter(Boolean).join(" ") || "Aircraft";
+  if (!tailNumber && !displayName) throw new Error("Enter at least a tail number or display/preferred name.");
+
+  let existing: JsonRecord | null = null;
+  if (operationalAssetId) {
+    const { data, error } = await serviceClient
+      .from("core_operational_assets")
+      .select("*")
+      .eq("operational_asset_id", operationalAssetId)
+      .eq("organization_id", organizationId)
+      .eq("asset_type_key", "aircraft")
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error("Aircraft not found for this organization.");
+    existing = data;
+  }
+  const doNotDispatch = aircraftOptionalBoolean0113A(body, "do_not_dispatch", false);
+  const statusKey = aircraftNormalizeStatusKey0113A(body.status_key || body.operational_status, doNotDispatch);
+  const recordStatus = aircraftNormalizeRecordStatus0113A(body.asset_record_status || body.record_status, "active");
+  const assetKey = existing?.asset_key ? clean(existing.asset_key) : await aircraftEnsureUniqueAssetKey0113A(serviceClient, organizationId, tailNumber || preferredName || displayName);
+  const locationId = aircraftNullableString0113A(body, "organization_location_id") || aircraftNullableString0113A(body, "home_base_location_id");
+  const year = aircraftOptionalNumber0113A(body, "aircraft_year") ?? aircraftOptionalNumber0113A(body, "model_year");
+  if (year !== null) {
+    const currentYear = new Date().getUTCFullYear();
+    if (!Number.isInteger(year) || year < 1900 || year > currentYear + 2) throw new Error(`Aircraft year must be between 1900 and ${currentYear + 2}.`);
+  }
+  const summary = aircraftNullableString0113A(body, "summary") || aircraftNullableString0113A(body, "aircraft_description_plain");
+  const description = aircraftNullableString0113A(body, "description") || aircraftNullableString0113A(body, "member_description");
+  const corePayload: JsonRecord = {
+    organization_id: organizationId,
+    site_id: null,
+    asset_type_key: "aircraft",
+    asset_key: assetKey,
+    display_name: displayName,
+    short_name: tailNumber || preferredName || null,
+    public_label: aircraftNullableString0113A(body, "public_label") || tailNumber || displayName,
+    identifier: tailNumber || null,
+    manufacturer: make,
+    model,
+    model_year: year,
+    organization_location_id: locationId,
+    status_key: statusKey,
+    visibility: aircraftNormalizeVisibility0113A(body.visibility, "members"),
+    summary,
+    description,
+    sort_order: aircraftOptionalNumber0113A(body, "sort_order") ?? 100,
+    specs_json: aircraftJsonObject0113A(body, "specs_json"),
+    operational_json: aircraftJsonObject0113A(body, "operational_json"),
+    usage_json: aircraftJsonObject0113A(body, "usage_json"),
+    billing_json: aircraftJsonObject0113A(body, "billing_json"),
+    maintenance_json: aircraftJsonObject0113A(body, "asset_maintenance_json"),
+    media_json: aircraftJsonObject0113A(body, "media_json"),
+    settings_json: aircraftJsonObject0113A(body, "settings_json"),
+    status: recordStatus,
+    archived_at: recordStatus === "archived" ? new Date().toISOString() : null,
+    updated_at: new Date().toISOString(),
+  };
+  let asset: JsonRecord;
+  if (operationalAssetId) {
+    const { data, error } = await serviceClient
+      .from("core_operational_assets")
+      .update(corePayload)
+      .eq("operational_asset_id", operationalAssetId)
+      .eq("organization_id", organizationId)
+      .eq("asset_type_key", "aircraft")
+      .select("*")
+      .single();
+    if (error) throw error;
+    asset = data;
+  } else {
+    const { data, error } = await serviceClient.from("core_operational_assets").insert(corePayload).select("*").single();
+    if (error) throw error;
+    asset = data;
+  }
+  const savedAssetId = clean(asset.operational_asset_id);
+  const detailsPayload: JsonRecord = {
+    operational_asset_id: savedAssetId,
+    tail_number: tailNumber || null,
+    preferred_name: preferredName || null,
+    aircraft_make: make,
+    aircraft_model: model,
+    aircraft_year: year,
+    icao_type_code: aircraftNullableString0113A(body, "icao_type_code")?.toUpperCase() || null,
+    serial_number: aircraftNullableString0113A(body, "serial_number"),
+    category_class: aircraftNullableString0113A(body, "category_class"),
+    engine_count: aircraftOptionalNumber0113A(body, "engine_count"),
+    engine_make_model: aircraftNullableString0113A(body, "engine_make_model"),
+    engine_serial_numbers: aircraftNullableString0113A(body, "engine_serial_numbers"),
+    propeller_details: aircraftNullableString0113A(body, "propeller_details"),
+    seat_count: aircraftOptionalNumber0113A(body, "seat_count"),
+    fuel_type: aircraftNullableString0113A(body, "fuel_type"),
+    fuel_burn_gph: aircraftOptionalNumber0113A(body, "fuel_burn_gph"),
+    home_base: aircraftNullableString0113A(body, "home_base"),
+    home_base_location_id: locationId,
+    is_complex: aircraftOptionalBoolean0113A(body, "is_complex", false),
+    is_high_performance: aircraftOptionalBoolean0113A(body, "is_high_performance", false),
+    is_tailwheel: aircraftOptionalBoolean0113A(body, "is_tailwheel", false),
+    is_ifr_equipped: aircraftOptionalBoolean0113A(body, "is_ifr_equipped", false),
+    is_night_equipped: aircraftOptionalBoolean0113A(body, "is_night_equipped", false),
+    is_multi_engine: aircraftOptionalBoolean0113A(body, "is_multi_engine", false),
+    do_not_dispatch: doNotDispatch || statusKey === "do-not-dispatch",
+    dispatch_note: aircraftNullableString0113A(body, "dispatch_note"),
+    primary_photo_url: aircraftNullableString0113A(body, "primary_photo_url"),
+    panel_photo_url: aircraftNullableString0113A(body, "panel_photo_url"),
+    aircraft_description_plain: summary,
+    current_tach: aircraftOptionalNumber0113A(body, "current_tach"),
+    tach_date: aircraftNullableDate0113A(body, "tach_date"),
+    current_hobbs: aircraftOptionalNumber0113A(body, "current_hobbs"),
+    hobbs_date: aircraftNullableDate0113A(body, "hobbs_date"),
+    current_airframe_hours: aircraftOptionalNumber0113A(body, "current_airframe_hours"),
+    airframe_hours_date: aircraftNullableDate0113A(body, "airframe_hours_date"),
+    hobbs_at_last_major_overhaul: aircraftOptionalNumber0113A(body, "hobbs_at_last_major_overhaul"),
+    billing_basis: aircraftNullableString0113A(body, "billing_basis"),
+    usage_tracking_basis: aircraftNullableString0113A(body, "usage_tracking_basis"),
+    hobbs_factor: aircraftOptionalNumber0113A(body, "hobbs_factor"),
+    round_to_decimals: aircraftOptionalNumber0113A(body, "round_to_decimals"),
+    tax_rate_behavior: aircraftNullableString0113A(body, "tax_rate_behavior"),
+    engine_notes: aircraftNullableString0113A(body, "engine_notes"),
+    avionics_json: aircraftJsonObject0113A(body, "avionics_json"),
+    equipment_json: aircraftJsonObject0113A(body, "equipment_json"),
+    maintenance_json: aircraftJsonObject0113A(body, "maintenance_json"),
+    aircraft_json: aircraftJsonObject0113A(body, "aircraft_json"),
+    source_json: aircraftJsonObject0113A(body, "source_json"),
+    maintenance_notes_general: aircraftNullableString0113A(body, "maintenance_notes_general"),
+    oil_change_due_tach: aircraftOptionalNumber0113A(body, "oil_change_due_tach"),
+    updated_at: new Date().toISOString(),
+  };
+  const { error: detailError } = await serviceClient.from("module_aircraft_details").upsert(detailsPayload, { onConflict: "operational_asset_id" });
+  if (detailError) throw detailError;
+  await aircraftUpsertRate0113A(serviceClient, savedAssetId, "hourly-rental", "Hourly Rental", aircraftOptionalNumber0113A(body, "hourly_rate"), "rental", aircraftOptionalString0113A(body, "billing_unit", "hour"), { fuel_included: aircraftOptionalBoolean0113A(body, "fuel_included", false), tax_behavior: aircraftNullableString0113A(body, "tax_behavior"), visibility: "members" });
+  await aircraftUpsertRate0113A(serviceClient, savedAssetId, "annual-due", "Annual Due", aircraftOptionalNumber0113A(body, "annual_due"), "fee", "flat", { visibility: "admins" });
+  const record = await aircraftFetchAdminRecord0113A(serviceClient, savedAssetId);
+  if (!record) throw new Error("Aircraft saved but could not be reloaded.");
+  return record;
+}
+
+async function aircraftSetAssetArchived0113A(serviceClient: SupabaseClientAny, organizationId: string, aircraftId: string, archived: boolean): Promise<JsonRecord> {
+  const payload = archived ? { status: "archived", sort_order: 999, archived_at: new Date().toISOString(), updated_at: new Date().toISOString() } : { status: "active", archived_at: null, updated_at: new Date().toISOString() };
+  const { data, error } = await serviceClient
+    .from("core_operational_assets")
+    .update(payload)
+    .eq("operational_asset_id", aircraftId)
+    .eq("organization_id", organizationId)
+    .eq("asset_type_key", "aircraft")
+    .select("*")
+    .single();
+  if (error) throw error;
+  const record = await aircraftFetchAdminRecord0113A(serviceClient, clean(data.operational_asset_id));
+  if (!record) throw new Error("Aircraft archive state changed but could not be reloaded.");
+  return record;
+}
+
+async function aircraftGetAdminPayload0113A(serviceClient: SupabaseClientAny, organizationId: string, includeArchived = false): Promise<JsonRecord> {
+  const [locations, aircraft, assetTypes] = await Promise.all([
+    aircraftListLocations0113A(serviceClient, organizationId, includeArchived),
+    aircraftListAssets0113A(serviceClient, organizationId, includeArchived),
+    aircraftListAssetTypes0115A(serviceClient, organizationId, true),
+  ]);
+  return { locations, aircraft, asset_types: assetTypes };
+}
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonResponse(405, { ok: false, error: "method_not_allowed", message: "Use POST." });
@@ -5645,12 +7896,32 @@ serve(async (req: Request) => {
     return jsonResponse(500, { ok: false, error: "missing_environment", message: "Missing Supabase environment variables." });
   }
 
+  const serviceClient = createClient(supabaseUrl, supabaseServiceRoleKey);
+
+  let body: JsonRecord;
+  try {
+    body = await req.json();
+  } catch {
+    return jsonResponse(400, { ok: false, error: "invalid_json", message: "Request body must be valid JSON." });
+  }
+
+  const action = clean(body.action);
+  const cronSecret = clean(Deno.env.get("SYNCETC_CRON_SECRET") || "");
+  const requestCronSecret = clean(req.headers.get("x-syncetc-cron-secret") || body.cron_secret);
+  if ((action === "scheduled_refresh_member_dashboard_metars" || action === "refresh_member_dashboard_metars") && cronSecret && requestCronSecret && requestCronSecret === cronSecret) {
+    try {
+      const result = await memberDashboardScheduledRefresh0110B(serviceClient, body);
+      return jsonResponse(200, { ok: true, action, version: VERSION, auth_mode: "cron_secret", ...result });
+    } catch (error) {
+      return jsonResponse(500, { ok: false, error: "metar_scheduled_refresh_failed", action, version: VERSION, message: accessActionErrorMessage0107E(error) });
+    }
+  }
+
   const authHeader = req.headers.get("Authorization") || "";
   const jwt = authHeader.replace(/^Bearer\s+/i, "").trim();
   if (!jwt) return jsonResponse(401, { ok: false, error: "missing_auth", message: "Missing Authorization bearer token." });
 
   const userClient = createClient(supabaseUrl, supabaseAnonKey, { global: { headers: { Authorization: `Bearer ${jwt}` } } });
-  const serviceClient = createClient(supabaseUrl, supabaseServiceRoleKey);
 
   const { data: authData, error: authError } = await userClient.auth.getUser(jwt);
   if (authError || !authData?.user?.id || !authData?.user?.email) {
@@ -5661,40 +7932,56 @@ serve(async (req: Request) => {
   const actorEmail = normalizeEmail(authUser.email);
   const platformAdmin = await isPlatformAdmin(serviceClient, actorEmail);
 
-  let body: JsonRecord;
   try {
-    body = await req.json();
-  } catch {
-    return jsonResponse(400, { ok: false, error: "invalid_json", message: "Request body must be valid JSON." });
-  }
-
-  const action = clean(body.action);
-
-  try {
-    const person = await ensurePersonForAuthUser(serviceClient, authUser);
-    const personId = clean(person.person_id);
-
     if (action === "ping") {
       return jsonResponse(200, { ok: true, action, email: actorEmail, platform_admin: platformAdmin });
     }
 
+    if (action === "refresh_member_dashboard_metars" || action === "scheduled_refresh_member_dashboard_metars") {
+      if (!platformAdmin) return jsonResponse(403, { ok: false, error: "not_platform_admin", message: "Manual METAR refresh requires platform admin or a valid cron secret." });
+      const result = await memberDashboardScheduledRefresh0110B(serviceClient, body);
+      return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, platform_admin: platformAdmin, version: VERSION, auth_mode: "platform_admin", ...result });
+    }
+
+    const applicantPerson = applicantAuthOnlyPerson0107F(authUser);
+
     if (action === "applicant_get_my_portal" || action === "applicant_get_portal") {
       const applicantOrgId = await applicantPortalResolveOrganizationId0106(serviceClient, body);
       const result = await applicantGetPortal0098(serviceClient, actorEmail, clean(authUser.id), applicantOrgId);
-      return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
+      return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person: applicantPerson, platform_admin: platformAdmin, ...result });
     }
 
     if (action === "applicant_save_my_application") {
       const applicantOrgId = await applicantPortalResolveOrganizationId0106(serviceClient, body);
       const result = await applicantSavePortal0098(serviceClient, actorEmail, clean(authUser.id), { ...body, organization_id: applicantOrgId || clean(body.organization_id) });
-      return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
+      return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person: applicantPerson, platform_admin: platformAdmin, ...result });
     }
 
     if (action === "applicant_upload_task_file") {
       const applicantOrgId = await applicantPortalResolveOrganizationId0106(serviceClient, body);
       const result = await applicantUploadTaskFile0098(serviceClient, actorEmail, clean(authUser.id), { ...body, organization_id: applicantOrgId || clean(body.organization_id) });
-      return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
+      return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person: applicantPerson, platform_admin: platformAdmin, ...result });
     }
+
+    const applicantAuthOnly = isApplicantAuthOnlyUser0107F(authUser);
+    const existingPersonForAuth = applicantAuthOnly ? await findExistingPersonForAuthUser0107F(serviceClient, authUser) : null;
+
+    if (action === "get_my_access" && applicantAuthOnly && !existingPersonForAuth && !platformAdmin) {
+      try {
+        const applicantOrgId = await applicantPortalResolveOrganizationId0106(serviceClient, body);
+        const result = await applicantGetPortal0098(serviceClient, actorEmail, clean(authUser.id), applicantOrgId);
+        return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person: applicantPerson, platform_admin: false, access: [result.access], applicant_access: result.access, organization: result.organization, style_profile: result.style_profile, diagnostics: result.diagnostics });
+      } catch (applicantAccessError) {
+        return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person: applicantPerson, platform_admin: false, access: [], applicant_access_error: accessActionErrorMessage0107E(applicantAccessError) });
+      }
+    }
+
+    if (applicantAuthOnly && !existingPersonForAuth && !platformAdmin) {
+      throw new AccessActionError(403, "applicant_access_only", "This login is an applicant portal login only and does not provide member, organization admin, or platform access.", { auth_email: actorEmail, auth_user_id: clean(authUser.id), action });
+    }
+
+    const person = existingPersonForAuth || await ensurePersonForAuthUser(serviceClient, authUser);
+    const personId = clean(person.person_id);
 
     if (action === "get_my_access") {
       const organizationId = optionalString(body, "organization_id", "");
@@ -5706,13 +7993,17 @@ serve(async (req: Request) => {
       const organizationId = optionalString(body, "organization_id", "");
       if (platformAdmin) {
         const access = await buildPlatformAccess(serviceClient, organizationId);
-        return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: true, platform_override: true, access });
+        const selected = organizationId ? access.find((row: JsonRecord) => clean(row.organization_id) === organizationId || clean(row.organization_key) === organizationId) : access[0];
+        const dashboard = selected ? await buildMemberDashboard0110B(serviceClient, clean(selected.organization_id), personId, true, selected) : null;
+        return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: true, platform_override: true, access, dashboard });
       }
       const access = await buildAccess(serviceClient, personId);
       const visibleAccess = organizationId ? access.filter((row) => clean(row.organization_id) === organizationId) : access;
       const allowed = visibleAccess.filter((row) => !row.blocks_access && (Boolean((row.capabilities as JsonRecord)?.can_view_user_dashboard) || Boolean((row.capabilities as JsonRecord)?.can_view_organization_admin)));
-      if (organizationId && !allowed.length) throw new Error("You do not have user dashboard access to this organization.");
-      return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, access: allowed });
+      if (organizationId && !allowed.length) throw new Error("You do not have member dashboard access to this organization.");
+      const selected = allowed[0] || null;
+      const dashboard = selected ? await buildMemberDashboard0110B(serviceClient, clean(selected.organization_id), personId, false, selected) : null;
+      return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, access: allowed, dashboard });
     }
 
     if (action === "get_customer_admin_dashboard" || action === "get_organization_admin_dashboard") {
@@ -5754,6 +8045,54 @@ serve(async (req: Request) => {
         return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
       }
 
+      if (action === "member_forum_get_context") {
+        const result = await forumGetContext0111C(serviceClient, organizationId, personId, platformAdmin, body);
+        return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
+      }
+
+      if (action === "member_forum_create_topic") {
+        const result = await forumCreateTopic0111A(serviceClient, organizationId, person, clean(authUser.id), actorEmail, platformAdmin, body);
+        const selectedTopic = jsonObject(result.selected_topic);
+        await writeAudit(serviceClient, actorEmail, "member_forum", action, "core_forum_topics", clean(selectedTopic.forum_topic_id), { organization_id: organizationId, title: clean(body.title) }, { saved: true });
+        return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
+      }
+
+      if (action === "member_forum_create_reply") {
+        const result = await forumCreateReply0111A(serviceClient, organizationId, person, clean(authUser.id), actorEmail, platformAdmin, body);
+        await writeAudit(serviceClient, actorEmail, "member_forum", action, "core_forum_replies", clean(body.forum_topic_id), { organization_id: organizationId, forum_topic_id: clean(body.forum_topic_id) }, { saved: true });
+        return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
+      }
+
+      if (action === "member_forum_vote_poll") {
+        const result = await forumVotePoll0111A(serviceClient, organizationId, person, clean(authUser.id), actorEmail, platformAdmin, body);
+        return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
+      }
+
+      if (action === "member_forum_toggle_reaction") {
+        const result = await forumToggleReaction0111E(serviceClient, organizationId, person, clean(authUser.id), actorEmail, platformAdmin, body);
+        return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
+      }
+
+      if (action === "member_forum_mark_mentions_read") {
+        const result = await forumMarkMentionsRead0111A(serviceClient, organizationId, personId, platformAdmin, body);
+        return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
+      }
+
+      if (action === "member_forum_save_preferences") {
+        const result = await forumSavePreferences0111A(serviceClient, organizationId, personId, clean(authUser.id), platformAdmin, body);
+        return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
+      }
+
+      if (action === "member_forum_moderate_topic") {
+        const result = await forumModerateTopic0111A(serviceClient, organizationId, person, clean(authUser.id), actorEmail, platformAdmin, body);
+        return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
+      }
+
+      if (action === "member_forum_moderate_reply") {
+        const result = await forumModerateReply0111A(serviceClient, organizationId, person, clean(authUser.id), actorEmail, platformAdmin, body);
+        return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
+      }
+
       if (action === "member_list_events") {
         const result = await memberListEvents(serviceClient, organizationId, personId, platformAdmin);
         return jsonResponse(200, { ok: true, action, user: { id: authUser.id, email: actorEmail }, person, platform_admin: platformAdmin, ...result });
@@ -5783,6 +8122,63 @@ serve(async (req: Request) => {
         return jsonResponse(200, { ok: true, action, access: actorAccess, ...options });
       }
 
+
+      if (action === "organization_list_aircraft_admin") {
+        const actorAccess = await aircraftRequireAdminAccess0113A(serviceClient, personId, organizationId, platformAdmin);
+        const result = await aircraftGetAdminPayload0113A(serviceClient, organizationId, optionalBoolean(body, "include_archived", false));
+        return jsonResponse(200, { ok: true, action, access: actorAccess, ...result });
+      }
+
+      if (action === "organization_save_asset_type") {
+        const actorAccess = await aircraftRequireAdminAccess0113A(serviceClient, personId, organizationId, platformAdmin);
+        const assetType = await aircraftSaveAssetType0115A(serviceClient, organizationId, body);
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_organization_asset_types", clean(assetType.asset_type_id), { organization_id: organizationId, label: clean(body.label) }, { saved: true });
+        const result = await aircraftGetAdminPayload0113A(serviceClient, organizationId, true);
+        return jsonResponse(200, { ok: true, action, access: actorAccess, asset_type: assetType, ...result });
+      }
+
+      if (action === "organization_archive_asset_type" || action === "organization_restore_asset_type") {
+        const actorAccess = await aircraftRequireAdminAccess0113A(serviceClient, personId, organizationId, platformAdmin);
+        const assetTypeId = requireString(body, "asset_type_id");
+        const assetType = await aircraftSetAssetTypeArchived0115A(serviceClient, organizationId, assetTypeId, action === "organization_archive_asset_type");
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_organization_asset_types", assetTypeId, { organization_id: organizationId }, { archived: action === "organization_archive_asset_type" });
+        const result = await aircraftGetAdminPayload0113A(serviceClient, organizationId, true);
+        return jsonResponse(200, { ok: true, action, access: actorAccess, asset_type: assetType, ...result });
+      }
+
+      if (action === "organization_save_aircraft_location") {
+        const actorAccess = await aircraftRequireAdminAccess0113A(serviceClient, personId, organizationId, platformAdmin);
+        const location = await aircraftSaveLocation0113A(serviceClient, organizationId, body);
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_organization_locations", clean(location.organization_location_id), { organization_id: organizationId, display_name: clean(body.display_name) }, { saved: true });
+        const result = await aircraftGetAdminPayload0113A(serviceClient, organizationId, true);
+        return jsonResponse(200, { ok: true, action, access: actorAccess, location, ...result });
+      }
+
+      if (action === "organization_archive_aircraft_location" || action === "organization_restore_aircraft_location") {
+        const actorAccess = await aircraftRequireAdminAccess0113A(serviceClient, personId, organizationId, platformAdmin);
+        const locationId = requireString(body, "organization_location_id");
+        const location = await aircraftSetLocationArchived0113A(serviceClient, organizationId, locationId, action === "organization_archive_aircraft_location");
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_organization_locations", locationId, { organization_id: organizationId }, { archived: action === "organization_archive_aircraft_location" });
+        const result = await aircraftGetAdminPayload0113A(serviceClient, organizationId, true);
+        return jsonResponse(200, { ok: true, action, access: actorAccess, location, ...result });
+      }
+
+      if (action === "organization_save_aircraft") {
+        const actorAccess = await aircraftRequireAdminAccess0113A(serviceClient, personId, organizationId, platformAdmin);
+        const aircraft = await aircraftSaveAsset0113A(serviceClient, organizationId, body);
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_operational_assets", clean(aircraft.operational_asset_id), { organization_id: organizationId, tail_number: clean(body.tail_number), display_name: clean(body.display_name) }, { saved: true });
+        const result = await aircraftGetAdminPayload0113A(serviceClient, organizationId, optionalBoolean(body, "include_archived", false));
+        return jsonResponse(200, { ok: true, action, access: actorAccess, aircraft_record: aircraft, ...result });
+      }
+
+      if (action === "organization_archive_aircraft" || action === "organization_restore_aircraft") {
+        const actorAccess = await aircraftRequireAdminAccess0113A(serviceClient, personId, organizationId, platformAdmin);
+        const aircraftId = requireString(body, "operational_asset_id");
+        const aircraft = await aircraftSetAssetArchived0113A(serviceClient, organizationId, aircraftId, action === "organization_archive_aircraft");
+        await writeAudit(serviceClient, actorEmail, "organization_admin", action, "core_operational_assets", aircraftId, { organization_id: organizationId }, { archived: action === "organization_archive_aircraft" });
+        const result = await aircraftGetAdminPayload0113A(serviceClient, organizationId, true);
+        return jsonResponse(200, { ok: true, action, access: actorAccess, aircraft_record: aircraft, ...result });
+      }
 
       if (action === "organization_list_events_manager") {
         const actorAccess = platformAdmin ? (await buildPlatformAccess(serviceClient, organizationId))[0] : await requireAnyMembershipAccess(serviceClient, personId, organizationId, ["events.manage", "organization.view_admin", "organization.manage_settings"]);
@@ -6143,6 +8539,13 @@ serve(async (req: Request) => {
 
     return jsonResponse(400, { ok: false, error: "unknown_action", message: `Unknown action: ${action || "(blank)"}` });
   } catch (error) {
-    return jsonResponse(500, { ok: false, error: "access_action_failed", action, message: error instanceof Error ? error.message : String(error) });
+    const accessError = error instanceof AccessActionError ? error : null;
+    return jsonResponse(accessError?.status || 500, {
+      ok: false,
+      error: accessError?.errorCode || "access_action_failed",
+      action,
+      message: accessActionErrorMessage0107E(error),
+      details: accessError?.details || undefined,
+    });
   }
 });

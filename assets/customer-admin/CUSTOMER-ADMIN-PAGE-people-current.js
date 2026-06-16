@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-16-116-I
+// Internal Version: 2026-06-16-116-J
 // Purpose: Organization Admin People workbench. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-I";
+  const VERSION = "2026-06-16-116-J";
   const ROOT_ID = "syncetc-organization-people-root";
   const ROOT_SELECTOR = "#syncetc-organization-people-root, #syncetc-people-admin-root, [data-syncetc-page=\"organization-people\"]";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -61,6 +61,7 @@
   let search = "";
   let filter = "all";
   let roleFilter = "all";
+  let loginFilter = "all";
   let advancedFiltersOpen = false;
   let message = "";
   let messageKind = "";
@@ -387,7 +388,7 @@
     await refreshAuth();
     setMessage("Logged in.", "ok");
   }
-  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; roleFilter = "all"; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [] }; selectedDefinition = null; authChecked = true; setShellState(); render(); }
+  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; roleFilter = "all"; loginFilter = "all"; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [] }; selectedDefinition = null; authChecked = true; setShellState(); render(); }
   async function resetOwnPassword() { await ensureSupabase(); const loginEmail = clean($("people-login-email")?.value || email).toLowerCase(); if (!loginEmail) throw new Error("Enter email first."); const { error } = await supabaseClient.auth.resetPasswordForEmail(loginEmail, { redirectTo: "https://syncetc.webflow.io/password-reset" }); if (error) throw error; setMessage("Password reset email requested.", "ok"); }
 
   async function runButton(id, label, fn) {
@@ -1165,17 +1166,32 @@
     return rf === "all" || arr(p.role_keys).map(key).includes(rf);
   }
 
+  function personMatchesLoginFilter(p, selectedLogin = loginFilter) {
+    const lf = key(selectedLogin || "all");
+    if (lf === "all") return true;
+    if (lf === "has-login") return bool(p.login_linked);
+    if (lf === "no-login") return !bool(p.login_linked);
+    return true;
+  }
+
   function filteredPeople() {
-    const rows = people.filter((p) => personMatchesLens(p, filter) && personMatchesRoleFilter(p) && personMatchesSearch(p, search));
+    const rows = people.filter((p) => personMatchesLens(p, filter) && personMatchesRoleFilter(p) && personMatchesLoginFilter(p) && personMatchesSearch(p, search));
     return sortPersonRows(rows);
   }
 
+  function primaryPeopleFilterKeys() {
+    return ["all","active","applicants","waitlist","onboarding","former","restricted","archived"];
+  }
+
+  function normalizePrimaryPeopleFilter(value) {
+    const f = key(value || "all") || "all";
+    return primaryPeopleFilterKeys().includes(f) ? f : "all";
+  }
+
   function counts() {
-    const keys = ["all","active","applicants","waitlist","onboarding","former","restricted","admins-access","admins","board","managers","users","non-member","no-login","archived"];
+    const keys = primaryPeopleFilterKeys();
     const out = Object.fromEntries(keys.map((f) => [f, 0]));
     people.forEach((p) => {
-      // Primary view counts should stay understandable. Advanced group/role filters narrow the visible rows,
-      // but they should not make the main "All" view count look like it means something else.
       if (!personMatchesSearch(p, search)) return;
       keys.forEach((f) => { if (personMatchesLens(p, f)) out[f] += 1; });
     });
@@ -1186,9 +1202,20 @@
     const out = { all: 0 };
     activeAssignableRoles().forEach((role) => { out[key(role.role_key)] = 0; });
     people.forEach((p) => {
-      if (!personMatchesSearch(p, search) || !personMatchesLens(p, filter)) return;
+      if (!personMatchesSearch(p, search) || !personMatchesLens(p, filter) || !personMatchesLoginFilter(p)) return;
       out.all += 1;
       arr(p.role_keys).map(key).forEach((rk) => { if (Object.prototype.hasOwnProperty.call(out, rk)) out[rk] += 1; });
+    });
+    return out;
+  }
+
+  function loginFilterCounts() {
+    const out = { all: 0, "has-login": 0, "no-login": 0 };
+    people.forEach((p) => {
+      if (!personMatchesSearch(p, search) || !personMatchesLens(p, filter) || !personMatchesRoleFilter(p)) return;
+      out.all += 1;
+      if (bool(p.login_linked)) out["has-login"] += 1;
+      else out["no-login"] += 1;
     });
     return out;
   }
@@ -1212,36 +1239,51 @@
     return clean(role.label || role.name || rf.replace(/-/g, " ")) || "Selected role";
   }
 
-  function renderAdvancedPeopleFilters() {
-    const roles = activeAssignableRoles();
-    const hasRoleFilter = key(roleFilter || "all") !== "all";
-    if (!roles.length && !hasRoleFilter) return "";
-    const open = Boolean(advancedFiltersOpen || hasRoleFilter);
-    const rc = roleFilterCounts();
-    const roleLabel = activeRoleFilterLabel();
-    const activeChips = hasRoleFilter
-      ? `<div class="people-active-filters"><span>Active filter:</span><button class="people-filter-chip" data-clear-role-filter="1" type="button">Group / role: ${esc(roleLabel)} ×</button><button id="people-clear-advanced-filters" class="people-link-btn" type="button">Clear</button></div>`
-      : "";
-    const roleChoices = roles.some((role) => key(role.role_key) === key(roleFilter)) || !hasRoleFilter
-      ? roles
-      : [{ role_key: roleFilter, label: roleLabel }, ...roles];
-    const panel = open && roleChoices.length
-      ? `<div class="people-advanced-panel"><label class="people-field people-role-filter"><span>Group / role</span><select id="people-role-filter-select"><option value="all" ${roleFilter === "all" ? "selected" : ""}>All groups / roles (${rc.all || 0})</option>${roleChoices.map((role) => { const rk = key(role.role_key); return `<option value="${esc(rk)}" ${roleFilter === rk ? "selected" : ""}>${esc(role.label || rk)} (${rc[rk] || 0})</option>`; }).join("")}</select></label></div>`
-      : "";
-    return `<div class="people-advanced-filters">${activeChips}<button id="people-advanced-filters-toggle" class="people-link-btn people-advanced-toggle" type="button">${open ? "Hide advanced filters" : "Advanced filters"}</button>${panel}</div>`;
+  function activeLoginFilterLabel() {
+    const lf = key(loginFilter || "all");
+    if (lf === "has-login") return "Has login";
+    if (lf === "no-login") return "No login";
+    return "";
   }
 
+  function renderAdvancedPeopleFilters() {
+    const roleCounts = roleFilterCounts();
+    const loginCounts = loginFilterCounts();
+    const roleRows = activeAssignableRoles();
+    const hasRoleFilter = key(roleFilter || "all") !== "all";
+    const hasLoginFilter = key(loginFilter || "all") !== "all";
+    const hasAdvanced = hasRoleFilter || hasLoginFilter;
+    const chips = [
+      hasRoleFilter ? `<button class="people-filter-chip" data-clear-role-filter type="button">Group / role: ${esc(activeRoleFilterLabel())} ×</button>` : "",
+      hasLoginFilter ? `<button class="people-filter-chip" data-clear-login-filter type="button">Login: ${esc(activeLoginFilterLabel())} ×</button>` : ""
+    ].filter(Boolean).join("");
+    const roleOptions = [`<option value="all" ${key(roleFilter)==="all" ? "selected" : ""}>Any group / role (${roleCounts.all || 0})</option>`].concat(roleRows.map((role) => {
+      const rk = key(role.role_key);
+      const label = clean(role.label || role.name || role.role_key || "Role");
+      return `<option value="${esc(rk)}" ${key(roleFilter)===rk ? "selected" : ""}>${esc(label)} (${roleCounts[rk] || 0})</option>`;
+    })).join("");
+    const loginOptions = [
+      ["all", "Any login status", loginCounts.all || 0],
+      ["has-login", "Has login", loginCounts["has-login"] || 0],
+      ["no-login", "No login", loginCounts["no-login"] || 0]
+    ].map(([value,label,count]) => `<option value="${esc(value)}" ${key(loginFilter)===value ? "selected" : ""}>${esc(label)} (${count})</option>`).join("");
+    return `<div class="people-advanced-filters">
+      <button id="people-advanced-filters-toggle" class="people-link-btn people-advanced-toggle" type="button">${advancedFiltersOpen ? "Hide advanced filters" : "Advanced filters"}</button>
+      ${hasAdvanced ? `<div class="people-active-filters"><span>Active filters:</span>${chips}<button id="people-clear-advanced-filters" class="people-link-btn" type="button">Clear all</button></div>` : ""}
+      ${advancedFiltersOpen ? `<div class="people-advanced-panel"><label class="people-field people-role-filter"><span>Group / role</span><select id="people-role-filter-select">${roleOptions}</select></label><label class="people-field people-login-filter"><span>Login</span><select id="people-login-filter-select">${loginOptions}</select></label></div>` : ""}
+    </div>`;
+  }
+
+
   function renderFinder() {
+    filter = normalizePrimaryPeopleFilter(filter);
     const c = counts();
     const rows = filteredPeople();
-    const adminLens = isAdminAccessLens();
-    const filters = adminLens
-      ? [["admins-access","Admins & access"],["admins","Organization admins"],["managers","Managers"],["board","Board"],["users","Members"],["no-login","No login"],["archived","Archived"],["all","All"]]
-      : [["all","All"],["active","Active"],["applicants","Applicants"],["waitlist","Waitlist"],["onboarding","Onboarding"],["former","Former"],["restricted","Suspended / Expelled"],["admins","Admins"],["board","Board"],["managers","Managers"],["users","Members"],["non-member","Non-member"],["no-login","No Login"],["archived","Archived"]];
+    const filters = [["all","All"],["active","Active"],["applicants","Applicants"],["waitlist","Waitlist"],["onboarding","Onboarding"],["former","Former"],["restricted","Suspended / Expelled"],["archived","Archived"]];
     return `<aside class="people-list-panel">
-      <div class="people-list-head"><div><h3>${adminLens ? "Administrators & Access" : "People"}</h3><p>${adminLens ? "Find people with login, manager, board, or administrator access." : "Search and filter organization records."}</p></div></div>
+      <div class="people-list-head"><div><h3>People</h3><p>Search and filter organization records.</p></div></div>
       <div class="people-toolbar-row"><button id="people-export" class="people-btn secondary" type="button">Export</button><button id="people-print" class="people-btn secondary" type="button">Print</button><button id="people-refresh" class="people-btn secondary" type="button">Refresh</button></div>
-      <label class="people-field people-status-filter"><span>${adminLens ? "Access lens" : "Status / lens"}</span><select id="people-filter-select">${filters.map(([f,label]) => `<option value="${esc(f)}" ${filter===f ? "selected" : ""}>${esc(label)} (${c[f] || 0})</option>`).join("")}</select></label>
+      <label class="people-field people-status-filter"><span>Status</span><select id="people-filter-select">${filters.map(([f,label]) => `<option value="${esc(f)}" ${filter===f ? "selected" : ""}>${esc(label)} (${c[f] || 0})</option>`).join("")}</select></label>
       ${renderAdvancedPeopleFilters()}
       <div class="people-search-wrap"><input id="people-search" value="${esc(search)}" placeholder="Search names, emails, phones, roles…"><button id="people-clear-search" class="people-icon-btn" title="Clear" type="button">×</button></div>
       <div class="people-sort-hint">Sorted by last name. Archived rows stay visible in All and are muted at the bottom.</div>
@@ -1313,7 +1355,7 @@
     const mayEdit = canManagePeople(access);
     const mayEditAnyRole = canManageSafeRoles(access);
     const mayEditSuperAdmin = canManageSuperAdminRoles(access);
-    if (!row) return `<section class="people-editor-panel people-empty"><h3>${isAdminAccessLens() ? "Select an access record" : "Select a person"}</h3><p>${isAdminAccessLens() ? "Choose someone on the left to review login status, invitations, and organization roles." : "Choose someone on the left, or create a new person. This single People workbench covers members, applicants, onboarding users, former people, restricted records, and administrators."}</p></section>`;
+    if (!row) return `<section class="people-editor-panel people-empty"><h3>Select a person</h3><p>Choose someone on the left, or create a new person. This single People workbench covers members, applicants, onboarding users, former people, restricted records, and administrators.</p></section>`;
 
     const contact = profileSection("contact");
     const emergency = profileSection("emergency");
@@ -1357,8 +1399,8 @@
     const warningMessage = message && messageKind === "warn" ? `<div class="people-message warn">${esc(message)}</div>` : "";
     if (isDefinitionMode()) return renderDefinitionModule(warningMessage);
     const adminLens = isAdminAccessLens();
-    const title = adminLens ? "Administrators & Access" : (clean(pageConfig?.title) || "Members / People");
-    const intro = adminLens ? "Manage login status, invitations, password help, and organization roles." : (clean(pageConfig?.intro_text) || "Manage people, member lifecycle, contact details, group assignments, access roles, and qualifications from one workbench.");
+    const title = clean(pageConfig?.title) || "Members / People";
+    const intro = clean(pageConfig?.intro_text) || "Manage people, member lifecycle, contact details, group assignments, access roles, and qualifications from one workbench.";
     return `<section class="people-module-header"><div><span class="people-kicker">People</span><h2>${esc(title)}</h2><p>${esc(intro)}</p></div><div class="people-header-actions">${!embeddedMode ? renderOrgSelector() : ""}<button id="people-new" class="people-btn outline" type="button">New person</button></div></section>${warningMessage}<section class="people-workbench">${renderFinder()}${renderEditor()}</section>`;
   }
 
@@ -1369,7 +1411,7 @@
       .people-card{padding:18px;margin:12px 0}.people-hero{display:${embeddedMode ? "none" : "block"};background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.78)});color:#fff}.people-hero h1{margin:8px 0;color:#fff;font-size:clamp(28px,4vw,42px);letter-spacing:-.035em}.people-hero p{color:rgba(255,255,255,.9);max-width:900px}.people-eyebrow,.people-kicker{display:inline-flex;padding:5px 10px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:11px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.people-hero .people-eyebrow{background:rgba(255,255,255,.16);color:#fff}
       .people-module-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:15px 17px;margin:0 0 10px;border-top:3px solid var(--people-primary)}.people-module-header h2{margin:6px 0 4px;font-size:25px;line-height:1.1;color:#101828}.people-module-header p{margin:0;color:var(--people-muted);font-weight:650}.people-header-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
       .people-workbench{display:grid;grid-template-columns:330px minmax(0,1fr);gap:10px;align-items:start}.people-list-panel{padding:12px;position:sticky;top:10px;max-height:calc(100vh - 24px);overflow:auto}.people-list-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}.people-list-head h3,.people-editor-head h3{margin:0;font-size:21px;color:#101828}.people-list-head p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-toolbar-row,.people-inline-actions,.people-action-buttons,.people-pill-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.people-toolbar-row{margin:8px 0 10px}.people-btn,.people-icon-btn,.people-link-btn{border:0;border-radius:999px;background:var(--people-primary);color:#fff;font-weight:900;padding:10px 14px;cursor:pointer;text-decoration:none;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}.people-btn:hover,.people-person-card:hover{transform:translateY(-1px)}.people-btn.secondary,.people-btn.outline{background:#fff;color:var(--people-primary);border:1px solid var(--people-primary)}.people-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-btn:disabled{opacity:.55;cursor:not-allowed;transform:none}.people-link-btn{background:transparent;color:var(--people-primary);text-decoration:underline;padding:8px}.people-message{margin-top:12px;padding:10px 12px;border-radius:12px;background:var(--people-soft);color:var(--people-primary);font-weight:850}.people-message:empty{display:none}.people-message.ok{background:#ecfdf5;color:#047857}.people-message.warn,.people-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:12px;padding:10px 12px}.people-action-status{display:block;margin-top:3px;color:var(--people-muted);font-size:12px;line-height:1.25}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}.people-context-single{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);padding:9px 12px;border-radius:999px;font-weight:900}.muted{color:var(--people-muted)}
-      .people-field{display:grid;gap:6px;font-weight:850}.people-field span{font-size:13px}.people-field small{font-weight:600;color:var(--people-muted);line-height:1.35}.people-field input,.people-field select,.people-field textarea,.people-search-wrap input,#people-org-select{width:100%;border:1px solid var(--people-border);border-radius:12px;background:#fff;color:var(--people-text);padding:10px 12px;font:inherit;min-height:42px}.people-field textarea{min-height:104px;resize:vertical}.people-field input[readonly],.people-field input:disabled,.people-field select:disabled{background:#f8fafc;color:var(--people-muted);cursor:not-allowed}.people-field-wide{grid-column:1/-1}.field-error{color:#b91c1c!important;font-weight:900!important}.people-field.disabled-field{opacity:.72}.people-status-filter,.people-role-filter{margin:10px 0}.people-advanced-filters{display:grid;gap:8px;margin:6px 0 10px}.people-advanced-toggle{justify-self:start;padding-left:0}.people-active-filters{display:flex;gap:7px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--people-muted);font-weight:850}.people-filter-chip{border:1px solid var(--people-border);border-radius:999px;background:var(--people-soft);color:var(--people-primary);font:inherit;font-size:12px;font-weight:900;padding:5px 9px;cursor:pointer}.people-advanced-panel{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:10px}.people-search-wrap{position:relative;margin:10px 0}.people-search-wrap input{padding-right:44px}.people-icon-btn{position:absolute;right:6px;top:5px;width:32px;height:32px;padding:0;background:var(--people-soft);color:var(--people-primary)}.people-sort-hint{font-size:12px;color:var(--people-muted);font-weight:750;margin:8px 0 10px}.people-compact-list{display:grid;gap:7px;max-height:calc(100vh - 320px);min-height:240px;overflow:auto;padding:3px 2px 8px;overscroll-behavior:contain}.people-person-card{text-align:left;border:1px solid var(--people-border);border-radius:13px;background:#fff;color:var(--people-text);padding:10px;display:grid;gap:8px;cursor:pointer;box-shadow:0 3px 11px ${rgba(cfg.primary,.04)}}.people-person-card.selected{border-color:var(--people-primary);box-shadow:0 0 0 3px var(--people-strong-soft)}.people-person-card.archived{opacity:.58;background:#f8fafc}.people-person-card.restricted:not(.archived){border-color:#fed7aa;background:#fff7ed}.person-main{display:grid;gap:3px;min-width:0}.person-main strong{font-weight:950;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-main small{color:var(--people-muted);font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-badges{display:flex;gap:4px;flex-wrap:wrap}.person-badges em{font-style:normal;font-size:10px;font-weight:900;border-radius:999px;padding:3px 6px;background:var(--people-soft);color:var(--people-primary)}.people-empty-row{border:1px dashed var(--people-border);border-radius:13px;padding:18px;text-align:center;color:var(--people-muted);background:#fff}.people-empty-row.compact{padding:12px;text-align:left}.people-empty{min-height:380px;display:grid;align-content:center;text-align:center;padding:24px}
+      .people-field{display:grid;gap:6px;font-weight:850}.people-field span{font-size:13px}.people-field small{font-weight:600;color:var(--people-muted);line-height:1.35}.people-field input,.people-field select,.people-field textarea,.people-search-wrap input,#people-org-select{width:100%;border:1px solid var(--people-border);border-radius:12px;background:#fff;color:var(--people-text);padding:10px 12px;font:inherit;min-height:42px}.people-field textarea{min-height:104px;resize:vertical}.people-field input[readonly],.people-field input:disabled,.people-field select:disabled{background:#f8fafc;color:var(--people-muted);cursor:not-allowed}.people-field-wide{grid-column:1/-1}.field-error{color:#b91c1c!important;font-weight:900!important}.people-field.disabled-field{opacity:.72}.people-status-filter,.people-role-filter,.people-login-filter{margin:10px 0}.people-advanced-filters{display:grid;gap:8px;margin:6px 0 10px}.people-advanced-toggle{justify-self:start;padding-left:0}.people-active-filters{display:flex;gap:7px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--people-muted);font-weight:850}.people-filter-chip{border:1px solid var(--people-border);border-radius:999px;background:var(--people-soft);color:var(--people-primary);font:inherit;font-size:12px;font-weight:900;padding:5px 9px;cursor:pointer}.people-advanced-panel{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:10px}.people-search-wrap{position:relative;margin:10px 0}.people-search-wrap input{padding-right:44px}.people-icon-btn{position:absolute;right:6px;top:5px;width:32px;height:32px;padding:0;background:var(--people-soft);color:var(--people-primary)}.people-sort-hint{font-size:12px;color:var(--people-muted);font-weight:750;margin:8px 0 10px}.people-compact-list{display:grid;gap:7px;max-height:calc(100vh - 320px);min-height:240px;overflow:auto;padding:3px 2px 8px;overscroll-behavior:contain}.people-person-card{text-align:left;border:1px solid var(--people-border);border-radius:13px;background:#fff;color:var(--people-text);padding:10px;display:grid;gap:8px;cursor:pointer;box-shadow:0 3px 11px ${rgba(cfg.primary,.04)}}.people-person-card.selected{border-color:var(--people-primary);box-shadow:0 0 0 3px var(--people-strong-soft)}.people-person-card.archived{opacity:.58;background:#f8fafc}.people-person-card.restricted:not(.archived){border-color:#fed7aa;background:#fff7ed}.person-main{display:grid;gap:3px;min-width:0}.person-main strong{font-weight:950;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-main small{color:var(--people-muted);font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-badges{display:flex;gap:4px;flex-wrap:wrap}.person-badges em{font-style:normal;font-size:10px;font-weight:900;border-radius:999px;padding:3px 6px;background:var(--people-soft);color:var(--people-primary)}.people-empty-row{border:1px dashed var(--people-border);border-radius:13px;padding:18px;text-align:center;color:var(--people-muted);background:#fff}.people-empty-row.compact{padding:12px;text-align:left}.people-empty{min-height:380px;display:grid;align-content:center;text-align:center;padding:24px}
       .people-editor-panel{min-width:0;padding:0;overflow:hidden}.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:15px 17px;border-bottom:1px solid var(--people-border)}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}.people-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--people-border);background:#fcfcfd}.people-tab{border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-weight:900;padding:8px 11px;cursor:pointer}.people-tab.active{background:var(--people-primary);color:#fff;border-color:var(--people-primary)}.people-tab-panel{padding:16px}.people-tab-panel[hidden]{display:none!important}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}.people-access-status-grid{padding-bottom:8px}.people-affiliation-grid{padding-top:8px;border-top:1px solid var(--people-border)}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;margin:10px 0 14px}.primary-pick{min-height:42px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:12px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border:1px solid var(--people-border);border-radius:12px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-access-callout{display:flex;justify-content:space-between;gap:14px;align-items:center;border:1px solid var(--people-border);border-radius:13px;background:var(--people-soft);padding:12px;margin-bottom:14px}.people-access-callout p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-access-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 14px}.people-access-summary>div{border:1px solid var(--people-border);border-radius:12px;background:#fff;padding:10px;display:grid;gap:3px}.people-access-summary span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-access-summary strong{font-size:13px;line-height:1.25}.people-role-assignment-wrap{display:grid;gap:12px}.people-role-section{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px}.people-role-section-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}.people-role-section-head h4{margin:0;color:#101828;font-size:15px}.people-role-section-head span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-role-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.people-inline-actions{margin:10px 0}.people-action-row{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid var(--people-border);padding:12px 14px;background:#fcfcfd}.people-save-state{display:grid;gap:2px;font-weight:900;color:var(--people-muted)}.people-save-state.dirty{color:#9a3412}.people-photo-panel{grid-column:1/-1;display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;align-items:center;border:1px dashed var(--people-border);border-radius:14px;background:var(--people-soft);padding:14px}.people-photo-panel.dragover{box-shadow:0 0 0 3px var(--people-strong-soft);border-color:var(--people-primary)}.people-photo-preview{width:132px;height:132px;border-radius:18px;background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--people-border);box-shadow:0 10px 26px ${rgba(cfg.primary,.16)}}.people-photo-preview img{width:100%;height:100%;object-fit:cover;display:block}.people-photo-preview span{font-size:38px;font-weight:950;letter-spacing:.03em}.people-photo-copy strong{display:block;color:var(--people-primary);font-size:15px;margin-bottom:4px}.people-photo-copy p{margin:0 0 8px;color:var(--people-muted);font-weight:750}.people-photo-copy small{display:block;color:var(--people-muted);font-weight:750;margin-bottom:10px}.people-photo-actions{display:flex;gap:8px;flex-wrap:wrap}.people-timeline-list{display:grid;gap:10px;margin-top:10px}.people-note-card{border-left:4px solid var(--people-primary);background:#f8fafc;border-radius:12px;padding:10px}.people-note-card strong{display:block;color:var(--people-primary)}.people-note-card span{font-size:12px;color:#64748b;font-weight:800}.people-note-card p{margin:6px 0;white-space:pre-wrap}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:12px;padding:14px;font-size:12px;max-height:260px;overflow:auto}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}.people-def-row{padding:0;display:grid;grid-template-columns:30px minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab}.people-def-row.dragging{opacity:.55}.people-def-row.drag-over{outline:2px dashed var(--people-primary);outline-offset:2px}.people-def-drag-handle{display:flex;align-items:center;justify-content:center;color:var(--people-muted);font-weight:950;letter-spacing:-5px;background:#f8fafc;border-right:1px solid var(--people-border);cursor:grab;user-select:none}.people-def-row .people-def-main{border:0;background:transparent;text-align:left;padding:10px;display:grid;gap:7px;cursor:pointer;color:inherit}.people-def-order{display:flex;flex-direction:column;justify-content:space-between;border-left:1px solid var(--people-border);background:#f8fafc}.people-order-button{border:0;background:#f8fafc;color:var(--people-primary);font-weight:950;width:34px;min-height:32px;cursor:pointer}.people-order-button:first-child{border-bottom:1px solid var(--people-border)}.people-order-button:last-child{border-top:1px solid var(--people-border)}.people-order-button:disabled{opacity:.35;cursor:not-allowed}.people-info-btn{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:5px;border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-size:11px;font-weight:950;line-height:1;vertical-align:middle;padding:0;cursor:help}.people-def-editor .people-tab-panel>.people-form-grid{grid-template-columns:1fr}.people-def-editor .people-form-grid .people-form-grid{grid-template-columns:repeat(3,minmax(0,1fr));}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}
       @media(max-width:1100px){.people-workbench{grid-template-columns:1fr}.people-list-panel{position:static;max-height:none}.people-compact-list{max-height:320px;min-height:0}.people-form-grid,.people-check-grid,.people-role-grid,.people-access-summary{grid-template-columns:1fr 1fr}.people-module-header,.people-action-row,.people-access-callout{display:grid}.people-header-actions,.people-action-buttons{justify-content:flex-start}.phone-grid{grid-template-columns:1fr}.primary-pick{justify-content:flex-start;padding:0 12px}}
       @media(max-width:640px){.people-form-grid,.people-check-grid,.people-role-grid,.people-access-summary{grid-template-columns:1fr}.people-photo-panel{grid-template-columns:1fr}.people-photo-preview{margin:auto}.people-btn{width:100%}.people-action-buttons{width:100%}}
@@ -1382,7 +1424,7 @@
     const el = ensureRoot();
     if (!el) return;
     const cfg = styleConfig(selectedRow());
-    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, active_people_lens: activePeopleLens, active_definition_kind: activeDefinitionKind, role_filter: roleFilter, people_count: people.length, definition_counts: { statuses: arr(definitionLists.statuses).length, membership_classes: arr(definitionLists.membership_classes).length, application_stages: arr(definitionLists.application_stages).length, groups_roles: arr(definitionLists.groups_roles).length }, cache_ttl_ms: PEOPLE_CACHE_TTL_MS, parent_script_load_ms: mountOptions.scriptLoadMs || null, load_timings: loadTimings, backend: backend || {} }, null, 2))}</pre></details>` : "";
+    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, active_people_lens: activePeopleLens, active_definition_kind: activeDefinitionKind, role_filter: roleFilter, login_filter: loginFilter, people_count: people.length, definition_counts: { statuses: arr(definitionLists.statuses).length, membership_classes: arr(definitionLists.membership_classes).length, application_stages: arr(definitionLists.application_stages).length, groups_roles: arr(definitionLists.groups_roles).length }, cache_ttl_ms: PEOPLE_CACHE_TTL_MS, parent_script_load_ms: mountOptions.scriptLoadMs || null, load_timings: loadTimings, backend: backend || {} }, null, 2))}</pre></details>` : "";
     el.innerHTML = `<style>${peopleStyles(cfg)}</style><div class="people-wrap"><section class="people-card people-hero"><div class="people-eyebrow">Organization Admin</div><h1>${esc(clean(pageConfig?.title) || "People & Access")}</h1><p>${esc(clean(pageConfig?.intro_text) || "Search the full people pool, manage members and applicants, keep contact information current, and handle safe access updates from one place.")}</p><div class="people-message ${esc(messageKind)}">${esc(message)}</div></section>${renderContent()}${diagnostics}</div>`;
     bindEvents();
     restorePeopleSearchFocus();
@@ -1423,11 +1465,13 @@
     $("people-reset-own")?.addEventListener("click", () => runButton("people-reset-own", "Sending…", resetOwnPassword));
     $("people-org-select")?.addEventListener("change", async (e) => { if (!confirmDiscard()) { e.target.value = selectedOrgId; return; } setDirty(false); selectedOrgId = e.target.value; try { localStorage.setItem(SELECTED_ORG_KEY, selectedOrgId); } catch {} adminAccess = null; selected = null; selectedDefinition = null; try { await loadOrgContext({ force: true }); setMessage("Organization loaded.", "ok"); } catch (err) { setMessage(err.message || String(err), "warn"); } render(); });
     bindDefinitionEvents();
-    $("people-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = filter; return; } setDirty(false); filter = e.target.value || "all"; render(); });
+    $("people-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = filter; return; } setDirty(false); filter = normalizePrimaryPeopleFilter(e.target.value || "all"); render(); });
     $("people-advanced-filters-toggle")?.addEventListener("click", () => { advancedFiltersOpen = !advancedFiltersOpen; render(); });
-    document.querySelectorAll("[data-clear-role-filter]").forEach((btn) => btn.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); roleFilter = "all"; advancedFiltersOpen = false; render(); }));
-    $("people-clear-advanced-filters")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); roleFilter = "all"; advancedFiltersOpen = false; render(); });
-    $("people-role-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = roleFilter; return; } setDirty(false); roleFilter = key(e.target.value || "all") || "all"; advancedFiltersOpen = roleFilter !== "all"; render(); });
+    document.querySelectorAll("[data-clear-role-filter]").forEach((btn) => btn.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); roleFilter = "all"; render(); }));
+    document.querySelectorAll("[data-clear-login-filter]").forEach((btn) => btn.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); loginFilter = "all"; render(); }));
+    $("people-clear-advanced-filters")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); roleFilter = "all"; loginFilter = "all"; advancedFiltersOpen = false; render(); });
+    $("people-role-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = roleFilter; return; } setDirty(false); roleFilter = key(e.target.value || "all") || "all"; advancedFiltersOpen = roleFilter !== "all" || loginFilter !== "all"; render(); });
+    $("people-login-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = loginFilter; return; } setDirty(false); loginFilter = key(e.target.value || "all") || "all"; advancedFiltersOpen = roleFilter !== "all" || loginFilter !== "all"; render(); });
     $("people-search")?.addEventListener("input", (e) => { clearTimeout(debounceTimer); peopleSearchRestore = { start: e.target.selectionStart, end: e.target.selectionEnd }; debounceTimer = setTimeout(() => { search = e.target.value || ""; render(); }, 300); });
     $("people-clear-search")?.addEventListener("click", () => { search = ""; render(); });
     document.querySelectorAll("[data-open]").forEach((btn) => btn.addEventListener("click", () => runButton("people-refresh", "Opening…", async () => { if (!confirmDiscard()) return; setDirty(false); message = ""; messageKind = ""; const id = btn.getAttribute("data-open"); await loadSelectedPerson(id); fieldErrors = {}; render(); })));
@@ -1682,8 +1726,8 @@
     if (mountOptions.organizationId) selectedOrgId = clean(mountOptions.organizationId);
     if (mountOptions.selectedOrganizationId) selectedOrgId = clean(mountOptions.selectedOrganizationId);
     activePeopleLens = normalizePeopleLens(mountOptions.initialLens || mountOptions.peopleLens || mountOptions.lens || "");
-    if (mountOptions.initialFilter) filter = clean(mountOptions.initialFilter) || filter;
-    else if (activePeopleLens === "admin-access") filter = "admins-access";
+    if (mountOptions.initialFilter) filter = normalizePrimaryPeopleFilter(mountOptions.initialFilter);
+    else if (activePeopleLens === "admin-access") filter = "all";
     if (mountOptions.initialTab) activeTab = key(mountOptions.initialTab) || activeTab;
     else if (activePeopleLens === "admin-access") activeTab = "access";
     activeDefinitionKind = normalizeDefinitionKind(mountOptions.initialDefinition || mountOptions.definitionKind || mountOptions.initialView || mountOptions.view || activeDefinitionKind || "");
@@ -1707,8 +1751,8 @@
     if (options.organizationId) selectedOrgId = clean(options.organizationId);
     if (options.selectedOrganizationId) selectedOrgId = clean(options.selectedOrganizationId);
     activePeopleLens = normalizePeopleLens(options.initialLens || options.peopleLens || options.lens || "");
-    if (options.initialFilter) filter = clean(options.initialFilter) || filter;
-    else if (activePeopleLens === "admin-access") filter = "admins-access";
+    if (options.initialFilter) filter = normalizePrimaryPeopleFilter(options.initialFilter);
+    else if (activePeopleLens === "admin-access") filter = "all";
     if (options.initialTab) activeTab = key(options.initialTab) || activeTab;
     else if (activePeopleLens === "admin-access") activeTab = "access";
     activeDefinitionKind = normalizeDefinitionKind(options.initialDefinition || options.definitionKind || options.initialView || options.view || "");

@@ -1,18 +1,18 @@
 // CUSTOMER-ADMIN-PAGE-organization-management-current.js
-// Internal Version: 2026-06-16-116-K
+// Internal Version: 2026-06-16-116-L
 // Purpose: Customer/organization-side Organization Management console runtime. Immutable admin workbench shell with left navigation and right-panel module loading.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-K";
+  const VERSION = "2026-06-16-116-L";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
   const SUPABASE_JS_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
   const AIRCRAFT_ADMIN_EXPECTED_VERSION = "2026-06-15-115-G";
   const AIRCRAFT_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js?v=${encodeURIComponent(AIRCRAFT_ADMIN_EXPECTED_VERSION)}`;
-  const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-16-116-K";
+  const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-16-116-L";
   const PEOPLE_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-people-current.js?v=${encodeURIComponent(PEOPLE_ADMIN_EXPECTED_VERSION)}`;
   const ROOT_SELECTOR = "#syncetc-organization-management-root, #syncetc-organization-admin-console-root, [data-syncetc-page='organization-management']";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -270,6 +270,7 @@
     { key: "people-membership-classes", label: "Membership Classes", short: "Class vocabulary", group: "People", status: "active", kind: "people", peopleView: "membership-classes", description: "Define membership/user classes such as full, probationary, family, honorary, social, student, or non-member classes." },
     { key: "people-stages", label: "Application / Onboarding Stages", short: "Workflow stages", group: "People", status: "active", kind: "people", peopleView: "application-stages", description: "Define the application and onboarding steps used before assigning them to people." },
     { key: "people-groups", label: "Groups / Roles", short: "Role definitions", group: "People", status: "active", kind: "people", peopleView: "groups-roles", description: "Define organization groups and roles, then assign them to people from the Members / People workbench." },
+    { key: "people-permissions", label: "Permissions", short: "Capabilities", group: "People", status: "active", kind: "people", peopleView: "permissions", description: "Choose what each role or group can do across organization tools." },
     { key: "people-members", label: "Members / People", short: "Member records", group: "People", status: "active", kind: "people", peopleView: "members", peopleFilter: "all", peopleTab: "identity", description: "Manage organization people, member records, lifecycle, roster visibility, group assignments, access links, and qualifications." },
     { key: "people-instructors", label: "Instructors / Qualifications", short: "Qualifications", group: "People", status: "placeholder", description: "Instructor roster, checkouts, and qualification records." },
 

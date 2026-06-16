@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-16-116-K
+// Internal Version: 2026-06-16-116-L
 // Purpose: Organization Admin People workbench. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-K";
+  const VERSION = "2026-06-16-116-L";
   const ROOT_ID = "syncetc-organization-people-root";
   const ROOT_SELECTOR = "#syncetc-organization-people-root, #syncetc-people-admin-root, [data-syncetc-page=\"organization-people\"]";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -46,18 +46,22 @@
   let adminAccess = null;
   let selectedOrgId = "";
   let platformAdmin = false;
-  let options = { statuses: [], membership_classes: [], application_stages: [], roles: [] };
+  let options = { statuses: [], membership_classes: [], application_stages: [], roles: [], permissions: [] };
   let people = [];
   let pageConfig = null;
   let selected = null;
   let activeDefinitionKind = "";
-  let definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [] };
+  let definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [], permissions: [] };
   let selectedDefinition = null;
   let definitionSearch = "";
   let definitionFilter = "all";
   let definitionSearchRestore = null;
   let definitionDragId = "";
   let definitionRpcAvailable = true;
+  let selectedPermissionRoleId = "";
+  let permissionDraftKeys = null;
+  let permissionSearch = "";
+  let permissionSearchRestore = null;
   let search = "";
   let filter = "all";
   let roleFilter = "all";
@@ -123,7 +127,7 @@
   }
   function saveOrgContextCache(orgId) {
     if (!orgId) return;
-    peopleCacheByOrg[clean(orgId)] = { cached_at_ms: Date.now(), adminAccess, options, pageConfig, people: arr(people).slice(), definitionLists: { statuses: arr(definitionLists.statuses).slice(), membership_classes: arr(definitionLists.membership_classes).slice(), application_stages: arr(definitionLists.application_stages).slice(), groups_roles: arr(definitionLists.groups_roles).slice() } };
+    peopleCacheByOrg[clean(orgId)] = { cached_at_ms: Date.now(), adminAccess, options, pageConfig, people: arr(people).slice(), definitionLists: { statuses: arr(definitionLists.statuses).slice(), membership_classes: arr(definitionLists.membership_classes).slice(), application_stages: arr(definitionLists.application_stages).slice(), groups_roles: arr(definitionLists.groups_roles).slice(), permissions: arr(definitionLists.permissions).slice() } };
   }
   function hydrateFromMountOptions() {
     if (!embeddedMode) return false;
@@ -154,6 +158,7 @@
     if (["membership-classes", "membership-class", "classes", "class"].includes(k)) return "membership-classes";
     if (["application-stages", "application-stage", "applicant-stages", "onboarding-stages", "stages", "stage", "people-stages"].includes(k)) return "application-stages";
     if (["groups-roles", "group-roles", "groups", "group", "roles", "role", "groups-and-roles", "people-groups", "people-roles", "organization-roles"].includes(k)) return "groups-roles";
+    if (["permissions", "permission", "capabilities", "capability", "people-permissions", "access-permissions", "role-permissions"].includes(k)) return "permissions";
     return "";
   }
   function normalizePeopleLens(value) {
@@ -161,7 +166,8 @@
     if (["admin-access", "admins-access", "administrators", "administrator", "access", "people-admins", "administrators-access"].includes(k)) return "admin-access";
     return "";
   }
-  function isDefinitionMode() { return Boolean(activeDefinitionKind); }
+  function isPermissionsMode() { return activeDefinitionKind === "permissions"; }
+  function isDefinitionMode() { return Boolean(activeDefinitionKind) && !isPermissionsMode(); }
   function isAdminAccessLens() { return activePeopleLens === "admin-access" && !isDefinitionMode(); }
   try {
     if (typeof window !== "undefined" && typeof window.lower !== "function") {
@@ -173,6 +179,48 @@
   const isSuperAdminRole = (roleKey) => SUPER_ADMIN_ROLES.has(key(roleKey));
   const roleRank = (role) => ROLE_ORDER[key(role?.role_key)] ?? (200 + Number(role?.sort_order || 0));
   const sortRoles = (roles) => arr(roles).slice().sort((a,b) => roleRank(a) - roleRank(b) || clean(a.label || a.role_key).localeCompare(clean(b.label || b.role_key)));
+  const PERMISSION_GROUPS_0116L = [
+    { key: "member", label: "Member experience", capabilities: [
+      ["member.portal.view", "Open member portal"],
+      ["member.profile.view", "View own profile"],
+      ["member.profile.update_self", "Edit own profile"],
+      ["people.view_roster", "View member roster"],
+      ["documents.view_member", "View member documents"],
+      ["events.view_member", "View member events"],
+      ["events.rsvp_self", "RSVP to events"],
+      ["gallery.submit", "Submit gallery items"],
+      ["reservations.use", "Use or reserve assets"]
+    ]},
+    { key: "people", label: "People & onboarding", capabilities: [
+      ["people.manage_applicants", "Manage applicants"],
+      ["people.manage_members", "Manage people records"],
+      ["access.manage_memberships", "Manage access and roles"]
+    ]},
+    { key: "operations", label: "Operations", capabilities: [
+      ["events.manage", "Manage events"],
+      ["documents.manage", "Manage documents"],
+      ["assets.manage", "Manage assets"],
+      ["reservations.manage", "Manage reservations"],
+      ["gallery.manage", "Manage gallery"],
+      ["media.manage", "Manage media"],
+      ["communications.manage", "Send communications"],
+      ["reports.view", "View reports"]
+    ]},
+    { key: "admin", label: "Administration", capabilities: [
+      ["organization.admin.open", "Open admin workbench"],
+      ["organization.view_admin", "View admin areas"],
+      ["content.manage_pages", "Manage website content"],
+      ["organization.manage_settings", "Manage organization settings"]
+    ]}
+  ];
+  const PERMISSION_LABELS_0116L = new Map(PERMISSION_GROUPS_0116L.flatMap((group) => group.capabilities.map(([k,label]) => [k, label])));
+  const LOCKED_PERMISSION_ROLE_KEYS_0116L = new Set(["organization-super-admin", "organization-admin", "member"]);
+  const LOCKED_PERMISSION_KEYS_0116L = new Set(["organization.super_admin", "organization.manage_settings", "access.manage_memberships"]);
+  function permissionRoleIsLocked0116L(role) { return LOCKED_PERMISSION_ROLE_KEYS_0116L.has(key(role?.role_key || role?.definition_key)); }
+  function permissionCapabilityIsLocked0116L(permissionKey) { return LOCKED_PERMISSION_KEYS_0116L.has(clean(permissionKey)); }
+  function permissionRoleRows0116L() { const source = allDefinitionRows("groups-roles"); const rows = source.length ? source : arr(options.roles).map((role) => normalizeDefinitionRow(role, "groups-roles")); return sortedDefinitionRows(rows).filter((role) => definitionUiStatus(role) !== "archived"); }
+  function selectedPermissionRole0116L() { const rows = permissionRoleRows0116L(); if (!selectedPermissionRoleId && rows.length) selectedPermissionRoleId = selectedDefinitionId(rows[0]); return rows.find((role) => selectedDefinitionId(role) === selectedPermissionRoleId) || rows[0] || null; }
+  function permissionKeysForSelectedRole0116L() { const role = selectedPermissionRole0116L(); if (!role) return []; if (permissionDraftKeys) return permissionDraftKeys.slice(); return unique(role.permission_keys || []); }
   const canManagePeople = (row) => hasPerm(row,"people.manage_members") || hasPerm(row,"people.manage_applicants") || hasPerm(row,"access.manage_memberships") || hasPerm(row,"organization.manage_settings") || hasPerm(row,"organization.super_admin");
   const canManageSuperAdminRoles = (row) => arr(row?.role_keys).map(key).includes("organization-super-admin") || hasPerm(row,"organization.super_admin");
   const canManageSafeRoles = (row) => canManagePeople(row) || bool(obj(row?.capabilities).can_manage_access) || hasPerm(row,"access.manage_memberships");
@@ -301,6 +349,19 @@
   }
 
   function restoreDefinitionSearchFocus() {
+    if (permissionSearchRestore) {
+      const restore = permissionSearchRestore;
+      permissionSearchRestore = null;
+      requestAnimationFrame(() => {
+        const inputEl = $("people-permission-search");
+        if (!inputEl) return;
+        inputEl.focus();
+        const start = restore.start ?? inputEl.value.length;
+        const end = restore.end ?? start;
+        try { inputEl.setSelectionRange(start, end); } catch {}
+      });
+      return;
+    }
     const restore = definitionSearchRestore;
     if (!restore) return;
     definitionSearchRestore = null;
@@ -388,7 +449,7 @@
     await refreshAuth();
     setMessage("Logged in.", "ok");
   }
-  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; roleFilter = "all"; loginFilter = "all"; options = { statuses: [], membership_classes: [], application_stages: [], roles: [] }; definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [] }; selectedDefinition = null; authChecked = true; setShellState(); render(); }
+  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; selected = null; roleFilter = "all"; loginFilter = "all"; options = { statuses: [], membership_classes: [], application_stages: [], roles: [], permissions: [] }; definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [], permissions: [] }; selectedDefinition = null; selectedPermissionRoleId = ""; permissionDraftKeys = null; authChecked = true; setShellState(); render(); }
   async function resetOwnPassword() { await ensureSupabase(); const loginEmail = clean($("people-login-email")?.value || email).toLowerCase(); if (!loginEmail) throw new Error("Enter email first."); const { error } = await supabaseClient.auth.resetPasswordForEmail(loginEmail, { redirectTo: "https://syncetc.webflow.io/password-reset" }); if (error) throw error; setMessage("Password reset email requested.", "ok"); }
 
   async function runButton(id, label, fn) {
@@ -439,13 +500,13 @@
       const cached = getCachedOrgContext(selectedOrgId);
       if (cached) {
         adminAccess = adminAccess || cached.adminAccess || null;
-        options = cached.options || { statuses: [], membership_classes: [], application_stages: [], roles: [] };
+        options = cached.options || { statuses: [], membership_classes: [], application_stages: [], roles: [], permissions: [] };
         pageConfig = cached.pageConfig || null;
         people = arr(cached.people).slice();
         definitionLists = cached.definitionLists || definitionLists;
         if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
         markLoad("people context cache", `${people.length} people`, run);
-        if (isDefinitionMode() && !arr(definitionLists[definitionConfig(activeDefinitionKind).rowsKey]).length) {
+        if ((isDefinitionMode() && !arr(definitionLists[definitionConfig(activeDefinitionKind).rowsKey]).length) || (isPermissionsMode() && !arr(definitionLists.groups_roles).length)) {
           await loadPeopleDefinitionLists(run);
           saveOrgContextCache(selectedOrgId);
         }
@@ -457,13 +518,13 @@
       ? Promise.resolve({ access: adminAccess || obj(mountOptions.accessRow) })
       : timedLoad("admin dashboard", () => call("get_organization_admin_dashboard", { organization_id: selectedOrgId }), run);
     const vocabularyPromise = timedLoad("access vocabulary", () => call("organization_list_access_vocabulary", { organization_id: selectedOrgId }), run);
-    const shouldLoadPeopleList = !isDefinitionMode();
+    const shouldLoadPeopleList = !isDefinitionMode() && !isPermissionsMode();
     const peoplePromise = shouldLoadPeopleList ? fetchPeopleList(run) : Promise.resolve(null);
     const [dash, vocab, peopleResult] = await Promise.all([dashboardPromise, vocabularyPromise, peoplePromise]);
     adminAccess = dash.access || adminAccess || null;
-    options = { statuses: vocab.statuses || [], membership_classes: vocab.membership_classes || [], application_stages: vocab.application_stages || [], roles: sortRoles(vocab.roles || []) };
+    options = { statuses: vocab.statuses || [], membership_classes: vocab.membership_classes || [], application_stages: vocab.application_stages || [], roles: sortRoles(vocab.roles || []), permissions: vocab.permissions || [] };
     if (peopleResult) applyPeopleListResult(peopleResult);
-    if (isDefinitionMode()) await loadPeopleDefinitionLists(run);
+    if (isDefinitionMode() || isPermissionsMode()) await loadPeopleDefinitionLists(run);
     saveOrgContextCache(selectedOrgId);
     setShellState();
   }
@@ -543,7 +604,8 @@
     const classes = arr(data.membership_classes).map((r) => normalizeDefinitionRow(r, "membership-classes"));
     const stages = arr(data.application_stages || data.stages).map((r) => normalizeDefinitionRow(r, "application-stages"));
     const roles = arr(data.groups_roles || data.organization_roles || data.roles).map((r) => normalizeDefinitionRow(r, "groups-roles"));
-    if (statuses.length || classes.length || stages.length || roles.length) definitionLists = { statuses, membership_classes: classes, application_stages: stages, groups_roles: roles };
+    const permissions = arr(data.permissions || data.permission_definitions).slice();
+    if (statuses.length || classes.length || stages.length || roles.length || permissions.length) definitionLists = { statuses, membership_classes: classes, application_stages: stages, groups_roles: roles, permissions };
   }
 
   async function loadPeopleDefinitionLists(run = activeLoadRun) {
@@ -558,7 +620,8 @@
         statuses: arr(options.statuses).map((r) => normalizeDefinitionRow(r, "lifecycle-statuses")),
         membership_classes: arr(options.membership_classes).map((r) => normalizeDefinitionRow(r, "membership-classes")),
         application_stages: arr(options.application_stages).map((r) => normalizeDefinitionRow(r, "application-stages")),
-        groups_roles: arr(options.roles).map((r) => normalizeDefinitionRow(r, "groups-roles"))
+        groups_roles: arr(options.roles).map((r) => normalizeDefinitionRow(r, "groups-roles")),
+        permissions: arr(options.permissions).slice()
       };
       if (isDefinitionMode()) {
         message = e.message || "People definitions could not be loaded.";
@@ -768,6 +831,86 @@
     </section>`;
   }
 
+
+  function renderPermissionsList0116L() {
+    const rows = permissionRoleRows0116L().filter((role) => {
+      const q = lower(permissionSearch);
+      if (!q) return true;
+      return [role.label, role.description, role.role_type, role.role_key].map(clean).join(" ").toLowerCase().includes(q);
+    });
+    const selectedId = selectedDefinitionId(selectedPermissionRole0116L());
+    return `<aside class="people-list-panel people-permission-list-panel">
+      <div class="people-list-head"><div><h3>Roles</h3><p>Choose a role or group, then select what it can do.</p></div></div>
+      <div class="people-toolbar-row"><button id="people-permission-refresh" class="people-btn secondary" type="button">Refresh</button></div>
+      <div class="people-search-wrap"><input id="people-permission-search" value="${esc(permissionSearch)}" placeholder="Search roles and groups…"><button id="people-permission-clear-search" class="people-icon-btn" title="Clear" type="button">×</button></div>
+      <div class="people-sort-hint">Capabilities apply when this role is assigned to a person.</div>
+      <div class="people-compact-list people-permission-role-list">${rows.length ? rows.map((role) => {
+        const id = selectedDefinitionId(role);
+        const locked = permissionRoleIsLocked0116L(role);
+        const count = unique(role.permission_keys || []).length;
+        return `<button class="people-person-card people-permission-role-card ${selectedId === id ? "selected" : ""}" data-permission-role="${esc(id)}" type="button"><span class="person-main"><strong>${esc(role.label || role.role_key || "Untitled role")}</strong><small>${esc(clean(role.role_type || "Role"))}</small></span><span class="person-badges">${locked ? "<em>Built-in</em>" : ""}<em>${esc(String(count))} selected</em></span></button>`;
+      }).join("") : `<div class="people-empty-row">No roles match this search.</div>`}</div>
+    </aside>`;
+  }
+
+  function renderPermissionCheckbox0116L(permissionKey, label, selectedKeys, locked) {
+    const checked = selectedKeys.includes(permissionKey);
+    const capabilityLocked = locked || permissionCapabilityIsLocked0116L(permissionKey);
+    return `<label class="people-permission-capability ${checked ? "enabled" : ""} ${capabilityLocked ? "locked" : ""}"><input type="checkbox" data-permission-key="${esc(permissionKey)}" ${checked ? "checked" : ""} ${capabilityLocked ? "disabled" : ""}><span>${esc(label)}${permissionCapabilityIsLocked0116L(permissionKey) ? `<small>Protected</small>` : ""}</span></label>`;
+  }
+
+  function renderPermissionsEditor0116L() {
+    const role = selectedPermissionRole0116L();
+    const mayEdit = canManageSafeRoles(selectedRow());
+    if (!role) return `<section class="people-editor-panel people-empty"><h3>Select a role</h3><p>Choose a role on the left to review its capabilities.</p></section>`;
+    const selectedKeys = permissionKeysForSelectedRole0116L();
+    const locked = permissionRoleIsLocked0116L(role);
+    const grouped = PERMISSION_GROUPS_0116L.map((group) => `<section class="people-permission-group"><h4>${esc(group.label)}</h4><div class="people-permission-grid">${group.capabilities.map(([permissionKey,label]) => renderPermissionCheckbox0116L(permissionKey, label, selectedKeys, locked || !mayEdit)).join("")}</div></section>`).join("");
+    const status = definitionUiStatus(role);
+    const saveDisabled = !mayEdit || locked || status === "archived";
+    const help = locked ? `<p class="people-warning">This built-in role is protected. Use Groups / Roles for custom roles, then assign those roles from Members / People.</p>` : `<p class="people-soft-note">Select the capabilities this role should grant. Some administrator access is protected.</p>`;
+    return `<section class="people-editor-panel people-editor people-permission-editor">
+      <div class="people-editor-head"><div><h3>${esc(role.label || role.role_key || "Role")}</h3><div class="people-pill-row">${pill(status === "inactive" ? "Inactive" : "Active", status === "inactive" ? "warn" : "ok")}${pill(role.role_type || "Role")}${locked ? pill("Built-in") : ""}</div></div></div>
+      ${!mayEdit ? `<p class="people-warning">You can view capabilities, but you do not have permission to change them.</p>` : help}
+      <div class="people-permission-groups">${grouped}</div>
+      <div class="people-action-row"><div class="people-save-state ${dirty ? "dirty" : ""}"><span>${dirty ? "Unsaved changes" : "Saved"}</span>${message ? `<small class="people-action-status ${esc(messageKind)}">${esc(message)}</small>` : ""}</div><div class="people-action-buttons"><button id="people-permission-reset" class="people-btn secondary" type="button">Reset</button><button id="people-permission-save" class="people-btn" type="button" ${saveDisabled ? "disabled" : ""}>Save</button></div></div>
+    </section>`;
+  }
+
+  function renderPermissionsModule0116L(warningMessage = "") {
+    return `<section class="people-module-header"><div><span class="people-kicker">People</span><h2>Permissions / Capabilities</h2><p>Choose what each role or group can do across the organization.</p></div><div class="people-header-actions">${!embeddedMode ? renderOrgSelector() : ""}</div></section>${warningMessage}<section class="people-workbench">${renderPermissionsList0116L()}${renderPermissionsEditor0116L()}</section>`;
+  }
+
+  function collectPermissionKeys0116L() {
+    const visibleKeys = new Set(PERMISSION_GROUPS_0116L.flatMap((group) => group.capabilities.map(([permissionKey]) => clean(permissionKey))));
+    const role = selectedPermissionRole0116L();
+    const preserved = unique(role?.permission_keys || []).filter((permissionKey) => !visibleKeys.has(permissionKey));
+    const selectedVisible = Array.from(document.querySelectorAll("[data-permission-key]")).filter((el) => el.checked).map((el) => clean(el.getAttribute("data-permission-key"))).filter(Boolean);
+    return unique([...preserved, ...selectedVisible]).sort();
+  }
+
+  async function saveRolePermissions0116L() {
+    const role = selectedPermissionRole0116L();
+    if (!role) throw new Error("Select a role first.");
+    if (permissionRoleIsLocked0116L(role)) throw new Error("This built-in role cannot be changed here.");
+    const data = await call("organization_save_role_permissions", { organization_id: selectedOrgId, role_id: selectedDefinitionId(role), permission_keys: collectPermissionKeys0116L() });
+    setDefinitionListsFromPayload(data);
+    await refreshAccessVocabularyAfterDefinitionSave();
+    const match = allDefinitionRows("groups-roles").find((r) => selectedDefinitionId(r) === selectedDefinitionId(role));
+    if (match) selectedPermissionRoleId = selectedDefinitionId(match);
+    permissionDraftKeys = null;
+    setDirty(false);
+    setMessage("Capabilities saved.", "ok");
+  }
+
+  function resetRolePermissions0116L() {
+    if (!confirmDiscard("Reset unsaved capability changes?")) return;
+    permissionDraftKeys = null;
+    setDirty(false);
+    setMessage("Changes reset.", "ok");
+    render();
+  }
+
   function renderDefinitionModule(warningMessage = "") {
     const cfg = definitionConfig();
     return `<section class="people-module-header"><div><span class="people-kicker">${esc(cfg.kicker)}</span><h2>${esc(cfg.title)}</h2><p>${esc(cfg.helper)}</p></div><div class="people-header-actions">${!embeddedMode ? renderOrgSelector() : ""}<button id="people-def-new" class="people-btn outline" type="button">${esc(cfg.newLabel)}</button></div></section>${warningMessage}<section class="people-workbench">${renderDefinitionList()}${renderDefinitionEditor()}</section>`;
@@ -821,7 +964,7 @@
   async function refreshAccessVocabularyAfterDefinitionSave() {
     try {
       const vocab = await call("organization_list_access_vocabulary", { organization_id: selectedOrgId });
-      options = { statuses: vocab.statuses || [], membership_classes: vocab.membership_classes || [], application_stages: vocab.application_stages || [], roles: sortRoles(vocab.roles || []) };
+      options = { statuses: vocab.statuses || [], membership_classes: vocab.membership_classes || [], application_stages: vocab.application_stages || [], roles: sortRoles(vocab.roles || []), permissions: vocab.permissions || [] };
       saveOrgContextCache(selectedOrgId);
     } catch {}
   }
@@ -1397,6 +1540,7 @@
     const rows = adminRows();
     if (!rows.length && !adminAccess) return `<section class="people-card"><h2>No organization admin access</h2><p>Your account is signed in, but it does not have organization-admin permission.</p></section>`;
     const warningMessage = message && messageKind === "warn" ? `<div class="people-message warn">${esc(message)}</div>` : "";
+    if (isPermissionsMode()) return renderPermissionsModule0116L(warningMessage);
     if (isDefinitionMode()) return renderDefinitionModule(warningMessage);
     const adminLens = isAdminAccessLens();
     const title = clean(pageConfig?.title) || "Members / People";
@@ -1412,7 +1556,7 @@
       .people-module-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:15px 17px;margin:0 0 10px;border-top:3px solid var(--people-primary)}.people-module-header h2{margin:6px 0 4px;font-size:25px;line-height:1.1;color:#101828}.people-module-header p{margin:0;color:var(--people-muted);font-weight:650}.people-header-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
       .people-workbench{display:grid;grid-template-columns:330px minmax(0,1fr);gap:10px;align-items:start}.people-list-panel{padding:12px;position:sticky;top:10px;max-height:calc(100vh - 24px);overflow:auto}.people-list-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}.people-list-head h3,.people-editor-head h3{margin:0;font-size:21px;color:#101828}.people-list-head p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-toolbar-row,.people-inline-actions,.people-action-buttons,.people-pill-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.people-toolbar-row{margin:8px 0 10px}.people-btn,.people-icon-btn,.people-link-btn{border:0;border-radius:999px;background:var(--people-primary);color:#fff;font-weight:900;padding:10px 14px;cursor:pointer;text-decoration:none;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}.people-btn:hover,.people-person-card:hover{transform:translateY(-1px)}.people-btn.secondary,.people-btn.outline{background:#fff;color:var(--people-primary);border:1px solid var(--people-primary)}.people-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-btn:disabled{opacity:.55;cursor:not-allowed;transform:none}.people-link-btn{background:transparent;color:var(--people-primary);text-decoration:underline;padding:8px}.people-message{margin-top:12px;padding:10px 12px;border-radius:12px;background:var(--people-soft);color:var(--people-primary);font-weight:850}.people-message:empty{display:none}.people-message.ok{background:#ecfdf5;color:#047857}.people-message.warn,.people-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:12px;padding:10px 12px}.people-action-status{display:block;margin-top:3px;color:var(--people-muted);font-size:12px;line-height:1.25}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}.people-context-single{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);padding:9px 12px;border-radius:999px;font-weight:900}.muted{color:var(--people-muted)}
       .people-field{display:grid;gap:6px;font-weight:850}.people-field span{font-size:13px}.people-field small{font-weight:600;color:var(--people-muted);line-height:1.35}.people-field input,.people-field select,.people-field textarea,.people-search-wrap input,#people-org-select{width:100%;border:1px solid var(--people-border);border-radius:12px;background:#fff;color:var(--people-text);padding:10px 12px;font:inherit;min-height:42px}.people-field textarea{min-height:104px;resize:vertical}.people-field input[readonly],.people-field input:disabled,.people-field select:disabled{background:#f8fafc;color:var(--people-muted);cursor:not-allowed}.people-field-wide{grid-column:1/-1}.field-error{color:#b91c1c!important;font-weight:900!important}.people-field.disabled-field{opacity:.72}.people-status-filter,.people-role-filter,.people-login-filter{margin:10px 0}.people-advanced-filters{display:grid;gap:8px;margin:6px 0 10px}.people-advanced-toggle{justify-self:start;padding-left:0}.people-active-filters{display:flex;gap:7px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--people-muted);font-weight:850}.people-filter-chip{border:1px solid var(--people-border);border-radius:999px;background:var(--people-soft);color:var(--people-primary);font:inherit;font-size:12px;font-weight:900;padding:5px 9px;cursor:pointer}.people-advanced-panel{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:10px}.people-search-wrap{position:relative;margin:10px 0}.people-search-wrap input{padding-right:44px}.people-icon-btn{position:absolute;right:6px;top:5px;width:32px;height:32px;padding:0;background:var(--people-soft);color:var(--people-primary)}.people-sort-hint{font-size:12px;color:var(--people-muted);font-weight:750;margin:8px 0 10px}.people-compact-list{display:grid;gap:7px;max-height:calc(100vh - 320px);min-height:240px;overflow:auto;padding:3px 2px 8px;overscroll-behavior:contain;align-content:start;grid-auto-rows:max-content}.people-person-card{text-align:left;border:1px solid var(--people-border);border-radius:13px;background:#fff;color:var(--people-text);padding:10px;display:grid;gap:8px;cursor:pointer;box-shadow:0 3px 11px ${rgba(cfg.primary,.04)};align-self:start}.people-person-card .person-badges{align-items:flex-start}.people-person-card .person-badges em{align-self:flex-start}.people-person-card.selected{border-color:var(--people-primary);box-shadow:0 0 0 3px var(--people-strong-soft)}.people-person-card.archived{opacity:.58;background:#f8fafc}.people-person-card.restricted:not(.archived){border-color:#fed7aa;background:#fff7ed}.person-main{display:grid;gap:3px;min-width:0}.person-main strong{font-weight:950;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-main small{color:var(--people-muted);font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-badges{display:flex;gap:4px;flex-wrap:wrap}.person-badges em{font-style:normal;font-size:10px;font-weight:900;border-radius:999px;padding:3px 6px;background:var(--people-soft);color:var(--people-primary)}.people-empty-row{border:1px dashed var(--people-border);border-radius:13px;padding:18px;text-align:center;color:var(--people-muted);background:#fff}.people-empty-row.compact{padding:12px;text-align:left}.people-empty{min-height:380px;display:grid;align-content:center;text-align:center;padding:24px}
-      .people-editor-panel{min-width:0;padding:0;overflow:hidden}.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:15px 17px;border-bottom:1px solid var(--people-border)}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}.people-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--people-border);background:#fcfcfd}.people-tab{border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-weight:900;padding:8px 11px;cursor:pointer}.people-tab.active{background:var(--people-primary);color:#fff;border-color:var(--people-primary)}.people-tab-panel{padding:16px}.people-tab-panel[hidden]{display:none!important}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}.people-access-status-grid{padding-bottom:8px}.people-affiliation-grid{padding-top:8px;border-top:1px solid var(--people-border)}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;margin:10px 0 14px}.primary-pick{min-height:42px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:12px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border:1px solid var(--people-border);border-radius:12px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-access-callout{display:flex;justify-content:space-between;gap:14px;align-items:center;border:1px solid var(--people-border);border-radius:13px;background:var(--people-soft);padding:12px;margin-bottom:14px}.people-access-callout p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-access-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 14px}.people-access-summary>div{border:1px solid var(--people-border);border-radius:12px;background:#fff;padding:10px;display:grid;gap:3px}.people-access-summary span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-access-summary strong{font-size:13px;line-height:1.25}.people-role-assignment-wrap{display:grid;gap:12px}.people-role-section{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px}.people-role-section-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}.people-role-section-head h4{margin:0;color:#101828;font-size:15px}.people-role-section-head span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-role-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.people-inline-actions{margin:10px 0}.people-action-row{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid var(--people-border);padding:12px 14px;background:#fcfcfd}.people-save-state{display:grid;gap:2px;font-weight:900;color:var(--people-muted)}.people-save-state.dirty{color:#9a3412}.people-photo-panel{grid-column:1/-1;display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;align-items:center;border:1px dashed var(--people-border);border-radius:14px;background:var(--people-soft);padding:14px}.people-photo-panel.dragover{box-shadow:0 0 0 3px var(--people-strong-soft);border-color:var(--people-primary)}.people-photo-preview{width:132px;height:132px;border-radius:18px;background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--people-border);box-shadow:0 10px 26px ${rgba(cfg.primary,.16)}}.people-photo-preview img{width:100%;height:100%;object-fit:cover;display:block}.people-photo-preview span{font-size:38px;font-weight:950;letter-spacing:.03em}.people-photo-copy strong{display:block;color:var(--people-primary);font-size:15px;margin-bottom:4px}.people-photo-copy p{margin:0 0 8px;color:var(--people-muted);font-weight:750}.people-photo-copy small{display:block;color:var(--people-muted);font-weight:750;margin-bottom:10px}.people-photo-actions{display:flex;gap:8px;flex-wrap:wrap}.people-timeline-list{display:grid;gap:10px;margin-top:10px}.people-note-card{border-left:4px solid var(--people-primary);background:#f8fafc;border-radius:12px;padding:10px}.people-note-card strong{display:block;color:var(--people-primary)}.people-note-card span{font-size:12px;color:#64748b;font-weight:800}.people-note-card p{margin:6px 0;white-space:pre-wrap}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:12px;padding:14px;font-size:12px;max-height:260px;overflow:auto}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}.people-def-row{padding:0;display:grid;grid-template-columns:30px minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab}.people-def-row.dragging{opacity:.55}.people-def-row.drag-over{outline:2px dashed var(--people-primary);outline-offset:2px}.people-def-drag-handle{display:flex;align-items:center;justify-content:center;color:var(--people-muted);font-weight:950;letter-spacing:-5px;background:#f8fafc;border-right:1px solid var(--people-border);cursor:grab;user-select:none}.people-def-row .people-def-main{border:0;background:transparent;text-align:left;padding:10px;display:grid;gap:7px;cursor:pointer;color:inherit}.people-def-order{display:flex;flex-direction:column;justify-content:space-between;border-left:1px solid var(--people-border);background:#f8fafc}.people-order-button{border:0;background:#f8fafc;color:var(--people-primary);font-weight:950;width:34px;min-height:32px;cursor:pointer}.people-order-button:first-child{border-bottom:1px solid var(--people-border)}.people-order-button:last-child{border-top:1px solid var(--people-border)}.people-order-button:disabled{opacity:.35;cursor:not-allowed}.people-info-btn{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:5px;border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-size:11px;font-weight:950;line-height:1;vertical-align:middle;padding:0;cursor:help}.people-def-editor .people-tab-panel>.people-form-grid{grid-template-columns:1fr}.people-def-editor .people-form-grid .people-form-grid{grid-template-columns:repeat(3,minmax(0,1fr));}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}
+      .people-editor-panel{min-width:0;padding:0;overflow:hidden}.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:15px 17px;border-bottom:1px solid var(--people-border)}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}.people-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--people-border);background:#fcfcfd}.people-tab{border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-weight:900;padding:8px 11px;cursor:pointer}.people-tab.active{background:var(--people-primary);color:#fff;border-color:var(--people-primary)}.people-tab-panel{padding:16px}.people-tab-panel[hidden]{display:none!important}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}.people-access-status-grid{padding-bottom:8px}.people-affiliation-grid{padding-top:8px;border-top:1px solid var(--people-border)}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;margin:10px 0 14px}.primary-pick{min-height:42px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:12px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border:1px solid var(--people-border);border-radius:12px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-access-callout{display:flex;justify-content:space-between;gap:14px;align-items:center;border:1px solid var(--people-border);border-radius:13px;background:var(--people-soft);padding:12px;margin-bottom:14px}.people-access-callout p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-access-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 14px}.people-access-summary>div{border:1px solid var(--people-border);border-radius:12px;background:#fff;padding:10px;display:grid;gap:3px}.people-access-summary span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-access-summary strong{font-size:13px;line-height:1.25}.people-role-assignment-wrap{display:grid;gap:12px}.people-role-section{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px}.people-role-section-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}.people-role-section-head h4{margin:0;color:#101828;font-size:15px}.people-role-section-head span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-role-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.people-inline-actions{margin:10px 0}.people-action-row{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid var(--people-border);padding:12px 14px;background:#fcfcfd}.people-save-state{display:grid;gap:2px;font-weight:900;color:var(--people-muted)}.people-save-state.dirty{color:#9a3412}.people-photo-panel{grid-column:1/-1;display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;align-items:center;border:1px dashed var(--people-border);border-radius:14px;background:var(--people-soft);padding:14px}.people-photo-panel.dragover{box-shadow:0 0 0 3px var(--people-strong-soft);border-color:var(--people-primary)}.people-photo-preview{width:132px;height:132px;border-radius:18px;background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--people-border);box-shadow:0 10px 26px ${rgba(cfg.primary,.16)}}.people-photo-preview img{width:100%;height:100%;object-fit:cover;display:block}.people-photo-preview span{font-size:38px;font-weight:950;letter-spacing:.03em}.people-photo-copy strong{display:block;color:var(--people-primary);font-size:15px;margin-bottom:4px}.people-photo-copy p{margin:0 0 8px;color:var(--people-muted);font-weight:750}.people-photo-copy small{display:block;color:var(--people-muted);font-weight:750;margin-bottom:10px}.people-photo-actions{display:flex;gap:8px;flex-wrap:wrap}.people-timeline-list{display:grid;gap:10px;margin-top:10px}.people-note-card{border-left:4px solid var(--people-primary);background:#f8fafc;border-radius:12px;padding:10px}.people-note-card strong{display:block;color:var(--people-primary)}.people-note-card span{font-size:12px;color:#64748b;font-weight:800}.people-note-card p{margin:6px 0;white-space:pre-wrap}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:12px;padding:14px;font-size:12px;max-height:260px;overflow:auto}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}.people-def-row{padding:0;display:grid;grid-template-columns:30px minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab}.people-def-row.dragging{opacity:.55}.people-def-row.drag-over{outline:2px dashed var(--people-primary);outline-offset:2px}.people-def-drag-handle{display:flex;align-items:center;justify-content:center;color:var(--people-muted);font-weight:950;letter-spacing:-5px;background:#f8fafc;border-right:1px solid var(--people-border);cursor:grab;user-select:none}.people-def-row .people-def-main{border:0;background:transparent;text-align:left;padding:10px;display:grid;gap:7px;cursor:pointer;color:inherit}.people-def-order{display:flex;flex-direction:column;justify-content:space-between;border-left:1px solid var(--people-border);background:#f8fafc}.people-order-button{border:0;background:#f8fafc;color:var(--people-primary);font-weight:950;width:34px;min-height:32px;cursor:pointer}.people-order-button:first-child{border-bottom:1px solid var(--people-border)}.people-order-button:last-child{border-top:1px solid var(--people-border)}.people-order-button:disabled{opacity:.35;cursor:not-allowed}.people-info-btn{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:5px;border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-size:11px;font-weight:950;line-height:1;vertical-align:middle;padding:0;cursor:help}.people-def-editor .people-tab-panel>.people-form-grid{grid-template-columns:1fr}.people-def-editor .people-form-grid .people-form-grid{grid-template-columns:repeat(3,minmax(0,1fr));}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}.people-soft-note{background:var(--people-soft);color:var(--people-primary);border:1px solid var(--people-border);border-radius:12px;padding:10px 12px;font-weight:750}.people-permission-role-list{min-height:240px}.people-permission-groups{display:grid;gap:12px}.people-permission-group{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px}.people-permission-group h4{margin:0 0 10px;font-size:16px;color:#101828}.people-permission-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.people-permission-capability{display:flex;align-items:center;gap:9px;border:1px solid var(--people-border);border-radius:12px;background:#fff;padding:10px;font-weight:850;min-height:44px}.people-permission-capability.enabled{background:var(--people-soft);border-color:var(--people-primary);color:var(--people-primary)}.people-permission-capability.locked{opacity:.72}.people-permission-capability input{width:16px;height:16px;accent-color:var(--people-primary)}
       @media(max-width:1100px){.people-workbench{grid-template-columns:1fr}.people-list-panel{position:static;max-height:none}.people-compact-list{max-height:320px;min-height:0}.people-form-grid,.people-check-grid,.people-role-grid,.people-access-summary{grid-template-columns:1fr 1fr}.people-module-header,.people-action-row,.people-access-callout{display:grid}.people-header-actions,.people-action-buttons{justify-content:flex-start}.phone-grid{grid-template-columns:1fr}.primary-pick{justify-content:flex-start;padding:0 12px}}
       @media(max-width:640px){.people-form-grid,.people-check-grid,.people-role-grid,.people-access-summary{grid-template-columns:1fr}.people-photo-panel{grid-template-columns:1fr}.people-photo-preview{margin:auto}.people-btn{width:100%}.people-action-buttons{width:100%}}
       @media print{#syncetc-portal-shell,.people-hero,.people-list-panel,.people-editor-panel,.people-message,.people-module-header{display:none!important}.people-wrap{max-width:none;margin:0;padding:0}.people-card{box-shadow:none;border:none}}
@@ -1424,12 +1568,12 @@
     const el = ensureRoot();
     if (!el) return;
     const cfg = styleConfig(selectedRow());
-    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, active_people_lens: activePeopleLens, active_definition_kind: activeDefinitionKind, role_filter: roleFilter, login_filter: loginFilter, people_count: people.length, definition_counts: { statuses: arr(definitionLists.statuses).length, membership_classes: arr(definitionLists.membership_classes).length, application_stages: arr(definitionLists.application_stages).length, groups_roles: arr(definitionLists.groups_roles).length }, cache_ttl_ms: PEOPLE_CACHE_TTL_MS, parent_script_load_ms: mountOptions.scriptLoadMs || null, load_timings: loadTimings, backend: backend || {} }, null, 2))}</pre></details>` : "";
+    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, active_people_lens: activePeopleLens, active_definition_kind: activeDefinitionKind, selected_permission_role_id: selectedPermissionRoleId, role_filter: roleFilter, login_filter: loginFilter, people_count: people.length, definition_counts: { statuses: arr(definitionLists.statuses).length, membership_classes: arr(definitionLists.membership_classes).length, application_stages: arr(definitionLists.application_stages).length, groups_roles: arr(definitionLists.groups_roles).length, permissions: arr(definitionLists.permissions).length }, cache_ttl_ms: PEOPLE_CACHE_TTL_MS, parent_script_load_ms: mountOptions.scriptLoadMs || null, load_timings: loadTimings, backend: backend || {} }, null, 2))}</pre></details>` : "";
     el.innerHTML = `<style>${peopleStyles(cfg)}</style><div class="people-wrap"><section class="people-card people-hero"><div class="people-eyebrow">Organization Admin</div><h1>${esc(clean(pageConfig?.title) || "People & Access")}</h1><p>${esc(clean(pageConfig?.intro_text) || "Search the full people pool, manage members and applicants, keep contact information current, and handle safe access updates from one place.")}</p><div class="people-message ${esc(messageKind)}">${esc(message)}</div></section>${renderContent()}${diagnostics}</div>`;
     bindEvents();
     restorePeopleSearchFocus();
     restoreDefinitionSearchFocus();
-    if (!isDefinitionMode()) activateTab(activeTab);
+    if (!isDefinitionMode() && !isPermissionsMode()) activateTab(activeTab);
   }
 
 
@@ -1459,11 +1603,24 @@
     });
   }
 
+
+  function bindPermissionEvents0116L() {
+    $("people-permission-refresh")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); runButton("people-permission-refresh", "Refreshing…", async () => { const run = beginLoadTrace("permissions refresh"); await Promise.all([loadPeopleDefinitionLists(run), refreshAccessVocabularyAfterDefinitionSave()]); finishLoad("ok", run); setMessage("Updated.", "ok"); }); });
+    $("people-permission-search")?.addEventListener("input", (e) => { clearTimeout(debounceTimer); permissionSearchRestore = { start: e.target.selectionStart, end: e.target.selectionEnd }; debounceTimer = setTimeout(() => { permissionSearch = e.target.value || ""; render(); }, 250); });
+    $("people-permission-clear-search")?.addEventListener("click", () => { permissionSearch = ""; render(); });
+    document.querySelectorAll("[data-permission-role]").forEach((btn) => btn.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); selectedPermissionRoleId = clean(btn.getAttribute("data-permission-role")); permissionDraftKeys = null; message = ""; messageKind = ""; render(); }));
+    document.querySelectorAll("[data-permission-key]").forEach((box) => box.addEventListener("change", () => { permissionDraftKeys = collectPermissionKeys0116L(); setDirty(true); }));
+    $("people-permission-save")?.addEventListener("click", () => runButton("people-permission-save", "Saving…", saveRolePermissions0116L));
+    $("people-permission-reset")?.addEventListener("click", () => runButton("people-permission-reset", "Resetting…", resetRolePermissions0116L));
+  }
+
   function bindEvents() {
     $("people-login")?.addEventListener("click", () => runButton("people-login", "Logging in…", login));
     $("people-logout")?.addEventListener("click", () => runButton("people-logout", "Logging out…", logout));
     $("people-reset-own")?.addEventListener("click", () => runButton("people-reset-own", "Sending…", resetOwnPassword));
     $("people-org-select")?.addEventListener("change", async (e) => { if (!confirmDiscard()) { e.target.value = selectedOrgId; return; } setDirty(false); selectedOrgId = e.target.value; try { localStorage.setItem(SELECTED_ORG_KEY, selectedOrgId); } catch {} adminAccess = null; selected = null; selectedDefinition = null; try { await loadOrgContext({ force: true }); setMessage("Organization loaded.", "ok"); } catch (err) { setMessage(err.message || String(err), "warn"); } render(); });
+    if (isPermissionsMode()) { bindPermissionEvents0116L(); return; }
+    if (isDefinitionMode()) { bindDefinitionEvents(); return; }
     bindDefinitionEvents();
     $("people-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = filter; return; } setDirty(false); filter = normalizePrimaryPeopleFilter(e.target.value || "all"); render(); });
     $("people-advanced-filters-toggle")?.addEventListener("click", () => { advancedFiltersOpen = !advancedFiltersOpen; render(); });

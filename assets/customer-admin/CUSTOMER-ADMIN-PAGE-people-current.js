@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-16-116-U
+// Internal Version: 2026-06-16-116-V
 // Purpose: Organization Admin People workbench. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-U";
+  const VERSION = "2026-06-16-116-V";
   const ROOT_ID = "syncetc-organization-people-root";
   const ROOT_SELECTOR = "#syncetc-organization-people-root, #syncetc-people-admin-root, [data-syncetc-page=\"organization-people\"]";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -67,6 +67,7 @@
   let filter = "all";
   let roleFilter = "all";
   let loginFilter = "all";
+  let qualificationFilter = "all";
   let advancedFiltersOpen = false;
   let message = "";
   let messageKind = "";
@@ -489,7 +490,7 @@
     await refreshAuth();
     setMessage("Logged in.", "ok");
   }
-  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; availableAircraft = []; selected = null; roleFilter = "all"; loginFilter = "all"; options = { statuses: [], membership_classes: [], application_stages: [], roles: [], permissions: [], qualifications: [], assets: [], aircraft: [] }; definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [], permissions: [], qualifications: [] }; selectedDefinition = null; selectedPermissionRoleId = ""; permissionDraftKeys = null; authChecked = true; setShellState(); render(); }
+  async function logout() { if (!confirmDiscard()) return; setDirty(false); await ensureSupabase(); await supabaseClient.auth.signOut(); token = ""; email = ""; allAccess = []; adminAccess = null; selectedOrgId = ""; people = []; availableAircraft = []; selected = null; roleFilter = "all"; loginFilter = "all"; qualificationFilter = "all"; options = { statuses: [], membership_classes: [], application_stages: [], roles: [], permissions: [], qualifications: [], assets: [], aircraft: [] }; definitionLists = { statuses: [], membership_classes: [], application_stages: [], groups_roles: [], permissions: [], qualifications: [] }; selectedDefinition = null; selectedPermissionRoleId = ""; permissionDraftKeys = null; authChecked = true; setShellState(); render(); }
   async function resetOwnPassword() { await ensureSupabase(); const loginEmail = clean($("people-login-email")?.value || email).toLowerCase(); if (!loginEmail) throw new Error("Enter email first."); const { error } = await supabaseClient.auth.resetPasswordForEmail(loginEmail, { redirectTo: "https://syncetc.webflow.io/password-reset" }); if (error) throw error; setMessage("Password reset email requested.", "ok"); }
 
   async function runButton(id, label, fn) {
@@ -1552,8 +1553,38 @@
     return true;
   }
 
+  function personQualificationAttention(p) {
+    const readiness = reservationReadiness0116R(p);
+    const missing = arr(readiness.missing);
+    const expired = arr(readiness.expired);
+    const hasAttention = Boolean(missing.length || expired.length);
+    return {
+      has_attention: hasAttention,
+      missing,
+      expired,
+      required_count: arr(readiness.required).length,
+      label: expired.length ? "Qualifications expired" : missing.length ? "Qualifications needed" : ""
+    };
+  }
+
+  function qualificationIssueSummary0116V(p) {
+    const attention = personQualificationAttention(p);
+    return attention.has_attention ? (attention.label || "Required quals need attention") : "";
+  }
+
+  function personMatchesQualificationFilter(p, selectedQualificationFilter = qualificationFilter) {
+    const qf = key(selectedQualificationFilter || "all");
+    if (qf === "all") return true;
+    const attention = personQualificationAttention(p);
+    if (["needs-attention", "expired-creds", "required-needs-attention"].includes(qf)) return attention.has_attention;
+    if (["expired", "expired-only"].includes(qf)) return attention.expired.length > 0;
+    if (["missing", "missing-only"].includes(qf)) return attention.missing.length > 0;
+    if (qf === "current") return attention.required_count > 0 && !attention.has_attention;
+    return true;
+  }
+
   function filteredPeople() {
-    const rows = people.filter((p) => personMatchesLens(p, filter) && personMatchesRoleFilter(p) && personMatchesLoginFilter(p) && personMatchesSearch(p, search));
+    const rows = people.filter((p) => personMatchesLens(p, filter) && personMatchesRoleFilter(p) && personMatchesLoginFilter(p) && personMatchesQualificationFilter(p) && personMatchesSearch(p, search));
     return sortPersonRows(rows);
   }
 
@@ -1580,7 +1611,7 @@
     const out = { all: 0 };
     activeAssignableRoles().forEach((role) => { out[key(role.role_key)] = 0; });
     people.forEach((p) => {
-      if (!personMatchesSearch(p, search) || !personMatchesLens(p, filter) || !personMatchesLoginFilter(p)) return;
+      if (!personMatchesSearch(p, search) || !personMatchesLens(p, filter) || !personMatchesLoginFilter(p) || !personMatchesQualificationFilter(p)) return;
       out.all += 1;
       arr(p.role_keys).map(key).forEach((rk) => { if (Object.prototype.hasOwnProperty.call(out, rk)) out[rk] += 1; });
     });
@@ -1590,10 +1621,24 @@
   function loginFilterCounts() {
     const out = { all: 0, "has-login": 0, "no-login": 0 };
     people.forEach((p) => {
-      if (!personMatchesSearch(p, search) || !personMatchesLens(p, filter) || !personMatchesRoleFilter(p)) return;
+      if (!personMatchesSearch(p, search) || !personMatchesLens(p, filter) || !personMatchesRoleFilter(p) || !personMatchesQualificationFilter(p)) return;
       out.all += 1;
       if (bool(p.login_linked)) out["has-login"] += 1;
       else out["no-login"] += 1;
+    });
+    return out;
+  }
+
+  function qualificationFilterCounts() {
+    const out = { all: 0, "needs-attention": 0, expired: 0, missing: 0, current: 0 };
+    people.forEach((p) => {
+      if (!personMatchesSearch(p, search) || !personMatchesLens(p, filter) || !personMatchesRoleFilter(p) || !personMatchesLoginFilter(p)) return;
+      out.all += 1;
+      const attention = personQualificationAttention(p);
+      if (attention.has_attention) out["needs-attention"] += 1;
+      if (attention.expired.length) out.expired += 1;
+      if (attention.missing.length) out.missing += 1;
+      if (attention.required_count > 0 && !attention.has_attention) out.current += 1;
     });
     return out;
   }
@@ -1624,16 +1669,28 @@
     return "";
   }
 
+  function activeQualificationFilterLabel() {
+    const qf = key(qualificationFilter || "all");
+    if (["needs-attention", "expired-creds", "required-needs-attention"].includes(qf)) return "Qualifications need attention";
+    if (qf === "expired") return "Expired qualifications";
+    if (qf === "missing") return "Missing required qualifications";
+    if (qf === "current") return "Qualifications current";
+    return "";
+  }
+
   function renderAdvancedPeopleFilters() {
     const roleCounts = roleFilterCounts();
     const loginCounts = loginFilterCounts();
+    const qualCounts = qualificationFilterCounts();
     const roleRows = activeAssignableRoles();
     const hasRoleFilter = key(roleFilter || "all") !== "all";
     const hasLoginFilter = key(loginFilter || "all") !== "all";
-    const hasAdvanced = hasRoleFilter || hasLoginFilter;
+    const hasQualificationFilter = key(qualificationFilter || "all") !== "all";
+    const hasAdvanced = hasRoleFilter || hasLoginFilter || hasQualificationFilter;
     const chips = [
       hasRoleFilter ? `<button class="people-filter-chip" data-clear-role-filter type="button">Group / role: ${esc(activeRoleFilterLabel())} ×</button>` : "",
-      hasLoginFilter ? `<button class="people-filter-chip" data-clear-login-filter type="button">Login: ${esc(activeLoginFilterLabel())} ×</button>` : ""
+      hasLoginFilter ? `<button class="people-filter-chip" data-clear-login-filter type="button">Login: ${esc(activeLoginFilterLabel())} ×</button>` : "",
+      hasQualificationFilter ? `<button class="people-filter-chip alert" data-clear-qualification-filter type="button">${esc(activeQualificationFilterLabel())} ×</button>` : ""
     ].filter(Boolean).join("");
     const roleOptions = [`<option value="all" ${key(roleFilter)==="all" ? "selected" : ""}>Any group / role (${roleCounts.all || 0})</option>`].concat(roleRows.map((role) => {
       const rk = key(role.role_key);
@@ -1645,10 +1702,17 @@
       ["has-login", "Has login", loginCounts["has-login"] || 0],
       ["no-login", "No login", loginCounts["no-login"] || 0]
     ].map(([value,label,count]) => `<option value="${esc(value)}" ${key(loginFilter)===value ? "selected" : ""}>${esc(label)} (${count})</option>`).join("");
+    const qualificationOptions = [
+      ["all", "Any required qualification status", qualCounts.all || 0],
+      ["needs-attention", "Qualifications need attention", qualCounts["needs-attention"] || 0],
+      ["expired", "Expired qualifications", qualCounts.expired || 0],
+      ["missing", "Missing required qualifications", qualCounts.missing || 0],
+      ["current", "Qualifications current", qualCounts.current || 0]
+    ].map(([value,label,count]) => `<option value="${esc(value)}" ${key(qualificationFilter)===value ? "selected" : ""}>${esc(label)} (${count})</option>`).join("");
     return `<div class="people-advanced-filters">
       <button id="people-advanced-filters-toggle" class="people-link-btn people-advanced-toggle" type="button">${advancedFiltersOpen ? "Hide advanced filters" : "Advanced filters"}</button>
       ${hasAdvanced ? `<div class="people-active-filters"><span>Active filters:</span>${chips}<button id="people-clear-advanced-filters" class="people-link-btn" type="button">Clear all</button></div>` : ""}
-      ${advancedFiltersOpen ? `<div class="people-advanced-panel"><label class="people-field people-role-filter"><span>Group / role</span><select id="people-role-filter-select">${roleOptions}</select></label><label class="people-field people-login-filter"><span>Login</span><select id="people-login-filter-select">${loginOptions}</select></label></div>` : ""}
+      ${advancedFiltersOpen ? `<div class="people-advanced-panel"><label class="people-field people-role-filter"><span>Group / role</span><select id="people-role-filter-select">${roleOptions}</select></label><label class="people-field people-login-filter"><span>Login</span><select id="people-login-filter-select">${loginOptions}</select></label><label class="people-field people-qualification-filter"><span>Qualifications</span><select id="people-qualification-filter-select">${qualificationOptions}</select></label></div>` : ""}
     </div>`;
   }
 
@@ -1677,7 +1741,10 @@
     const restricted = isRestrictedRow(p) ? "restricted" : "";
     const primaryRole = hasSuperAdminRoleKeys(p) ? "Super Admin" : hasAnyRole(p, ["organization-admin"]) ? "Admin" : arr(p.role_keys).some(isManagerRole) || personHasRoleType(p, ["manager"]) ? "Manager" : hasRole(p, "board-member") || personHasRoleType(p, ["board", "officer"]) ? "Board" : (arr(p.role_labels).find(Boolean) || "");
     const badges = [p.lifecycle_status_label || p.lifecycle_status_key, p.membership_class_label, primaryRole, p.login_linked ? "Login" : "No login"].filter(Boolean).slice(0, 4);
-    return `<button class="people-person-card ${selectedClass} ${archived} ${restricted}" data-open="${esc(p.membership_id)}" type="button"><span class="person-main"><strong>${esc(finderDisplayName(p))}</strong><small>${esc(clean(p.primary_email || p.email || p.primary_phone || p.phone || "No contact on file"))}</small></span><span class="person-badges">${badges.map((b) => `<em>${esc(b)}</em>`).join("")}</span></button>`;
+    const attention = personQualificationAttention(p);
+    const qualLabel = attention.has_attention ? (attention.expired.length ? (attention.expired.length === 1 ? "Qualification expired" : "Qualifications expired") : (attention.missing.length === 1 ? "Qualification missing" : "Qualifications missing")) : "";
+    const qualBadge = qualLabel ? `<em class="alert">${esc(qualLabel)}</em>` : "";
+    return `<button class="people-person-card ${selectedClass} ${archived} ${restricted} ${qualLabel ? "qualification-attention" : ""}" data-open="${esc(p.membership_id)}" type="button"><span class="person-main"><strong>${esc(finderDisplayName(p))}</strong><small>${esc(clean(p.primary_email || p.email || p.primary_phone || p.phone || "No contact on file"))}</small></span><span class="person-badges">${badges.map((b) => `<em>${esc(b)}</em>`).join("")}${qualBadge}</span></button>`;
   }
 
 
@@ -1991,6 +2058,31 @@
     el.className = `people-action-status ${mode || ""}`.trim();
   }
 
+  function bulkApplyAircraftCheckouts0116V() {
+    const selectedBoxes = Array.from(document.querySelectorAll("[data-aircraft-bulk-id]")).filter((box) => box.checked);
+    if (!selectedBoxes.length) {
+      setBulkStatusMessage0116T("Select at least one aircraft.", "warn");
+      return false;
+    }
+    const bulkAuthorized = bool($("people-aircraft-bulk-authorized")?.checked);
+    const bulkCompleted = bulkAuthorized ? clean($("people-aircraft-bulk-completed")?.value || "") : "";
+    const bulkExpires = bulkAuthorized ? clean($("people-aircraft-bulk-expires")?.value || "") : "";
+    const bulkNotes = clean($("people-aircraft-bulk-notes")?.value || "");
+    selectedBoxes.forEach((box) => {
+      const domId = clean(box.getAttribute("data-aircraft-bulk-id"));
+      const authorizedEl = $(`people-aircraft-checkout-authorized-${domId}`);
+      const completedEl = $(`people-aircraft-checkout-completed-${domId}`);
+      const expiresEl = $(`people-aircraft-checkout-expires-${domId}`);
+      const notesEl = $(`people-aircraft-checkout-notes-${domId}`);
+      if (authorizedEl) authorizedEl.checked = bulkAuthorized;
+      if (completedEl) completedEl.value = bulkCompleted;
+      if (expiresEl) expiresEl.value = bulkExpires;
+      if (bulkNotes && notesEl) notesEl.value = bulkNotes;
+    });
+    setDirty(true);
+    return true;
+  }
+
   function bindAircraftBulkEvents0116T() {
     const panel = $("people-aircraft-bulk-panel");
     const toggle = $("people-aircraft-bulk-toggle");
@@ -2008,31 +2100,21 @@
       document.querySelectorAll("[data-aircraft-bulk-id]").forEach((box) => { box.checked = false; });
       setBulkStatusMessage0116T("");
     });
-    $("people-aircraft-bulk-apply")?.addEventListener("click", () => {
-      const selectedBoxes = Array.from(document.querySelectorAll("[data-aircraft-bulk-id]")).filter((box) => box.checked);
-      if (!selectedBoxes.length) {
-        setBulkStatusMessage0116T("Select at least one aircraft.", "warn");
+    $("people-aircraft-bulk-apply")?.addEventListener("click", () => runButton("people-aircraft-bulk-apply", "Saving…", async () => {
+      if (!bulkApplyAircraftCheckouts0116V()) return;
+      await saveSelected({ silentSuccess: true });
+      if (dirty) {
+        setBulkStatusMessage0116T("Fix the highlighted fields before saving.", "warn");
         return;
       }
-      const bulkAuthorized = bool($("people-aircraft-bulk-authorized")?.checked);
-      const bulkCompleted = bulkAuthorized ? clean($("people-aircraft-bulk-completed")?.value || "") : "";
-      const bulkExpires = bulkAuthorized ? clean($("people-aircraft-bulk-expires")?.value || "") : "";
-      const bulkNotes = clean($("people-aircraft-bulk-notes")?.value || "");
-      selectedBoxes.forEach((box) => {
-        const domId = clean(box.getAttribute("data-aircraft-bulk-id"));
-        const authorizedEl = $(`people-aircraft-checkout-authorized-${domId}`);
-        const completedEl = $(`people-aircraft-checkout-completed-${domId}`);
-        const expiresEl = $(`people-aircraft-checkout-expires-${domId}`);
-        const notesEl = $(`people-aircraft-checkout-notes-${domId}`);
-        if (authorizedEl) authorizedEl.checked = bulkAuthorized;
-        if (completedEl) completedEl.value = bulkCompleted;
-        if (expiresEl) expiresEl.value = bulkExpires;
-        if (bulkNotes && notesEl) notesEl.value = bulkNotes;
-      });
-      setDirty(true);
-      setBulkStatusMessage0116T(`Applied to ${selectedBoxes.length} aircraft. Save to keep these changes.`, "ok");
-    });
+      const refreshedPanel = $("people-aircraft-bulk-panel");
+      const refreshedToggle = $("people-aircraft-bulk-toggle");
+      if (refreshedPanel) refreshedPanel.hidden = true;
+      if (refreshedToggle) refreshedToggle.textContent = "Bulk update";
+      setMessage("Aircraft checkouts saved.", "ok");
+    }));
   }
+
 
   function bindAssetCheckoutEvents0116S() {
     document.querySelectorAll("[data-aircraft-checkout-field] input, [data-aircraft-checkout-field] select, [data-aircraft-checkout-field] textarea").forEach((input) => {
@@ -2230,7 +2312,7 @@
     const tab = key(activeTab || "identity") || "identity";
 
     return `<section class="people-editor-panel people-editor">
-      <div class="people-editor-head"><div><h3>${esc(displayPreview)}</h3><div class="people-pill-row">${pill(row.lifecycle_status_label || row.lifecycle_status_key, row.blocks_access ? "warn" : "")}${pill(row.membership_class_label)}${pill(row.application_stage_label)}${hasAnyRole(row, ["organization-super-admin", "organization-admin"]) ? pill("Admin", "ok") : ""}${row.login_linked ? pill("Login linked","ok") : pill("No login yet","warn")}</div></div></div>
+      <div class="people-editor-head"><div><h3>${esc(displayPreview)}</h3><div class="people-pill-row">${pill(row.lifecycle_status_label || row.lifecycle_status_key, row.blocks_access ? "warn" : "")}${pill(row.membership_class_label)}${pill(row.application_stage_label)}${hasAnyRole(row, ["organization-super-admin", "organization-admin"]) ? pill("Admin", "ok") : ""}${personQualificationAttention(row).has_attention ? pill(personQualificationAttention(row).label || "Qualifications need attention", "alert") : ""}${row.login_linked ? pill("Login linked","ok") : pill("No login yet","warn")}</div></div></div>
       ${!mayEdit ? `<p class="people-warning">You can view this roster, but you do not have permission to edit people.</p>` : ""}
       <div class="people-tabs" role="tablist">${tabRows.map(([id,label]) => `<button class="people-tab ${tab === id ? "active" : ""}" data-tab="${esc(id)}" type="button" role="tab" aria-selected="${tab === id ? "true" : "false"}">${esc(label)}</button>`).join("")}</div>
       <div class="people-tab-panel ${tab === "identity" ? "active" : ""}" data-tab-panel="identity" ${tab === "identity" ? "" : "hidden"}><div class="people-form-grid">${renderPersonPhoto(row, mayEdit)}${input("people-first-name","Legal first name",row.first_name)}${input("people-preferred-first-name","Preferred first name",preferred)}${input("people-middle-name","Middle name / initial",middle)}${input("people-last-name","Last name",row.last_name)}${input("people-suffix","Suffix",suffix)}${input("people-display-name-preview","Display name",displayPreview,"text","Calculated from preferred/legal first name and last name.","readonly")}${input("people-primary-email","Primary email",row.primary_email,"email","Used for login/contact when linked to an auth account.","inputmode=\"email\" autocomplete=\"email\"")}${input("people-member-number","Member / account number",row.member_number)}${input("people-title","Title / position",row.title)}</div></div>
@@ -2265,7 +2347,7 @@
       .people-card{padding:18px;margin:12px 0}.people-hero{display:${embeddedMode ? "none" : "block"};background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.78)});color:#fff}.people-hero h1{margin:8px 0;color:#fff;font-size:clamp(28px,4vw,42px);letter-spacing:-.035em}.people-hero p{color:rgba(255,255,255,.9);max-width:900px}.people-eyebrow,.people-kicker{display:inline-flex;padding:5px 10px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:11px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.people-hero .people-eyebrow{background:rgba(255,255,255,.16);color:#fff}
       .people-module-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:15px 17px;margin:0 0 10px;border-top:3px solid var(--people-primary)}.people-module-header h2{margin:6px 0 4px;font-size:25px;line-height:1.1;color:#101828}.people-module-header p{margin:0;color:var(--people-muted);font-weight:650}.people-header-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
       .people-workbench{display:grid;grid-template-columns:330px minmax(0,1fr);gap:10px;align-items:start}.people-list-panel{padding:12px;position:sticky;top:10px;max-height:calc(100vh - 24px);overflow:auto}.people-list-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}.people-list-head h3,.people-editor-head h3{margin:0;font-size:21px;color:#101828}.people-list-head p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-toolbar-row,.people-inline-actions,.people-action-buttons,.people-pill-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.people-toolbar-row{margin:8px 0 10px}.people-btn,.people-icon-btn,.people-link-btn{border:0;border-radius:999px;background:var(--people-primary);color:#fff;font-weight:900;padding:10px 14px;cursor:pointer;text-decoration:none;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}.people-btn:hover,.people-person-card:hover{transform:translateY(-1px)}.people-btn.secondary,.people-btn.outline{background:#fff;color:var(--people-primary);border:1px solid var(--people-primary)}.people-btn.danger{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.people-btn:disabled{opacity:.55;cursor:not-allowed;transform:none}.people-link-btn{background:transparent;color:var(--people-primary);text-decoration:underline;padding:8px}.people-message{margin-top:12px;padding:10px 12px;border-radius:12px;background:var(--people-soft);color:var(--people-primary);font-weight:850}.people-message:empty{display:none}.people-message.ok{background:#ecfdf5;color:#047857}.people-message.warn,.people-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:12px;padding:10px 12px}.people-action-status{display:block;margin-top:3px;color:var(--people-muted);font-size:12px;line-height:1.25}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}.people-context-single{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);padding:9px 12px;border-radius:999px;font-weight:900}.muted{color:var(--people-muted)}
-      .people-field{display:grid;gap:6px;font-weight:850}.people-field span{font-size:13px}.people-field small{font-weight:600;color:var(--people-muted);line-height:1.35}.people-field input,.people-field select,.people-field textarea,.people-search-wrap input,#people-org-select{width:100%;border:1px solid var(--people-border);border-radius:12px;background:#fff;color:var(--people-text);padding:10px 12px;font:inherit;min-height:42px}.people-field textarea{min-height:104px;resize:vertical}.people-field input[readonly],.people-field input:disabled,.people-field select:disabled{background:#f8fafc;color:var(--people-muted);cursor:not-allowed}.people-field-wide{grid-column:1/-1}.field-error{color:#b91c1c!important;font-weight:900!important}.people-field.disabled-field{opacity:.72}.people-status-filter,.people-role-filter,.people-login-filter{margin:10px 0}.people-advanced-filters{display:grid;gap:8px;margin:6px 0 10px}.people-advanced-toggle{justify-self:start;padding-left:0}.people-active-filters{display:flex;gap:7px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--people-muted);font-weight:850}.people-filter-chip{border:1px solid var(--people-border);border-radius:999px;background:var(--people-soft);color:var(--people-primary);font:inherit;font-size:12px;font-weight:900;padding:5px 9px;cursor:pointer}.people-advanced-panel{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:10px}.people-search-wrap{position:relative;margin:10px 0}.people-search-wrap input{padding-right:44px}.people-icon-btn{position:absolute;right:6px;top:5px;width:32px;height:32px;padding:0;background:var(--people-soft);color:var(--people-primary)}.people-sort-hint{font-size:12px;color:var(--people-muted);font-weight:750;margin:8px 0 10px}.people-compact-list{display:grid;gap:7px;max-height:calc(100vh - 320px);min-height:240px;overflow:auto;padding:3px 2px 8px;overscroll-behavior:contain;align-content:start;grid-auto-rows:max-content}.people-person-card{text-align:left;border:1px solid var(--people-border);border-radius:13px;background:#fff;color:var(--people-text);padding:10px;display:grid;gap:8px;cursor:pointer;box-shadow:0 3px 11px ${rgba(cfg.primary,.04)};align-self:start}.people-person-card .person-badges{align-items:flex-start}.people-person-card .person-badges em{align-self:flex-start}.people-person-card.selected{border-color:var(--people-primary);box-shadow:0 0 0 3px var(--people-strong-soft)}.people-person-card.archived{opacity:.58;background:#f8fafc}.people-person-card.restricted:not(.archived){border-color:#fed7aa;background:#fff7ed}.person-main{display:grid;gap:3px;min-width:0}.person-main strong{font-weight:950;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-main small{color:var(--people-muted);font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-badges{display:flex;gap:4px;flex-wrap:wrap}.person-badges em{font-style:normal;font-size:10px;font-weight:900;border-radius:999px;padding:3px 6px;background:var(--people-soft);color:var(--people-primary)}.people-empty-row{border:1px dashed var(--people-border);border-radius:13px;padding:18px;text-align:center;color:var(--people-muted);background:#fff}.people-empty-row.compact{padding:12px;text-align:left}.people-empty{min-height:380px;display:grid;align-content:center;text-align:center;padding:24px}
+      .people-field{display:grid;gap:6px;font-weight:850}.people-field span{font-size:13px}.people-field small{font-weight:600;color:var(--people-muted);line-height:1.35}.people-field input,.people-field select,.people-field textarea,.people-search-wrap input,#people-org-select{width:100%;border:1px solid var(--people-border);border-radius:12px;background:#fff;color:var(--people-text);padding:10px 12px;font:inherit;min-height:42px}.people-field textarea{min-height:104px;resize:vertical}.people-field input[readonly],.people-field input:disabled,.people-field select:disabled{background:#f8fafc;color:var(--people-muted);cursor:not-allowed}.people-field-wide{grid-column:1/-1}.field-error{color:#b91c1c!important;font-weight:900!important}.people-field.disabled-field{opacity:.72}.people-status-filter,.people-role-filter,.people-login-filter{margin:10px 0}.people-advanced-filters{display:grid;gap:8px;margin:6px 0 10px}.people-advanced-toggle{justify-self:start;padding-left:0}.people-active-filters{display:flex;gap:7px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--people-muted);font-weight:850}.people-filter-chip{border:1px solid var(--people-border);border-radius:999px;background:var(--people-soft);color:var(--people-primary);font:inherit;font-size:12px;font-weight:900;padding:5px 9px;cursor:pointer}.people-advanced-panel{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:10px}.people-search-wrap{position:relative;margin:10px 0}.people-search-wrap input{padding-right:44px}.people-icon-btn{position:absolute;right:6px;top:5px;width:32px;height:32px;padding:0;background:var(--people-soft);color:var(--people-primary)}.people-sort-hint{font-size:12px;color:var(--people-muted);font-weight:750;margin:8px 0 10px}.people-compact-list{display:grid;gap:7px;max-height:calc(100vh - 320px);min-height:240px;overflow:auto;padding:3px 2px 8px;overscroll-behavior:contain;align-content:start;grid-auto-rows:max-content}.people-person-card{text-align:left;border:1px solid var(--people-border);border-radius:13px;background:#fff;color:var(--people-text);padding:10px;display:grid;gap:8px;cursor:pointer;box-shadow:0 3px 11px ${rgba(cfg.primary,.04)};align-self:start}.people-person-card .person-badges{align-items:flex-start}.people-person-card .person-badges em{align-self:flex-start}.people-person-card.selected{border-color:var(--people-primary);box-shadow:0 0 0 3px var(--people-strong-soft)}.people-person-card.archived{opacity:.58;background:#f8fafc}.people-person-card.restricted:not(.archived){border-color:#fed7aa;background:#fff7ed}.person-main{display:grid;gap:3px;min-width:0}.person-main strong{font-weight:950;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-main small{color:var(--people-muted);font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.person-badges{display:flex;gap:4px;flex-wrap:wrap}.person-badges em{font-style:normal;font-size:10px;font-weight:900;border-radius:999px;padding:3px 6px;background:var(--people-soft);color:var(--people-primary)}.people-filter-chip.alert{background:#fee2e2!important;border-color:#fecaca!important;color:#991b1b!important}.person-badges em.alert,.people-person-card.qualification-attention .person-badges em.alert{background:#fee2e2!important;color:#991b1b!important;border:1px solid #fecaca}.people-person-card.qualification-attention:not(.selected){border-color:#fecaca}.people-pill.alert{background:#fee2e2;color:#991b1b}.people-advanced-panel{grid-template-columns:1fr;display:grid;gap:10px}.people-empty-row{border:1px dashed var(--people-border);border-radius:13px;padding:18px;text-align:center;color:var(--people-muted);background:#fff}.people-empty-row.compact{padding:12px;text-align:left}.people-empty{min-height:380px;display:grid;align-content:center;text-align:center;padding:24px}
       .people-editor-panel{min-width:0;padding:0;overflow:hidden}.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:15px 17px;border-bottom:1px solid var(--people-border)}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}.people-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--people-border);background:#fcfcfd}.people-tab{border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-weight:900;padding:8px 11px;cursor:pointer}.people-tab.active{background:var(--people-primary);color:#fff;border-color:var(--people-primary)}.people-tab-panel{padding:16px}.people-tab-panel[hidden]{display:none!important}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}.people-access-status-grid{padding-bottom:8px}.people-affiliation-grid{padding-top:8px;border-top:1px solid var(--people-border)}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;margin:10px 0 14px}.primary-pick{min-height:42px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:12px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border:1px solid var(--people-border);border-radius:12px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-access-callout{display:flex;justify-content:space-between;gap:14px;align-items:center;border:1px solid var(--people-border);border-radius:13px;background:var(--people-soft);padding:12px;margin-bottom:14px}.people-access-callout p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-access-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 14px}.people-access-summary>div{border:1px solid var(--people-border);border-radius:12px;background:#fff;padding:10px;display:grid;gap:3px}.people-access-summary span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-access-summary strong{font-size:13px;line-height:1.25}.people-role-assignment-wrap{display:grid;gap:12px}.people-role-section{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px}.people-role-section-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}.people-role-section-head h4{margin:0;color:#101828;font-size:15px}.people-role-section-head span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-role-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.people-qualification-panel,.people-aviation-details{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px;margin-bottom:14px}.people-qualification-list{display:grid;gap:10px}.people-qualification-row{display:grid;grid-template-columns:minmax(180px,1.5fr) minmax(120px,.8fr) minmax(120px,.8fr) minmax(120px,.8fr) minmax(160px,1fr);gap:10px;align-items:end;border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:10px}.people-qualification-row.selected{background:var(--people-soft);border-color:var(--people-primary)}.people-qualification-check{display:flex;gap:9px;align-items:flex-start;font-weight:900;color:var(--people-primary)}.people-qualification-check input{width:auto;margin-top:3px}.people-qualification-check span{display:grid;gap:3px}.people-qualification-check small{font-weight:750;color:var(--people-muted);line-height:1.25}.people-qualification-notes{min-width:0}.people-inline-actions{margin:10px 0}.people-action-row{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid var(--people-border);padding:12px 14px;background:#fcfcfd}.people-save-state{display:grid;gap:2px;font-weight:900;color:var(--people-muted)}.people-save-state.dirty{color:#9a3412}.people-photo-panel{grid-column:1/-1;display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;align-items:center;border:1px dashed var(--people-border);border-radius:14px;background:var(--people-soft);padding:14px}.people-photo-panel.dragover{box-shadow:0 0 0 3px var(--people-strong-soft);border-color:var(--people-primary)}.people-photo-preview{width:132px;height:132px;border-radius:18px;background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--people-border);box-shadow:0 10px 26px ${rgba(cfg.primary,.16)}}.people-photo-preview img{width:100%;height:100%;object-fit:cover;display:block}.people-photo-preview span{font-size:38px;font-weight:950;letter-spacing:.03em}.people-photo-copy strong{display:block;color:var(--people-primary);font-size:15px;margin-bottom:4px}.people-photo-copy p{margin:0 0 8px;color:var(--people-muted);font-weight:750}.people-photo-copy small{display:block;color:var(--people-muted);font-weight:750;margin-bottom:10px}.people-photo-actions{display:flex;gap:8px;flex-wrap:wrap}.people-timeline-list{display:grid;gap:10px;margin-top:10px}.people-note-card{border-left:4px solid var(--people-primary);background:#f8fafc;border-radius:12px;padding:10px}.people-note-card strong{display:block;color:var(--people-primary)}.people-note-card span{font-size:12px;color:#64748b;font-weight:800}.people-note-card p{margin:6px 0;white-space:pre-wrap}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:12px;padding:14px;font-size:12px;max-height:260px;overflow:auto}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}.people-def-row{padding:0;display:grid;grid-template-columns:30px minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab}.people-def-row.dragging{opacity:.55}.people-def-row.drag-over{outline:2px dashed var(--people-primary);outline-offset:2px}.people-def-drag-handle{display:flex;align-items:center;justify-content:center;color:var(--people-muted);font-weight:950;letter-spacing:-5px;background:#f8fafc;border-right:1px solid var(--people-border);cursor:grab;user-select:none}.people-def-row .people-def-main{border:0;background:transparent;text-align:left;padding:10px;display:grid;gap:7px;cursor:pointer;color:inherit}.people-def-order{display:flex;flex-direction:column;justify-content:space-between;border-left:1px solid var(--people-border);background:#f8fafc}.people-order-button{border:0;background:#f8fafc;color:var(--people-primary);font-weight:950;width:34px;min-height:32px;cursor:pointer}.people-order-button:first-child{border-bottom:1px solid var(--people-border)}.people-order-button:last-child{border-top:1px solid var(--people-border)}.people-order-button:disabled{opacity:.35;cursor:not-allowed}.people-info-btn{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:5px;border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-size:11px;font-weight:950;line-height:1;vertical-align:middle;padding:0;cursor:help}.people-def-editor .people-tab-panel>.people-form-grid{grid-template-columns:1fr}.people-def-editor .people-form-grid .people-form-grid{grid-template-columns:repeat(3,minmax(0,1fr));}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}.people-soft-note{background:var(--people-soft);color:var(--people-primary);border:1px solid var(--people-border);border-radius:12px;padding:10px 12px;font-weight:750}.people-permission-role-list{min-height:240px}.people-permission-groups{display:grid;gap:12px}.people-permission-group{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px}.people-permission-group h4{margin:0 0 10px;font-size:16px;color:#101828}.people-permission-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.people-permission-capability{display:flex;align-items:center;gap:9px;border:1px solid var(--people-border);border-radius:12px;background:#fff;padding:10px;font-weight:850;min-height:44px}.people-permission-capability.enabled{background:var(--people-soft);border-color:var(--people-primary);color:var(--people-primary)}.people-permission-capability.locked{opacity:.72}.people-permission-capability input{width:16px;height:16px;accent-color:var(--people-primary)}.people-qualification-profile-list{display:grid;gap:10px}.people-qualification-profile-field{display:grid;grid-template-columns:minmax(160px,.65fr) minmax(0,1.5fr);gap:12px;align-items:start}.people-qualification-label strong{display:block;color:#101828;font-size:14px}.people-qualification-label small{display:block;color:var(--people-muted);font-weight:700;margin-top:3px}.people-qualification-controls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:end}.people-qualification-check.compact{align-self:end;min-height:44px}.people-qualification-notes{min-width:0}.people-qualification-title{display:grid;gap:3px;min-width:180px}.people-qualification-title strong{font-size:14px;color:#101828}.people-qualification-title small{color:var(--people-muted);font-weight:750}.people-qualification-fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;align-items:end;flex:1}.people-qualification-row{display:flex;gap:12px;align-items:flex-start}.people-qualification-row.selected{border-color:var(--people-primary);background:var(--people-soft)}.people-qualification-toggle{margin:0;min-height:42px}.people-aviation-details{border:1px solid var(--people-border);border-radius:14px;background:#fff;padding:12px;margin-top:14px}.people-qualification-grid-panel{overflow:hidden}.people-qualification-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}.people-qualification-table{min-width:1040px;display:grid;border:1px solid var(--people-border);border-radius:13px;overflow:hidden;background:#fff}.people-qualification-table-row{display:grid;grid-template-columns:minmax(190px,1.12fr) minmax(165px,.85fr) minmax(155px,.8fr) minmax(190px,.9fr) minmax(185px,1fr);align-items:center;border-bottom:1px solid var(--people-border);background:#fff}.people-qualification-table-row:last-child{border-bottom:0}.people-qualification-table-row>div{min-width:0;padding:9px 10px}.people-qualification-table-head{background:#f8fafc;color:var(--people-muted);font-size:11px;font-weight:950;text-transform:uppercase;letter-spacing:.045em}.people-qualification-title{display:block}.people-qualification-title strong{display:block;font-size:13px;color:#101828;line-height:1.18}.people-qualification-title small{display:block;color:var(--people-muted);font-weight:750;line-height:1.18;margin-top:1px}.people-qualification-title em{display:inline-flex;margin-top:4px;border:1px solid var(--people-border);border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-style:normal;font-size:10px;font-weight:950;padding:2px 6px}.people-reservation-readiness{border:1px solid var(--people-border);border-radius:12px;padding:10px 12px;margin:0 0 10px;background:#fff;display:grid;gap:5px}.people-reservation-readiness.ok{background:#f0fdf4;border-color:#bbf7d0}.people-reservation-readiness.warn{background:#fff7ed;border-color:#fed7aa}.people-reservation-readiness strong{font-size:14px}.people-reservation-readiness p{margin:0;color:var(--people-muted);font-weight:750}.people-reservation-readiness ul{margin:2px 0 0 18px;padding:0;color:#9a3412;font-weight:850}.people-qualification-cell-input{min-width:0}.people-qualification-cell-input .people-field{margin:0}.people-qualification-cell-input .people-field>span{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important}.people-qualification-cell-input input,.people-qualification-cell-input select{width:100%;min-height:36px}.people-qualification-cell-input .people-qualification-check{min-height:36px;align-items:center}.people-qualification-empty{display:inline-flex;align-items:center;min-height:36px;color:var(--people-muted);font-weight:850}.people-qualification-grid-field input,.people-qualification-grid-field select{font-size:13px}.people-qualification-table-row{grid-template-columns:minmax(210px,1.15fr) minmax(180px,.8fr) minmax(170px,.78fr) minmax(210px,.9fr) minmax(190px,1fr)!important;align-items:center}.people-qualification-table-row>div{display:block;align-self:stretch}.people-qualification-cell-input{display:flex;align-items:center;min-height:38px}.people-qualification-cell-input .people-qualification-check{display:grid;grid-template-columns:22px minmax(0,1fr);gap:8px;align-items:center;width:100%;margin:0;min-height:38px}.people-qualification-cell-input .people-qualification-check input{width:18px;height:18px;margin:0;justify-self:center;accent-color:var(--people-primary)}.people-qualification-cell-input .people-qualification-check span{display:block;min-width:0}.people-qualification-cell-input .people-qualification-check strong{font-size:12px;line-height:1.15;color:var(--people-primary)}.people-qualification-cell-input input[type="date"],.people-qualification-cell-input input[type="text"],.people-qualification-cell-input select{height:38px;box-sizing:border-box}.people-qualification-table-head>div{display:flex;align-items:center}.people-qualification-title strong,.people-qualification-title small{display:block!important;white-space:normal}.people-qualification-title strong{margin:0 0 1px}.people-readiness-card{border:1px solid var(--people-border);border-radius:14px;background:#fff;padding:12px 14px;margin:0 0 12px;display:flex;align-items:flex-start;justify-content:space-between;gap:14px}.people-readiness-card strong{display:block;font-size:14px;color:#101828}.people-readiness-card p{margin:3px 0 0;color:var(--people-muted);font-weight:750}.people-readiness-card ul{margin:8px 0 0 18px;padding:0;color:#92400e;font-weight:800}.people-readiness-card>span{white-space:nowrap;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:950}.people-readiness-card.ready{background:#f0fdf4;border-color:#bbf7d0}.people-readiness-card.ready>span{background:#dcfce7;color:#166534}.people-readiness-card.warn{background:#fffbeb;border-color:#fed7aa}.people-readiness-card.warn>span{background:#fef3c7;color:#92400e}
 .people-readiness-card{border:1px solid var(--people-border);border-radius:12px;padding:10px 12px;margin:0 0 10px;background:#fff;display:grid;gap:3px}.people-readiness-card.ok{background:#f0fdf4;border-color:#bbf7d0}.people-readiness-card.warn{background:#fff7ed;border-color:#fed7aa}.people-readiness-card strong{font-size:13px;color:#101828}.people-readiness-card span{font-weight:950;color:var(--people-primary)}.people-readiness-card small{color:var(--people-muted);font-weight:750;line-height:1.25}.people-qualification-title strong,.people-qualification-title small{display:block!important}.people-qualification-title strong+small{margin-top:1px}.people-qualification-grid-panel .people-role-section-head span{display:none}.people-readiness-card{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;align-items:center;border:1px solid var(--people-border);border-radius:12px;padding:10px 12px;margin:0 0 10px;background:#fff}.people-readiness-card strong{color:#101828}.people-readiness-card span{font-weight:950}.people-readiness-card small{grid-column:2;color:var(--people-muted);font-weight:750}.people-readiness-card.ok{background:var(--people-soft);border-color:var(--people-border)}.people-readiness-card.ok span{color:var(--people-primary)}.people-readiness-card.warn{background:#fff7ed;border-color:#fed7aa}.people-readiness-card.warn span{color:#9a3412}.people-qualification-table-row>div.people-qualification-title{display:grid!important;gap:2px!important;align-content:center!important}.people-qualification-table-row>div.people-qualification-title strong{display:block!important;line-height:1.2!important}.people-qualification-table-row>div.people-qualification-title small{display:block!important;line-height:1.25!important;margin-top:0!important}.people-qualification-table-row .people-qualification-title{display:grid!important;gap:1px!important;align-content:center!important}.people-qualification-table-row .people-qualification-title strong,.people-qualification-table-row .people-qualification-title small{display:block!important}
 
@@ -2283,7 +2365,7 @@
     const el = ensureRoot();
     if (!el) return;
     const cfg = styleConfig(selectedRow());
-    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, active_people_lens: activePeopleLens, active_definition_kind: activeDefinitionKind, selected_permission_role_id: selectedPermissionRoleId, role_filter: roleFilter, login_filter: loginFilter, people_count: people.length, definition_counts: { statuses: arr(definitionLists.statuses).length, membership_classes: arr(definitionLists.membership_classes).length, application_stages: arr(definitionLists.application_stages).length, groups_roles: arr(definitionLists.groups_roles).length, permissions: arr(definitionLists.permissions).length, qualifications: arr(definitionLists.qualifications).length }, cache_ttl_ms: PEOPLE_CACHE_TTL_MS, parent_script_load_ms: mountOptions.scriptLoadMs || null, load_timings: loadTimings, backend: backend || {} }, null, 2))}</pre></details>` : "";
+    const diagnostics = currentDebugEnabled() ? `<details class="people-card"><summary>Diagnostics</summary><pre class="people-backend">${esc(JSON.stringify({ version: VERSION, embedded: embeddedMode, organization_id: selectedOrgId, active_tab: activeTab, active_people_lens: activePeopleLens, active_definition_kind: activeDefinitionKind, selected_permission_role_id: selectedPermissionRoleId, role_filter: roleFilter, login_filter: loginFilter, qualification_filter: qualificationFilter, people_count: people.length, definition_counts: { statuses: arr(definitionLists.statuses).length, membership_classes: arr(definitionLists.membership_classes).length, application_stages: arr(definitionLists.application_stages).length, groups_roles: arr(definitionLists.groups_roles).length, permissions: arr(definitionLists.permissions).length, qualifications: arr(definitionLists.qualifications).length }, cache_ttl_ms: PEOPLE_CACHE_TTL_MS, parent_script_load_ms: mountOptions.scriptLoadMs || null, load_timings: loadTimings, backend: backend || {} }, null, 2))}</pre></details>` : "";
     el.innerHTML = `<style>${peopleStyles(cfg)}</style><div class="people-wrap"><section class="people-card people-hero"><div class="people-eyebrow">Organization Admin</div><h1>${esc(clean(pageConfig?.title) || "People & Access")}</h1><p>${esc(clean(pageConfig?.intro_text) || "Search the full people pool, manage members and applicants, keep contact information current, and handle safe access updates from one place.")}</p><div class="people-message ${esc(messageKind)}">${esc(message)}</div></section>${renderContent()}${diagnostics}</div>`;
     bindEvents();
     restorePeopleSearchFocus();
@@ -2341,9 +2423,11 @@
     $("people-advanced-filters-toggle")?.addEventListener("click", () => { advancedFiltersOpen = !advancedFiltersOpen; render(); });
     document.querySelectorAll("[data-clear-role-filter]").forEach((btn) => btn.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); roleFilter = "all"; render(); }));
     document.querySelectorAll("[data-clear-login-filter]").forEach((btn) => btn.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); loginFilter = "all"; render(); }));
-    $("people-clear-advanced-filters")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); roleFilter = "all"; loginFilter = "all"; advancedFiltersOpen = false; render(); });
-    $("people-role-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = roleFilter; return; } setDirty(false); roleFilter = key(e.target.value || "all") || "all"; advancedFiltersOpen = roleFilter !== "all" || loginFilter !== "all"; render(); });
-    $("people-login-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = loginFilter; return; } setDirty(false); loginFilter = key(e.target.value || "all") || "all"; advancedFiltersOpen = roleFilter !== "all" || loginFilter !== "all"; render(); });
+    document.querySelectorAll("[data-clear-qualification-filter]").forEach((btn) => btn.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); qualificationFilter = "all"; render(); }));
+    $("people-clear-advanced-filters")?.addEventListener("click", () => { if (!confirmDiscard()) return; setDirty(false); roleFilter = "all"; loginFilter = "all"; qualificationFilter = "all"; advancedFiltersOpen = false; render(); });
+    $("people-role-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = roleFilter; return; } setDirty(false); roleFilter = key(e.target.value || "all") || "all"; advancedFiltersOpen = roleFilter !== "all" || loginFilter !== "all" || qualificationFilter !== "all"; render(); });
+    $("people-login-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = loginFilter; return; } setDirty(false); loginFilter = key(e.target.value || "all") || "all"; advancedFiltersOpen = roleFilter !== "all" || loginFilter !== "all" || qualificationFilter !== "all"; render(); });
+    $("people-qualification-filter-select")?.addEventListener("change", (e) => { if (!confirmDiscard()) { e.target.value = qualificationFilter; return; } setDirty(false); qualificationFilter = key(e.target.value || "all") || "all"; advancedFiltersOpen = roleFilter !== "all" || loginFilter !== "all" || qualificationFilter !== "all"; render(); });
     $("people-search")?.addEventListener("input", (e) => { clearTimeout(debounceTimer); peopleSearchRestore = { start: e.target.selectionStart, end: e.target.selectionEnd }; debounceTimer = setTimeout(() => { search = e.target.value || ""; render(); }, 300); });
     $("people-clear-search")?.addEventListener("click", () => { search = ""; render(); });
     document.querySelectorAll("[data-open]").forEach((btn) => btn.addEventListener("click", () => runButton("people-refresh", "Opening…", async () => { if (!confirmDiscard()) return; setDirty(false); message = ""; messageKind = ""; const id = btn.getAttribute("data-open"); await loadSelectedPerson(id); fieldErrors = {}; render(); })));
@@ -2471,7 +2555,7 @@
   }
 
 
-  async function saveSelected() {
+  async function saveSelected(saveOptions = {}) {
     if (!validateForm()) { setMessage("Fix the highlighted fields before saving.", "warn"); return; }
     const payload = readForm();
     const restrictive = ["suspended","expelled","archived","blocked"].includes(key(payload.status_key));
@@ -2487,7 +2571,7 @@
     if (savedMembershipId) await loadSelectedPerson(savedMembershipId);
     else if (selected?.membership_id) selected = people.find((p) => p.membership_id === selected.membership_id) || selected;
     fieldErrors = {};
-    setMessage("Person saved.", "ok");
+    if (!obj(saveOptions).silentSuccess) setMessage("Person saved.", "ok");
   }
 
   async function sendInvite() {

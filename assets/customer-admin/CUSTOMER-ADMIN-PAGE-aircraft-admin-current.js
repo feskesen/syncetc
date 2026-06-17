@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-17-117-A
+// Internal Version: 2026-06-17-117-B
 // Purpose: Customer/organization-side Aircraft Admin foundation. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-17-117-A";
+  const VERSION = "2026-06-17-117-B";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -1209,9 +1209,28 @@
   function qualificationDescription0117A(q) { return clean(q && (q.description || qualificationSettings0117A(q).description)); }
   function qualificationDefinitionId0117A(q) { return clean(q && (q.qualification_definition_id || q.definition_id)); }
 
+  function isGeneralReservationRequirement0117B(q) {
+    const settings = qualificationSettings0117A(q);
+    return settings.required_to_reserve === true || settings.required_to_reserve === "true";
+  }
+
+  function qualificationDefinitionById0117B() {
+    const map = new Map();
+    activeQualificationDefinitions0117A().forEach((q) => {
+      const id = qualificationDefinitionId0117A(q);
+      if (id) map.set(id, q);
+    });
+    return map;
+  }
+
   function selectedAssetRequirementRows0117A() {
     const assetId = clean(state.draft && state.draft.operational_asset_id) || state.selectedAircraftId;
-    return arr(state.assetQualificationRequirements).filter(r => !r.archived_at && clean(r.operational_asset_id || r.asset_id) === clean(assetId));
+    const definitionsById = qualificationDefinitionById0117B();
+    return arr(state.assetQualificationRequirements).filter((r) => {
+      if (r.archived_at || clean(r.operational_asset_id || r.asset_id) !== clean(assetId)) return false;
+      const definition = definitionsById.get(clean(r.qualification_definition_id || r.definition_id));
+      return !isGeneralReservationRequirement0117B(definition);
+    });
   }
 
   function requirementMap0117A() {
@@ -1271,11 +1290,73 @@
     const status = clean(row.checkout_status || row.status || "").toLowerCase();
     if (!checkoutCurrent0117A(row)) {
       const expires = clean(row.expires_at || row.expiration_date || row.current_through || "").slice(0,10);
-      if (["approved", "active", "checked-out", "checked_out", "authorized", "current"].includes(status) && expires && expires < new Date().toISOString().slice(0,10)) return "Expired";
-      return "Not authorized";
+      if (["approved", "active", "checked-out", "checked_out", "authorized", "current"].includes(status) && expires && expires < todayIso0117B()) return "Checkout expired";
+      return "No current checkout";
     }
     const expires = clean(row.expires_at || row.expiration_date || row.current_through || "").slice(0,10);
-    return expires ? `Authorized until ${expires}` : "Authorized";
+    return expires ? `Checkout current until ${expires}` : "Checkout current";
+  }
+
+  function todayIso0117B() { return new Date().toISOString().slice(0,10); }
+
+  function assignmentForPilotQualification0117B(definition, pilot) {
+    const id = qualificationDefinitionId0117A(definition);
+    const qKey = keyify(qualificationLabel0117A(definition) || definition.qualification_key);
+    return arr(pilot.qualification_assignments || pilot.person_qualification_assignments).map(obj).find((assignment) => {
+      const aid = clean(assignment.qualification_definition_id || assignment.definition_id);
+      const akey = keyify(assignment.qualification_key || assignment.definition_key || "");
+      return (id && aid === id) || (qKey && akey && akey === qKey);
+    }) || null;
+  }
+
+  function pilotQualificationStatus0117B(definition, pilot) {
+    const assignment = assignmentForPilotQualification0117B(definition, pilot);
+    if (!assignment) return { ok: false, reason: "missing" };
+    const settings = qualificationSettings0117A(definition);
+    const assignmentSettings = obj(assignment.settings_json);
+    const style = keyify(settings.field_style || assignmentSettings.field_style || "checkbox");
+    const status = keyify(assignment.assignment_status || assignment.status || "");
+    const optionValue = clean(assignmentSettings.option_value || assignment.option_value || assignment.class_value || "");
+    const issued = clean(assignment.issued_date || assignment.issued_at || "").slice(0,10);
+    const expires = clean(assignment.expiration_date || assignment.expires_at || "").slice(0,10);
+    const checked = bool(assignmentSettings.checked || assignment.checked || assignment.is_checked || assignment.current || assignment.approved);
+    const needsDate = bool(definition.requires_expiration_date || ["checkbox-expiration", "checkbox_expiration", "date-expiration", "date_expiration", "class-expiration", "class_expiration", "status-expiration", "status_expiration"].includes(style));
+    let hasValue = false;
+    if (["checkbox", "checkbox-expiration", "checkbox_expiration"].includes(style)) hasValue = checked || status === "active";
+    else if (["class-expiration", "class_expiration"].includes(style)) hasValue = Boolean(optionValue && keyify(optionValue) !== "none");
+    else if (["date-expiration", "date_expiration"].includes(style)) hasValue = Boolean(issued || expires);
+    else if (["status-expiration", "status_expiration"].includes(style)) hasValue = ["active", "waived"].includes(status);
+    else if (style === "notes") hasValue = Boolean(clean(assignment.notes));
+    else hasValue = checked || Boolean(optionValue || issued || expires || clean(assignment.notes)) || status === "active";
+    if (!hasValue) return { ok: false, reason: "missing" };
+    if (needsDate && (!expires || expires < todayIso0117B())) return { ok: false, reason: "expired" };
+    return { ok: true, reason: "ok" };
+  }
+
+  function requirementDefinitionSets0117B() {
+    const defs = activeQualificationDefinitions0117A();
+    const reqMap = requirementMap0117A();
+    const general = defs.filter(isGeneralReservationRequirement0117B);
+    const assetSpecific = defs.filter((q) => !isGeneralReservationRequirement0117B(q) && reqMap.has(qualificationDefinitionId0117A(q)));
+    return { defs, general, assetSpecific, all: [...general, ...assetSpecific] };
+  }
+
+  function pilotReadiness0117B(pilot, requiredDefinitions, checkoutRequired) {
+    const issues = [];
+    if (checkoutRequired && !checkoutCurrent0117A(pilot)) {
+      issues.push({ label: "Aircraft checkout", reason: clean(pilot.expires_at || pilot.expiration_date) ? "expired" : "missing" });
+    }
+    arr(requiredDefinitions).forEach((definition) => {
+      const result = pilotQualificationStatus0117B(definition, pilot);
+      if (!result.ok) issues.push({ label: qualificationLabel0117A(definition), reason: result.reason });
+    });
+    return { ready: issues.length === 0, issues };
+  }
+
+  function formatPilotRequirementIssues0117B(issues) {
+    const list = arr(issues);
+    if (!list.length) return "Requirements met";
+    return list.slice(0, 4).map((issue) => `${issue.reason === "expired" ? "Expired" : "Missing"}: ${issue.label}`).join("; ") + (list.length > 4 ? `; +${list.length - 4} more` : "");
   }
 
   function qualifiedPilotRows0117A() {
@@ -1286,48 +1367,63 @@
   function renderRequirementsTab0117A(d) {
     const assetId = clean(d && d.operational_asset_id);
     if (!assetId) return `<div class="aircraft-note"><strong>Save the aircraft first.</strong> Qualification requirements and qualified-pilot checkouts can be managed after this aircraft record exists.</div>`;
-    const defs = activeQualificationDefinitions0117A();
+    const sets = requirementDefinitionSets0117B();
+    const defs = sets.defs;
     const reqMap = requirementMap0117A();
     const checkouts = qualifiedPilotRows0117A();
-    const requiredCount = Array.from(reqMap.values()).length;
-    const currentPilotCount = checkouts.filter(checkoutCurrent0117A).length;
     const checkoutRequired = d.asset_specific_checkout_required !== false;
-    const reqRows = defs.length ? defs.map(q => {
+    const readinessRows = checkouts.map((pilot) => ({ pilot, readiness: pilotReadiness0117B(pilot, sets.all, checkoutRequired) }));
+    const readyCount = readinessRows.filter((row) => row.readiness.ready).length;
+    const attentionCount = readinessRows.filter((row) => !row.readiness.ready).length;
+    const inheritedRows = sets.general.length ? sets.general.map((q) => {
+      const desc = qualificationDescription0117A(q);
+      return `<div class="aircraft-req-row inherited" aria-disabled="true">
+        <span class="aircraft-locked-check">✓</span>
+        <span class="aircraft-req-copy"><strong>${esc(qualificationLabel0117A(q))}</strong>${desc ? `<small>${esc(desc)}</small>` : ""}<em>Required for all reservations</em></span>
+      </div>`;
+    }).join("") : `<div class="aircraft-empty">No organization-wide reservation requirements are configured.</div>`;
+    const editableDefs = defs.filter((q) => !isGeneralReservationRequirement0117B(q));
+    const reqRows = editableDefs.length ? editableDefs.map(q => {
       const qid = qualificationDefinitionId0117A(q);
-      const settings = qualificationSettings0117A(q);
       const checked = reqMap.has(qid);
       const desc = qualificationDescription0117A(q);
-      const general = settings.required_to_reserve === true || settings.required_to_reserve === "true";
       return `<label class="aircraft-req-row ${checked ? "selected" : ""}">
         <input type="checkbox" data-asset-qualification-requirement="${attr(qid)}" ${checked ? "checked" : ""}>
-        <span class="aircraft-req-copy"><strong>${esc(qualificationLabel0117A(q))}</strong>${desc ? `<small>${esc(desc)}</small>` : ""}${general ? `<em>General requirement</em>` : ""}</span>
+        <span class="aircraft-req-copy"><strong>${esc(qualificationLabel0117A(q))}</strong>${desc ? `<small>${esc(desc)}</small>` : ""}</span>
       </label>`;
-    }).join("") : `<div class="aircraft-empty">No active qualification definitions are available yet.</div>`;
-    const pilotRows = checkouts.length ? checkouts.map(row => {
-      const current = checkoutCurrent0117A(row);
-      const name = clean(row.person_name || row.display_name || row.member_name || row.email || row.person_email || "Person");
-      const email = clean(row.email || row.person_email || "");
-      const issued = clean(row.issued_at || row.issued_date || row.completed_at || "").slice(0,10) || "—";
-      const expires = clean(row.expires_at || row.expiration_date || row.current_through || "").slice(0,10) || "No expiration";
-      return `<div class="aircraft-qualified-row ${current ? "" : "needs-attention"}">
+    }).join("") : `<div class="aircraft-empty">No aircraft-specific qualification fields are available yet.</div>`;
+    const pilotRows = readinessRows.length ? readinessRows.map(({ pilot, readiness }) => {
+      const current = checkoutCurrent0117A(pilot);
+      const name = clean(pilot.person_name || pilot.display_name || pilot.member_name || pilot.email || pilot.person_email || "Person");
+      const email = clean(pilot.email || pilot.person_email || "");
+      const issued = clean(pilot.issued_at || pilot.issued_date || pilot.completed_at || "").slice(0,10) || "—";
+      const expires = clean(pilot.expires_at || pilot.expiration_date || pilot.current_through || "").slice(0,10) || "No expiration";
+      const issueText = formatPilotRequirementIssues0117B(readiness.issues);
+      return `<div class="aircraft-qualified-row ${readiness.ready ? "ready" : "needs-attention"}">
         <div><strong>${esc(name)}</strong>${email && email !== name ? `<small>${esc(email)}</small>` : ""}</div>
-        <div><span class="aircraft-list-badge ${current ? "active" : "inactive"}">${esc(checkoutStatusText0117A(row))}</span></div>
-        <div>${esc(issued)}</div><div>${esc(expires)}</div>
+        <div><span class="aircraft-list-badge ${current ? "active" : "inactive"}">${esc(checkoutStatusText0117A(pilot))}</span><small>${esc(issued)} · ${esc(expires)}</small></div>
+        <div><span class="aircraft-qualified-issues ${readiness.ready ? "ok" : "alert"}">${esc(issueText)}</span></div>
+        <div><span class="aircraft-list-badge ${readiness.ready ? "active" : "inactive"}">${readiness.ready ? "Ready" : "Needs attention"}</span></div>
       </div>`;
-    }).join("") : `<div class="aircraft-empty">No pilot checkouts have been recorded for this aircraft yet. Add them from Members / People → Aviation / Qualifications.</div>`;
+    }).join("") : `<div class="aircraft-empty">No aircraft checkouts have been recorded for this aircraft yet. Add them from Members / People → Aviation / Qualifications.</div>`;
     return `
       <div class="aircraft-requirements-summary">
-        <div><strong>${esc(requiredCount)}</strong><span>Required qualification${requiredCount === 1 ? "" : "s"}</span></div>
-        <div><strong>${esc(currentPilotCount)}</strong><span>Currently authorized pilot${currentPilotCount === 1 ? "" : "s"}</span></div>
+        <div><strong>${esc(sets.all.length)}</strong><span>Total requirement${sets.all.length === 1 ? "" : "s"}</span></div>
+        <div><strong>${esc(readyCount)}</strong><span>Ready pilot${readyCount === 1 ? "" : "s"}</span></div>
+        <div><strong>${esc(attentionCount)}</strong><span>Need attention</span></div>
       </div>
       <section class="aircraft-requirements-card">
-        <div class="aircraft-section-head compact"><div><h3>Required qualifications</h3><p>Select only the qualifications/checkouts required for this aircraft. General reservation requirements still apply.</p></div></div>
+        <div class="aircraft-section-head compact"><div><h3>Organization-wide requirements</h3><p>These apply to every aircraft reservation and are managed in People → Qualifications.</p></div></div>
+        <div class="aircraft-req-list inherited-list">${inheritedRows}</div>
+      </section>
+      <section class="aircraft-requirements-card">
+        <div class="aircraft-section-head compact"><div><h3>Aircraft-specific requirements</h3><p>Select only the extra qualifications or checkouts required for this aircraft.</p></div></div>
         <label class="aircraft-check aircraft-checkout-required"><input data-draft-key="asset_specific_checkout_required" type="checkbox" ${checkoutRequired ? "checked" : ""}> Specific aircraft checkout required</label>
         <div class="aircraft-req-list">${reqRows}</div>
       </section>
       <section class="aircraft-requirements-card">
-        <div class="aircraft-section-head compact"><div><h3>Qualified pilots</h3><p>Manage pilot checkouts from Members / People.</p></div></div>
-        <div class="aircraft-qualified-table"><div class="aircraft-qualified-row head"><div>Pilot</div><div>Authorization</div><div>Completed</div><div>Valid until</div></div>${pilotRows}</div>
+        <div class="aircraft-section-head compact"><div><h3>Qualified pilots</h3><p>This view checks aircraft checkout records against the requirements above. Manage person checkouts from Members / People.</p></div></div>
+        <div class="aircraft-qualified-table"><div class="aircraft-qualified-row head"><div>Pilot</div><div>Aircraft checkout</div><div>Requirements</div><div>Result</div></div>${pilotRows}</div>
       </section>`;
   }
 
@@ -1601,7 +1697,7 @@
         .aircraft-location-layout{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:12px;min-width:0;width:100%;overflow:hidden;}.aircraft-location-list-wrap{min-width:0;}.aircraft-list-tools{margin-bottom:8px;}.aircraft-list-tools input{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#172033;font-size:13px;}.aircraft-location-list{display:flex;flex-direction:column;gap:8px;}.aircraft-location-form{min-width:0;overflow:hidden;}.aircraft-status{padding:12px;border-radius:12px;border:1px solid #d6e0ec;background:#eef3f8;color:#26344d;margin-bottom:14px;}.aircraft-status.ok{background:#eaf7ef;color:#196f3b}.aircraft-status.error{background:#ffecec;color:var(--air-danger);border-color:#ffc6c6;}.aircraft-empty{border:1px dashed #cbd5e1;border-radius:12px;padding:14px;color:var(--air-muted);background:#f8fafc;}.aircraft-debug pre{background:#101827;color:#e7edf6;border-radius:12px;padding:12px;overflow:auto;font-size:12px;}
         @media(max-width:1180px){.aircraft-grid,.aircraft-grid.aircraft-only,.aircraft-location-layout{grid-template-columns:1fr;}.aircraft-filter-row,.aircraft-form-grid,.aircraft-check-grid{grid-template-columns:1fr;}.aircraft-wrap{padding:12px;}}
 
-        .aircraft-requirements-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}.aircraft-requirements-summary>div{border:1px solid #dfe9e2;background:#f7fbf8;border-radius:14px;padding:12px}.aircraft-requirements-summary strong{display:block;font-size:22px;color:var(--air-accent)}.aircraft-requirements-summary span{font-size:12px;color:var(--air-muted);font-weight:800}.aircraft-requirements-card{border:1px solid #dfe9e2;border-radius:14px;padding:12px;margin-bottom:12px;background:#fff}.aircraft-requirements-card h3{margin:0;font-size:15px}.aircraft-req-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;margin-top:10px}.aircraft-req-row{display:flex;gap:9px;align-items:flex-start;border:1px solid #dfe9e2;border-radius:12px;padding:9px;background:#fff;cursor:pointer}.aircraft-req-row.selected{border-color:var(--air-accent);background:#f3faf4}.aircraft-req-copy{display:flex;flex-direction:column;gap:2px;min-width:0}.aircraft-req-copy strong{font-size:13px}.aircraft-req-copy small{font-size:11px;color:var(--air-muted);line-height:1.25}.aircraft-req-copy em{font-style:normal;align-self:flex-start;border-radius:999px;padding:2px 7px;background:#eaf7ef;color:var(--air-accent);font-size:10px;font-weight:900}.aircraft-checkout-required{margin:8px 0 4px}.aircraft-qualified-table{display:grid;border:1px solid #e3ebdf;border-radius:12px;overflow:hidden}.aircraft-qualified-row{display:grid;grid-template-columns:minmax(180px,1.4fr) minmax(160px,1fr) minmax(100px,.7fr) minmax(120px,.8fr);gap:10px;align-items:center;padding:9px 10px;border-bottom:1px solid #e3ebdf;font-size:12px}.aircraft-qualified-row:last-child{border-bottom:0}.aircraft-qualified-row.head{background:#f7fbf8;text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-weight:900;color:#52606d}.aircraft-qualified-row small{display:block;color:var(--air-muted);font-size:11px;margin-top:2px}.aircraft-qualified-row.needs-attention{background:#fff7ed}.aircraft-list-badge.active{background:#eaf7ef;color:var(--air-accent)}.aircraft-list-badge.inactive{background:#f2f4f7;color:#475467}@media(max-width:760px){.aircraft-requirements-summary{grid-template-columns:1fr}.aircraft-qualified-table{overflow-x:auto}.aircraft-qualified-row{min-width:620px}}
+        .aircraft-requirements-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}.aircraft-requirements-summary>div{border:1px solid #dfe9e2;background:#f7fbf8;border-radius:14px;padding:12px}.aircraft-requirements-summary strong{display:block;font-size:22px;color:var(--air-accent)}.aircraft-requirements-summary span{font-size:12px;color:var(--air-muted);font-weight:800}.aircraft-requirements-card{border:1px solid #dfe9e2;border-radius:14px;padding:12px;margin-bottom:12px;background:#fff}.aircraft-requirements-card h3{margin:0;font-size:15px}.aircraft-req-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;margin-top:10px}.aircraft-req-row{display:flex;gap:9px;align-items:flex-start;border:1px solid #dfe9e2;border-radius:12px;padding:9px;background:#fff;cursor:pointer}.aircraft-req-row.selected{border-color:var(--air-accent);background:#f3faf4}.aircraft-req-copy{display:flex;flex-direction:column;gap:2px;min-width:0}.aircraft-req-copy strong{font-size:13px}.aircraft-req-copy small{font-size:11px;color:var(--air-muted);line-height:1.25}.aircraft-req-copy em{font-style:normal;align-self:flex-start;border-radius:999px;padding:2px 7px;background:#eaf7ef;color:var(--air-accent);font-size:10px;font-weight:900}.aircraft-checkout-required{margin:8px 0 4px}.aircraft-qualified-table{display:grid;border:1px solid #e3ebdf;border-radius:12px;overflow:hidden}.aircraft-qualified-row{display:grid;grid-template-columns:minmax(180px,1.4fr) minmax(160px,1fr) minmax(100px,.7fr) minmax(120px,.8fr);gap:10px;align-items:center;padding:9px 10px;border-bottom:1px solid #e3ebdf;font-size:12px}.aircraft-qualified-row:last-child{border-bottom:0}.aircraft-qualified-row.head{background:#f7fbf8;text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-weight:900;color:#52606d}.aircraft-qualified-row small{display:block;color:var(--air-muted);font-size:11px;margin-top:2px}.aircraft-qualified-row.needs-attention{background:#fff7ed}.aircraft-list-badge.active{background:#eaf7ef;color:var(--air-accent)}.aircraft-list-badge.inactive{background:#f2f4f7;color:#475467}.aircraft-requirements-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.aircraft-req-row.inherited{cursor:default;background:#f8fafc;color:#475569}.aircraft-req-row.inherited .aircraft-req-copy strong{color:#334155}.aircraft-locked-check{display:inline-grid;place-items:center;width:17px;height:17px;border-radius:6px;background:#eaf7ef;color:var(--air-accent);font-size:12px;font-weight:900;margin-top:1px}.aircraft-qualified-row{grid-template-columns:minmax(170px,1.1fr) minmax(190px,1.1fr) minmax(280px,1.5fr) minmax(110px,.7fr)}.aircraft-qualified-row.ready{background:#fff}.aircraft-qualified-issues{display:inline-flex;align-items:center;border-radius:999px;padding:5px 8px;font-weight:900;line-height:1.25;max-width:100%}.aircraft-qualified-issues.ok{background:#eaf7ef;color:var(--air-accent)}.aircraft-qualified-issues.alert{background:#fff1c2;color:#92400e;white-space:normal;border:1px solid #fed7aa}@media(max-width:760px){.aircraft-requirements-summary{grid-template-columns:1fr}.aircraft-qualified-table{overflow-x:auto}.aircraft-qualified-row{min-width:620px}}
       </style>
       <main class="aircraft-wrap ${mountOptions.embedded ? "embedded" : ""}">
         ${mountOptions.embedded ? `` : `

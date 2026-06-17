@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-15-115-G
+// Internal Version: 2026-06-17-117-A
 // Purpose: Customer/organization-side Aircraft Admin foundation. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-15-115-G";
+  const VERSION = "2026-06-17-117-A";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -42,6 +42,9 @@
     aircraft: [],
     locations: [],
     assetTypes: [],
+    qualificationDefinitions: [],
+    assetQualificationRequirements: [],
+    assetCheckouts: [],
     selectedAircraftId: "",
     selectedLocationId: "",
     selectedAssetTypeId: "",
@@ -327,6 +330,9 @@
     state.aircraft = arr(result.aircraft);
     state.locations = arr(result.locations);
     state.assetTypes = arr(result.asset_types || result.assetTypes);
+    state.qualificationDefinitions = arr(result.qualification_definitions || result.qualifications);
+    state.assetQualificationRequirements = arr(result.asset_qualification_requirements || result.qualification_requirements);
+    state.assetCheckouts = arr(result.qualified_pilots || result.asset_checkouts || result.person_asset_checkouts);
     if (state.selectedAircraftId && !state.aircraft.some(a => clean(a.operational_asset_id) === state.selectedAircraftId)) state.selectedAircraftId = "";
     if (!state.selectedAircraftId && state.aircraft.length) state.selectedAircraftId = clean(state.aircraft[0].operational_asset_id);
     const selected = selectedAircraft();
@@ -634,7 +640,7 @@
     return {
       operational_asset_id: "", asset_key: "", tail_number: "", preferred_name: "", display_name: "", aircraft_year: "", aircraft_make: "", aircraft_model: "", icao_type_code: "", serial_number: "", asset_type_key: "aircraft",
       category_class: "airplane-single-engine-land", engine_count: "1", seat_count: "", fuel_type: "", fuel_burn_gph: "", organization_location_id: "", home_base: "",
-      status_key: "available", visibility: "members", do_not_dispatch: false, dispatch_note: "", sort_order: "100",
+      status_key: "available", visibility: "members", do_not_dispatch: false, dispatch_note: "", sort_order: "100", asset_specific_checkout_required: true,
       is_complex: false, is_high_performance: false, is_tailwheel: false, is_ifr_equipped: false, is_night_equipped: false, is_multi_engine: false,
       primary_photo_url: "", panel_photo_url: "", summary: "", description: "", internal_notes: "",
       current_tach: "", tach_date: "", current_hobbs: "", hobbs_date: "", current_airframe_hours: "", airframe_hours_date: "", usage_tracking_basis: "hobbs", billing_basis: "hobbs", hobbs_factor: "", round_to_decimals: "2",
@@ -664,6 +670,8 @@
     draft.annual_due = numberOrBlank(a.annual_due);
     draft.fuel_included = a.hourly_fuel_included !== false;
     draft.tax_behavior = clean(a.hourly_tax_behavior || a.tax_rate_behavior || "not_taxed");
+    const settings = obj(a.settings_json);
+    draft.asset_specific_checkout_required = settings.asset_specific_checkout_required !== false;
     return draft;
   }
 
@@ -728,7 +736,8 @@
       billing_json: { billing_basis: d.billing_basis, fuel_included: !!d.fuel_included, tax_behavior: d.tax_behavior },
       maintenance_json: { placeholder: true, note: "Reminder and squawk systems are future modules." },
       media_json: { primary_photo_url: d.primary_photo_url, panel_photo_url: d.panel_photo_url },
-      settings_json: { saved_from: "aircraft_admin_0113A" }
+      settings_json: { saved_from: "aircraft_admin_0117A", asset_specific_checkout_required: d.asset_specific_checkout_required !== false },
+      qualification_requirements: collectAssetQualificationRequirements0117A()
     };
   }
 
@@ -819,6 +828,9 @@
       state.aircraft = arr(result.aircraft);
       state.locations = arr(result.locations);
       state.assetTypes = arr(result.asset_types || result.assetTypes || state.assetTypes);
+      state.qualificationDefinitions = arr(result.qualification_definitions || result.qualifications || state.qualificationDefinitions);
+      state.assetQualificationRequirements = arr(result.asset_qualification_requirements || result.qualification_requirements || state.assetQualificationRequirements);
+      state.assetCheckouts = arr(result.qualified_pilots || result.asset_checkouts || result.person_asset_checkouts || state.assetCheckouts);
       const saved = obj(result.aircraft_record);
       state.selectedAircraftId = clean(saved.operational_asset_id || state.selectedAircraftId);
       state.draft = draftFromAircraft(saved);
@@ -1130,7 +1142,7 @@
 
   function renderTabs() {
     const tabs = [
-      ["identity", "Identity"], ["classification", "Classification"], ["operations", "Operations"], ["rates", "Rates / Usage"], ["media", "Media / Notes"], ["maintenance", "Maintenance Setup"]
+      ["identity", "Identity"], ["classification", "Classification"], ["operations", "Operations"], ["requirements", "Requirements / Qualified Pilots"], ["rates", "Rates / Usage"], ["media", "Media / Notes"], ["maintenance", "Maintenance Setup"]
     ];
     return `<div class="aircraft-tabs">${tabs.map(([k,l]) => `<button class="${state.activeTab === k ? "active" : ""}" data-tab="${k}">${l}</button>`).join("")}</div>`;
   }
@@ -1179,6 +1191,146 @@
     return `<label class="aircraft-check"><input data-draft-key="${attr(key)}" type="checkbox" ${d[key] ? "checked" : ""}> ${esc(label)}</label>`;
   }
 
+
+  function activeQualificationDefinitions0117A() {
+    return arr(state.qualificationDefinitions).filter(q => {
+      const status = clean(q.status || q.definition_status || "active");
+      return !q.archived_at && status !== "archived" && status !== "inactive" && status !== "paused";
+    }).sort((a,b) => {
+      const ao = Number(a.sort_order || 100);
+      const bo = Number(b.sort_order || 100);
+      if (ao !== bo) return ao - bo;
+      return clean(a.label || a.qualification_key).localeCompare(clean(b.label || b.qualification_key));
+    });
+  }
+
+  function qualificationSettings0117A(q) { return obj(q && q.settings_json); }
+  function qualificationLabel0117A(q) { return clean(q && (q.label || q.qualification_label || q.qualification_key)) || "Qualification"; }
+  function qualificationDescription0117A(q) { return clean(q && (q.description || qualificationSettings0117A(q).description)); }
+  function qualificationDefinitionId0117A(q) { return clean(q && (q.qualification_definition_id || q.definition_id)); }
+
+  function selectedAssetRequirementRows0117A() {
+    const assetId = clean(state.draft && state.draft.operational_asset_id) || state.selectedAircraftId;
+    return arr(state.assetQualificationRequirements).filter(r => !r.archived_at && clean(r.operational_asset_id || r.asset_id) === clean(assetId));
+  }
+
+  function requirementMap0117A() {
+    const map = new Map();
+    selectedAssetRequirementRows0117A().forEach(r => {
+      const qid = clean(r.qualification_definition_id || r.definition_id);
+      if (qid) map.set(qid, r);
+    });
+    return map;
+  }
+
+  function setAssetRequirement0117A(qualificationDefinitionId, required) {
+    const assetId = clean(state.draft && state.draft.operational_asset_id) || state.selectedAircraftId;
+    if (!assetId || !qualificationDefinitionId) return;
+    const existing = requirementMap0117A().get(qualificationDefinitionId) || {};
+    const next = arr(state.assetQualificationRequirements).filter(r => !(clean(r.operational_asset_id || r.asset_id) === assetId && clean(r.qualification_definition_id || r.definition_id) === qualificationDefinitionId));
+    if (required) {
+      next.push({
+        ...existing,
+        organization_id: state.orgId,
+        operational_asset_id: assetId,
+        asset_id: assetId,
+        qualification_definition_id: qualificationDefinitionId,
+        required_for_reservation: true,
+        status: "active",
+        archived_at: null
+      });
+    }
+    state.assetQualificationRequirements = next;
+    markDirty();
+    render();
+  }
+
+  function collectAssetQualificationRequirements0117A() {
+    const assetId = clean(state.draft && state.draft.operational_asset_id) || state.selectedAircraftId;
+    if (!assetId) return [];
+    return selectedAssetRequirementRows0117A().map(r => ({
+      asset_qualification_requirement_id: clean(r.asset_qualification_requirement_id),
+      operational_asset_id: assetId,
+      qualification_definition_id: clean(r.qualification_definition_id || r.definition_id),
+      required_for_reservation: true,
+      notes: clean(r.notes),
+      settings_json: obj(r.settings_json)
+    })).filter(r => r.qualification_definition_id);
+  }
+
+  function checkoutCurrent0117A(row) {
+    const status = clean(row.checkout_status || row.status || "").toLowerCase();
+    const authorized = ["approved", "active", "checked-out", "checked_out", "authorized", "current"].includes(status);
+    if (!authorized) return false;
+    const expires = clean(row.expires_at || row.expiration_date || row.current_through || "").slice(0,10);
+    if (!expires) return true;
+    return expires >= new Date().toISOString().slice(0,10);
+  }
+
+  function checkoutStatusText0117A(row) {
+    const status = clean(row.checkout_status || row.status || "").toLowerCase();
+    if (!checkoutCurrent0117A(row)) {
+      const expires = clean(row.expires_at || row.expiration_date || row.current_through || "").slice(0,10);
+      if (["approved", "active", "checked-out", "checked_out", "authorized", "current"].includes(status) && expires && expires < new Date().toISOString().slice(0,10)) return "Expired";
+      return "Not authorized";
+    }
+    const expires = clean(row.expires_at || row.expiration_date || row.current_through || "").slice(0,10);
+    return expires ? `Authorized until ${expires}` : "Authorized";
+  }
+
+  function qualifiedPilotRows0117A() {
+    const assetId = clean(state.draft && state.draft.operational_asset_id) || state.selectedAircraftId;
+    return arr(state.assetCheckouts).filter(r => !r.archived_at && clean(r.operational_asset_id || r.asset_id) === clean(assetId)).sort((a,b) => clean(a.person_name || a.display_name || a.email).localeCompare(clean(b.person_name || b.display_name || b.email)));
+  }
+
+  function renderRequirementsTab0117A(d) {
+    const assetId = clean(d && d.operational_asset_id);
+    if (!assetId) return `<div class="aircraft-note"><strong>Save the aircraft first.</strong> Qualification requirements and qualified-pilot checkouts can be managed after this aircraft record exists.</div>`;
+    const defs = activeQualificationDefinitions0117A();
+    const reqMap = requirementMap0117A();
+    const checkouts = qualifiedPilotRows0117A();
+    const requiredCount = Array.from(reqMap.values()).length;
+    const currentPilotCount = checkouts.filter(checkoutCurrent0117A).length;
+    const checkoutRequired = d.asset_specific_checkout_required !== false;
+    const reqRows = defs.length ? defs.map(q => {
+      const qid = qualificationDefinitionId0117A(q);
+      const settings = qualificationSettings0117A(q);
+      const checked = reqMap.has(qid);
+      const desc = qualificationDescription0117A(q);
+      const general = settings.required_to_reserve === true || settings.required_to_reserve === "true";
+      return `<label class="aircraft-req-row ${checked ? "selected" : ""}">
+        <input type="checkbox" data-asset-qualification-requirement="${attr(qid)}" ${checked ? "checked" : ""}>
+        <span class="aircraft-req-copy"><strong>${esc(qualificationLabel0117A(q))}</strong>${desc ? `<small>${esc(desc)}</small>` : ""}${general ? `<em>General requirement</em>` : ""}</span>
+      </label>`;
+    }).join("") : `<div class="aircraft-empty">No active qualification definitions are available yet.</div>`;
+    const pilotRows = checkouts.length ? checkouts.map(row => {
+      const current = checkoutCurrent0117A(row);
+      const name = clean(row.person_name || row.display_name || row.member_name || row.email || row.person_email || "Person");
+      const email = clean(row.email || row.person_email || "");
+      const issued = clean(row.issued_at || row.issued_date || row.completed_at || "").slice(0,10) || "—";
+      const expires = clean(row.expires_at || row.expiration_date || row.current_through || "").slice(0,10) || "No expiration";
+      return `<div class="aircraft-qualified-row ${current ? "" : "needs-attention"}">
+        <div><strong>${esc(name)}</strong>${email && email !== name ? `<small>${esc(email)}</small>` : ""}</div>
+        <div><span class="aircraft-list-badge ${current ? "active" : "inactive"}">${esc(checkoutStatusText0117A(row))}</span></div>
+        <div>${esc(issued)}</div><div>${esc(expires)}</div>
+      </div>`;
+    }).join("") : `<div class="aircraft-empty">No pilot checkouts have been recorded for this aircraft yet. Add them from Members / People → Aviation / Qualifications.</div>`;
+    return `
+      <div class="aircraft-requirements-summary">
+        <div><strong>${esc(requiredCount)}</strong><span>Required qualification${requiredCount === 1 ? "" : "s"}</span></div>
+        <div><strong>${esc(currentPilotCount)}</strong><span>Currently authorized pilot${currentPilotCount === 1 ? "" : "s"}</span></div>
+      </div>
+      <section class="aircraft-requirements-card">
+        <div class="aircraft-section-head compact"><div><h3>Required qualifications</h3><p>Select only the qualifications/checkouts required for this aircraft. General reservation requirements still apply.</p></div></div>
+        <label class="aircraft-check aircraft-checkout-required"><input data-draft-key="asset_specific_checkout_required" type="checkbox" ${checkoutRequired ? "checked" : ""}> Specific aircraft checkout required</label>
+        <div class="aircraft-req-list">${reqRows}</div>
+      </section>
+      <section class="aircraft-requirements-card">
+        <div class="aircraft-section-head compact"><div><h3>Qualified pilots</h3><p>Manage pilot checkouts from Members / People.</p></div></div>
+        <div class="aircraft-qualified-table"><div class="aircraft-qualified-row head"><div>Pilot</div><div>Authorization</div><div>Completed</div><div>Valid until</div></div>${pilotRows}</div>
+      </section>`;
+  }
+
   function renderActiveTab(d) {
     if (state.activeTab === "identity") return `
       <div class="aircraft-form-grid">
@@ -1213,6 +1365,7 @@
       </div>
       <div class="aircraft-check-grid">${checkHtml("Do Not Dispatch", "do_not_dispatch")}</div>
       ${textHtml("Dispatch/status note", "dispatch_note", "Short internal note when dispatch status needs explanation.")}`;
+    if (state.activeTab === "requirements") return renderRequirementsTab0117A(d);
     if (state.activeTab === "rates") return `
       <div class="aircraft-note"><strong>Rate and usage groundwork.</strong> This records the basics needed later for scheduling/billing. It is not a full finance engine yet.</div>
       <div class="aircraft-form-grid">
@@ -1447,6 +1600,8 @@
         .aircraft-form-grid{display:grid;grid-template-columns:repeat(2,minmax(min(260px,100%),1fr));gap:10px 12px;}.aircraft-form-grid.compact{gap:8px 12px;}.aircraft-field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px;min-width:0;} .aircraft-field input,.aircraft-field select,.aircraft-field textarea{min-width:0;}.aircraft-field span{font-size:12px;font-weight:900;color:#334155;text-transform:uppercase;letter-spacing:.03em;}.aircraft-field.full{grid-column:1/-1;}.aircraft-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 4px;}.aircraft-note{background:color-mix(in srgb,var(--air-secondary) 55%,#fff);border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);border-radius:12px;padding:12px;margin-bottom:12px;color:#334155;font-size:13px;line-height:1.45;}
         .aircraft-location-layout{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:12px;min-width:0;width:100%;overflow:hidden;}.aircraft-location-list-wrap{min-width:0;}.aircraft-list-tools{margin-bottom:8px;}.aircraft-list-tools input{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#172033;font-size:13px;}.aircraft-location-list{display:flex;flex-direction:column;gap:8px;}.aircraft-location-form{min-width:0;overflow:hidden;}.aircraft-status{padding:12px;border-radius:12px;border:1px solid #d6e0ec;background:#eef3f8;color:#26344d;margin-bottom:14px;}.aircraft-status.ok{background:#eaf7ef;color:#196f3b}.aircraft-status.error{background:#ffecec;color:var(--air-danger);border-color:#ffc6c6;}.aircraft-empty{border:1px dashed #cbd5e1;border-radius:12px;padding:14px;color:var(--air-muted);background:#f8fafc;}.aircraft-debug pre{background:#101827;color:#e7edf6;border-radius:12px;padding:12px;overflow:auto;font-size:12px;}
         @media(max-width:1180px){.aircraft-grid,.aircraft-grid.aircraft-only,.aircraft-location-layout{grid-template-columns:1fr;}.aircraft-filter-row,.aircraft-form-grid,.aircraft-check-grid{grid-template-columns:1fr;}.aircraft-wrap{padding:12px;}}
+
+        .aircraft-requirements-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}.aircraft-requirements-summary>div{border:1px solid #dfe9e2;background:#f7fbf8;border-radius:14px;padding:12px}.aircraft-requirements-summary strong{display:block;font-size:22px;color:var(--air-accent)}.aircraft-requirements-summary span{font-size:12px;color:var(--air-muted);font-weight:800}.aircraft-requirements-card{border:1px solid #dfe9e2;border-radius:14px;padding:12px;margin-bottom:12px;background:#fff}.aircraft-requirements-card h3{margin:0;font-size:15px}.aircraft-req-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;margin-top:10px}.aircraft-req-row{display:flex;gap:9px;align-items:flex-start;border:1px solid #dfe9e2;border-radius:12px;padding:9px;background:#fff;cursor:pointer}.aircraft-req-row.selected{border-color:var(--air-accent);background:#f3faf4}.aircraft-req-copy{display:flex;flex-direction:column;gap:2px;min-width:0}.aircraft-req-copy strong{font-size:13px}.aircraft-req-copy small{font-size:11px;color:var(--air-muted);line-height:1.25}.aircraft-req-copy em{font-style:normal;align-self:flex-start;border-radius:999px;padding:2px 7px;background:#eaf7ef;color:var(--air-accent);font-size:10px;font-weight:900}.aircraft-checkout-required{margin:8px 0 4px}.aircraft-qualified-table{display:grid;border:1px solid #e3ebdf;border-radius:12px;overflow:hidden}.aircraft-qualified-row{display:grid;grid-template-columns:minmax(180px,1.4fr) minmax(160px,1fr) minmax(100px,.7fr) minmax(120px,.8fr);gap:10px;align-items:center;padding:9px 10px;border-bottom:1px solid #e3ebdf;font-size:12px}.aircraft-qualified-row:last-child{border-bottom:0}.aircraft-qualified-row.head{background:#f7fbf8;text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-weight:900;color:#52606d}.aircraft-qualified-row small{display:block;color:var(--air-muted);font-size:11px;margin-top:2px}.aircraft-qualified-row.needs-attention{background:#fff7ed}.aircraft-list-badge.active{background:#eaf7ef;color:var(--air-accent)}.aircraft-list-badge.inactive{background:#f2f4f7;color:#475467}@media(max-width:760px){.aircraft-requirements-summary{grid-template-columns:1fr}.aircraft-qualified-table{overflow-x:auto}.aircraft-qualified-row{min-width:620px}}
       </style>
       <main class="aircraft-wrap ${mountOptions.embedded ? "embedded" : ""}">
         ${mountOptions.embedded ? `` : `
@@ -1545,6 +1700,10 @@
       const key = el.dataset.draftKey;
       const handler = () => setDraft(key, el.type === "checkbox" ? !!el.checked : el.value);
       el.addEventListener("input", handler); el.addEventListener("change", handler);
+    });
+    document.querySelectorAll("[data-asset-qualification-requirement]").forEach(el => {
+      const handler = () => setAssetRequirement0117A(el.dataset.assetQualificationRequirement, !!el.checked);
+      el.addEventListener("change", handler);
     });
     field("aircraft-new-asset-type")?.addEventListener("click", newAssetType);
     field("aircraft-save-asset-type")?.addEventListener("click", saveAssetType);

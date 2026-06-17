@@ -1,0 +1,201 @@
+# Pass 1 Playbook — Make `organization` the single source of truth (retire `customer`)
+
+*Companion to `docs/OneSource-Architecture-Review.md`. This is the execution plan for Pass 1. It is written to be handed to Claude Code, but every stage is also explained for a non-technical owner. Read the "Safety model" and "Decisions" sections before any work begins.*
+
+---
+
+## What Pass 1 does (and deliberately does NOT do)
+
+**Does:** finishes the half-done rename from "customer" to "organization." Today the database carries **both** `core_customers` and `core_organizations` (kept in sync by triggers), and five tables carry a redundant `customer_id` column alongside `organization_id`. Pass 1 makes `organization_id` / `core_organizations` the one truth and removes the `customer` duplicates.
+
+**Does NOT (deferred on purpose, to limit blast radius):**
+- The qualifications-vs-checkout *code* change → decided here, **enforced in Pass 2/Pass 5**.
+- The meters/billing consolidation → decided here, **built in Pass 4**.
+- The `core_assets` → `core_media` rename → decided here, **done as its own small step later**.
+- Renaming the *table names* that still contain the word "customer" (`core_customer_pages`, `core_customer_style_profiles`, `core_customer_style_profile_history`). These keep their names for now — renaming a table is cosmetic and breaks many code references for little benefit. Revisit later.
+
+> Rationale for the narrow scope: doing one destructive database migration carefully is the right amount of risk for a first pass. We are not stacking three migrations on top of each other.
+
+---
+
+## Decisions locked for this pass
+
+| # | Decision | Choice | When implemented |
+|---|---|---|---|
+| 1 | "May this person fly this asset?" source of truth | **The checkout** (`core_person_asset_checkouts`). Qualifications are prerequisites that gate granting/keeping a checkout; the scheduler reads the checkout. | Pass 2 (gate) + Pass 5 (scheduler) |
+| 2 | Aircraft meters home | Structured columns on `module_aircraft_details`; retire `core_operational_assets.usage_json` | Pass 4 |
+| 2 | Aircraft rate/billing home | Rate **amounts** → `core_operational_asset_rates`; billing **method** (hobbs_factor, billing_basis, rounding, tax) → `module_aircraft_details`; retire `core_operational_assets.billing_json` | Pass 4 |
+| 3 | `core_assets` (media library) name | Rename to `core_media` | Dedicated mini-step after Pass 1 |
+
+*(If the owner overrides Decision 1 to "computed from qualifications," only the Pass 2/Pass 5 design changes — the Pass 1 execution below is unaffected.)*
+
+---
+
+## Safety model: expand → migrate → contract
+
+We **never remove anything first.** Three phases:
+
+1. **Expand** — make sure the new `organization_id` is fully present and self-sufficient. Purely additive. Zero risk.
+2. **Migrate** — switch all application code (the Edge Function + the frontend pages) to use `organization_id` / `core_organizations`, **while the old `customer_id` columns and `core_customers` table still exist as a fallback.** Done on a git branch. Reversible by not merging.
+3. **Contract** — only after the code provably no longer touches `customer`, drop the old columns, triggers, functions, and finally the `core_customers` table. This is the one irreversible step; it happens last, after a fresh backup.
+
+Until the very last stage, rollback = "don't merge the branch / revert it." The database is untouched through Stages 0–4.
+
+---
+
+## The objects involved (so nothing is missed)
+
+**Old table to remove:** `core_customers` (primary key `customer_id`).
+**New table that stays:** `core_organizations` (primary key `organization_id`). Note: `organization_id` already equals the matching `customer_id` (same UUID), so no ID remapping is needed — this is what makes the migration value-safe.
+
+**Five tables carrying a redundant `customer_id` column (each also has `organization_id`):**
+`core_assets`, `core_customer_pages`, `core_customer_style_profiles`, `core_customer_style_profile_history`, `core_page_settings_history`.
+
+**Triggers/functions to retire (after code no longer needs them):**
+- `core_sync_customer_to_organization()` + trigger `trg_core_customers_sync_to_organization` — copies new customers into organizations **and creates each org's primary website (`core_sites` 'primary')**. ⚠️ The primary-site behavior must be relocated *before* this is dropped (see Stage 2).
+- `core_sync_customer_scoped_organization_id()` — used by sync triggers on `core_assets`, `core_customer_style_profiles`, `core_customer_style_profile_history`, `core_page_settings_history`.
+- `core_sync_customer_page_org_site_ids()` — used by `core_customer_pages`; ⚠️ this one *also resolves the page's `site_id`*, so keep a trimmed version that still does the site lookup if you want new pages to auto-attach to the primary site.
+
+---
+
+## STAGE 0 — Safety net (execution day, before any change)
+
+0.1 In Supabase, confirm the daily backup ran (it's your floor).
+0.2 Take a fresh **manual database dump to a file** right before starting (the free method — not the $100 PITR). This is your precise undo point.
+0.3 In Claude Code, create a branch so all code changes are isolated:
+   `git checkout -b pass-1-org-consolidation`
+   Nothing merges to `main` until Pass 1 is verified.
+
+**Gate:** do not proceed until a manual dump exists on disk.
+
+---
+
+## STAGE 1 — Verify the data is already aligned (READ-ONLY, safe)
+
+Run these in the Supabase SQL editor. They change nothing.
+
+```sql
+-- A) Any row where customer_id is set but organization_id is missing? Expect all zeros.
+select 'core_assets' as tbl, count(*) as customer_set_org_null
+  from core_assets where customer_id is not null and organization_id is null
+union all select 'core_customer_pages', count(*)
+  from core_customer_pages where customer_id is not null and organization_id is null
+union all select 'core_customer_style_profiles', count(*)
+  from core_customer_style_profiles where customer_id is not null and organization_id is null
+union all select 'core_customer_style_profile_history', count(*)
+  from core_customer_style_profile_history where customer_id is not null and organization_id is null
+union all select 'core_page_settings_history', count(*)
+  from core_page_settings_history where customer_id is not null and organization_id is null;
+
+-- B) Every customer has a matching organization with the same id? Expect 0.
+select count(*) as customers_without_matching_org
+from core_customers c
+left join core_organizations o on o.organization_id = c.customer_id
+where o.organization_id is null;
+```
+
+**Gate:** Query A returns all zeros and Query B returns 0. If not, backfill in Stage 2 before continuing.
+
+---
+
+## STAGE 2 — Expand (additive, safe, reversible)
+
+2.1 **Backfill** any stragglers found in Stage 1 (safe; only fills nulls):
+```sql
+update core_assets                         set organization_id = customer_id where organization_id is null and customer_id is not null;
+update core_customer_pages                 set organization_id = customer_id where organization_id is null and customer_id is not null;
+update core_customer_style_profiles        set organization_id = customer_id where organization_id is null and customer_id is not null;
+update core_customer_style_profile_history set organization_id = customer_id where organization_id is null and customer_id is not null;
+update core_page_settings_history          set organization_id = customer_id where organization_id is null and customer_id is not null;
+```
+
+2.2 **Relocate the "primary website per org" behavior** off of the customer table. Claude Code writes a new `AFTER INSERT` trigger on `core_organizations` that creates the `core_sites` 'primary' row if one does not already exist (mirroring what `core_sync_customer_to_organization` did). Additive — existing orgs already have their sites; this only affects new orgs. *(If `core_sync_customer_page_org_site_ids` is to be trimmed rather than dropped in Stage 5, decide that now too.)*
+
+**Gate:** create one **test organization** directly in `core_organizations` (not via `core_customers`) and confirm it automatically receives (a) seeded roles/statuses from the existing seed triggers and (b) a primary site from the new trigger. Then archive/delete the test org.
+
+---
+
+## STAGE 3 — Migrate the code (Claude Code, on the branch)
+
+3.1 In the repo, find **every** reference to `customer_id`, `core_customers`, and the customer-creation flow across the Edge Function (`supabase/functions/core-access-action`) and the frontend pages (`assets/**`), and switch reads/writes to `organization_id` / `core_organizations`.
+3.2 Change **organization creation**: instead of inserting into `core_customers` (and relying on the old fan-out trigger), insert directly into `core_organizations`. Defaults seed via the existing org triggers; the primary site comes from the Stage 2 trigger. (The `admin/customer-builder` page and any `platform_*` create path are the likely spots.)
+3.3 Leave `core_customers` and the `customer_id` columns physically in place for now — they are the fallback. We are only changing what the code *uses*.
+
+**Gate (critical):** deploy the updated Edge Function + frontend and confirm the live app still works **while `core_customers` still exists**: log in, open People, Aircraft, Pages/branding, and create one test organization end-to-end. If anything breaks, fix on the branch — nothing destructive has happened yet.
+
+---
+
+## STAGE 4 — Prove the old path is unused (verify)
+
+4.1 Search the repo: **zero** remaining references to `customer_id` or `core_customers` (other than this playbook and the migration file itself).
+4.2 Sanity-check the deployed Edge Function has no `customer` reads.
+4.3 (Optional but wise) let the app run for a short period and watch for errors before the irreversible stage.
+
+**Gate:** code is clean of `customer` references and the app is healthy.
+
+---
+
+## STAGE 5 — Contract (DESTRUCTIVE — the point of no return)
+
+⚠️ **Take a second fresh manual dump immediately before running this.** Everything below is irreversible except by restoring that dump.
+
+Run as one reviewed migration, in this order:
+
+```sql
+-- 1) Remove the id-sync triggers (keep customer_pages' SITE resolution if still wanted — trim, don't drop, in that case)
+drop trigger if exists trg_core_assets_sync_organization_id on core_assets;
+drop trigger if exists trg_core_customer_style_profiles_sync_organization_id on core_customer_style_profiles;
+drop trigger if exists trg_core_customer_style_profile_history_sync_organization_id on core_customer_style_profile_history;
+drop trigger if exists trg_core_page_settings_history_sync_organization_id on core_page_settings_history;
+drop trigger if exists trg_core_customer_pages_sync_org_site_ids on core_customer_pages;
+drop trigger if exists trg_core_customers_sync_to_organization on core_customers;
+
+-- 2) Make organization_id required now that it is the sole key, then drop the redundant customer_id columns
+--    (dropping a column also drops its foreign key automatically)
+alter table core_assets                         alter column organization_id set not null;
+alter table core_assets                         drop column customer_id;
+alter table core_customer_pages                 alter column organization_id set not null;
+alter table core_customer_pages                 drop column customer_id;
+alter table core_customer_style_profiles        alter column organization_id set not null;
+alter table core_customer_style_profiles        drop column customer_id;
+alter table core_customer_style_profile_history alter column organization_id set not null;
+alter table core_customer_style_profile_history drop column customer_id;
+alter table core_page_settings_history          alter column organization_id set not null;
+alter table core_page_settings_history          drop column customer_id;
+
+-- 3) Drop the now-unused sync functions (after their triggers are gone)
+drop function if exists core_sync_customer_to_organization();
+drop function if exists core_sync_customer_scoped_organization_id();
+-- keep a trimmed core_sync_customer_page_org_site_ids() if you still want auto site_id; otherwise:
+drop function if exists core_sync_customer_page_org_site_ids();
+
+-- 4) Finally, remove the old table
+drop table core_customers;
+```
+
+> Note: any rows in the five tables that had a `customer_id` but somehow no `organization_id` would block the `set not null` step. Stage 1/2 guarantees there are none — that's why those gates exist.
+
+---
+
+## STAGE 6 — Final verification
+
+6.1 App still works end-to-end (log in, People, Aircraft, branding, create org).
+6.2 Re-run the schema-dump query from earlier and confirm: `core_customers` is gone, no `customer_id` columns remain on the five tables, and the `core_sync_customer_*` functions/triggers are gone.
+6.3 Merge the `pass-1-org-consolidation` branch into `main` and push.
+
+---
+
+## Rollback
+
+- **Anything wrong in Stages 0–4 (nothing dropped yet):** revert/abandon the git branch and redeploy `main`. The database is untouched. If the Stage 2 trigger needs undoing, drop it — it's additive.
+- **Anything wrong during/after Stage 5 (destructive):** restore the database from the **Stage 5 manual dump** (or the daily Supabase backup), and revert the code branch. Because the code already stopped using `customer` before Stage 5, restoring puts you back exactly where Stage 4 ended.
+
+---
+
+## Definition of done
+
+- [ ] Only `core_organizations` / `organization_id` exists; no `core_customers`, no `customer_id` columns, no `core_sync_customer_*` objects.
+- [ ] New organizations created directly in `core_organizations` get seeded defaults **and** a primary site automatically.
+- [ ] The live app works end-to-end.
+- [ ] Branch merged to `main`; a post-migration manual dump taken.
+- [ ] Decisions 1–3 recorded (this file) for the passes that implement them.

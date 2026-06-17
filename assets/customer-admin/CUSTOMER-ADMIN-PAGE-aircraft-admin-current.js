@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-17-117-C
+// Internal Version: 2026-06-17-117-D
 // Purpose: Customer/organization-side Aircraft Admin foundation. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-17-117-C";
+  const VERSION = "2026-06-17-117-D";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -1186,6 +1186,11 @@
     const d = state.draft || emptyAircraftDraft();
     return `<label class="aircraft-field"><span>${esc(label)}</span><select data-draft-key="${attr(key)}">${options.map(([v,l]) => `<option value="${attr(v)}" ${clean(d[key]) === clean(v) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>`;
   }
+  function mediaSelectHtml0117D(label, key) {
+    const d = state.draft || emptyAircraftDraft();
+    const hasCurrent = Boolean(clean(d[key]));
+    return `<label class="aircraft-field"><span>${esc(label)}</span><select disabled><option>${esc(hasCurrent ? "Current image selected" : "No image selected")}</option></select><small class="aircraft-field-hint">Image selection is managed through the media library.</small></label>`;
+  }
   function checkHtml(label, key) {
     const d = state.draft || emptyAircraftDraft();
     return `<label class="aircraft-check"><input data-draft-key="${attr(key)}" type="checkbox" ${d[key] ? "checked" : ""}> ${esc(label)}</label>`;
@@ -1366,7 +1371,7 @@
 
   function renderRequirementsTab0117A(d) {
     const assetId = clean(d && d.operational_asset_id);
-    if (!assetId) return `<div class="aircraft-note"><strong>Save the aircraft first.</strong> Qualification requirements and qualified-pilot checkouts can be managed after this aircraft record exists.</div>`;
+    if (!assetId) return `<div class="aircraft-note"><strong>Save the aircraft first.</strong> Qualification requirements and pilot checkouts can be reviewed after this aircraft record exists.</div>`;
     const sets = requirementDefinitionSets0117B();
     const defs = sets.defs;
     const reqMap = requirementMap0117A();
@@ -1392,24 +1397,32 @@
         <span class="aircraft-req-copy"><strong>${esc(qualificationLabel0117A(q))}</strong>${desc ? `<small>${esc(desc)}</small>` : ""}</span>
       </label>`;
     }).join("") : `<div class="aircraft-empty">No aircraft-specific qualification fields are available yet.</div>`;
-    const pilotRows = readinessRows.length ? readinessRows.map(({ pilot, readiness }) => {
+    const checkoutRows = checkouts.length ? checkouts.map((pilot) => {
       const current = checkoutCurrent0117A(pilot);
       const name = clean(pilot.person_name || pilot.display_name || pilot.member_name || pilot.email || pilot.person_email || "Person");
       const email = clean(pilot.email || pilot.person_email || "");
       const issued = clean(pilot.issued_at || pilot.issued_date || pilot.completed_at || "").slice(0,10) || "—";
       const expires = clean(pilot.expires_at || pilot.expiration_date || pilot.current_through || "").slice(0,10) || "No expiration";
-      const issueText = formatPilotRequirementIssues0117B(readiness.issues);
-      return `<div class="aircraft-qualified-row ${readiness.ready ? "ready" : "needs-attention"}">
+      return `<div class="aircraft-qualified-row checkout-record ${current ? "ready" : "needs-attention"}">
         <div><strong>${esc(name)}</strong>${email && email !== name ? `<small>${esc(email)}</small>` : ""}</div>
-        <div><span class="aircraft-list-badge ${current ? "active" : "inactive"}">${esc(checkoutStatusText0117A(pilot))}</span><small>${esc(issued)} · ${esc(expires)}</small></div>
-        <div><span class="aircraft-qualified-issues ${readiness.ready ? "ok" : "alert"}">${esc(issueText)}</span></div>
-        <div><span class="aircraft-list-badge ${readiness.ready ? "active" : "inactive"}">${readiness.ready ? "Ready" : "Needs attention"}</span></div>
+        <div><span class="aircraft-list-badge ${current ? "active" : "inactive"}">${esc(checkoutStatusText0117A(pilot))}</span></div>
+        <div>${esc(issued)}</div>
+        <div>${esc(expires)}</div>
       </div>`;
-    }).join("") : `<div class="aircraft-empty">No aircraft checkouts have been recorded for this aircraft yet. Add them from Members / People → Aviation / Qualifications.</div>`;
+    }).join("") : `<div class="aircraft-empty">No aircraft checkout records have been recorded for this aircraft yet. Add them from Members / People → Aviation / Qualifications.</div>`;
+    const previewRows = readinessRows.length ? readinessRows.map(({ pilot, readiness }) => {
+      const name = clean(pilot.person_name || pilot.display_name || pilot.member_name || pilot.email || pilot.person_email || "Person");
+      const issueText = formatPilotRequirementIssues0117B(readiness.issues);
+      return `<div class="aircraft-qualified-row preview-record ${readiness.ready ? "ready" : "needs-attention"}">
+        <div><strong>${esc(name)}</strong></div>
+        <div><span class="aircraft-qualified-issues ${readiness.ready ? "ok" : "alert"}">${readiness.ready ? "Ready" : "Needs attention"}</span></div>
+        <div><small>${esc(issueText)}</small></div>
+      </div>`;
+    }).join("") : `<div class="aircraft-empty">No aircraft checkout records are available for reservation preview yet.</div>`;
     return `
       <div class="aircraft-requirements-summary">
         <div><strong>${esc(sets.all.length)}</strong><span>Total requirement${sets.all.length === 1 ? "" : "s"}</span></div>
-        <div><strong>${esc(readyCount)}</strong><span>Ready pilot${readyCount === 1 ? "" : "s"}</span></div>
+        <div><strong>${esc(checkouts.length)}</strong><span>Aircraft checkout record${checkouts.length === 1 ? "" : "s"}</span></div>
         <div><strong>${esc(attentionCount)}</strong><span>Need attention</span></div>
       </div>
       <section class="aircraft-requirements-card">
@@ -1422,9 +1435,26 @@
         <div class="aircraft-req-list">${reqRows}</div>
       </section>
       <section class="aircraft-requirements-card">
-        <div class="aircraft-section-head compact"><div><h3>Qualified pilots / reservation preview</h3><p>Shows which authorized pilots look ready for this aircraft based on the requirements above. Manage person checkouts from Members / People.</p></div></div>
-        <div class="aircraft-qualified-table"><div class="aircraft-qualified-row head"><div>Pilot</div><div>Aircraft checkout</div><div>Requirements</div><div>Result</div></div>${pilotRows}</div>
+        <div class="aircraft-section-head compact"><div><h3>Aircraft checkout records</h3><p>Shows who has a specific checkout record for this aircraft. Manage records from Members / People.</p></div></div>
+        <div class="aircraft-qualified-table"><div class="aircraft-qualified-row head checkout-record"><div>Pilot</div><div>Aircraft checkout</div><div>Completed / approved</div><div>Valid until</div></div>${checkoutRows}</div>
+      </section>
+      <section class="aircraft-requirements-card">
+        <div class="aircraft-section-head compact"><div><h3>Reservation preview</h3><p>Shows whether checked-out pilots appear ready for this aircraft based on current requirements.</p></div></div>
+        <div class="aircraft-qualified-table"><div class="aircraft-qualified-row head preview-record"><div>Pilot</div><div>Preview</div><div>Items to address</div></div>${previewRows}</div>
       </section>`;
+  }
+
+
+  function mediaPickerCard0117D(label, draftKey, storedValue) {
+    const hasMedia = Boolean(clean(storedValue));
+    return `<section class="aircraft-media-card" data-aircraft-media-card="${attr(draftKey)}">
+      <div class="aircraft-media-card-head"><strong>${esc(label)}</strong><span>${hasMedia ? "Selected" : "None selected"}</span></div>
+      <div class="aircraft-media-preview">${hasMedia ? `<img src="${attr(storedValue)}" alt="${esc(label)} preview" loading="lazy">` : `<div class="aircraft-media-empty">No image selected</div>`}</div>
+      <div class="aircraft-media-actions">
+        <button class="aircraft-btn secondary" type="button" data-media-library-placeholder="${attr(draftKey)}" disabled>Choose from media library</button>
+        <button class="aircraft-btn secondary" type="button" data-media-clear="${attr(draftKey)}" ${hasMedia ? "" : "disabled"}>Clear</button>
+      </div>
+    </section>`;
   }
 
   function renderActiveTab(d) {
@@ -1481,10 +1511,11 @@
       </div>
       <div class="aircraft-check-grid">${checkHtml("Fuel included in rate", "fuel_included")}</div>`;
     if (state.activeTab === "media") return `
-      <div class="aircraft-form-grid">
-        ${inputHtml("Primary image URL", "primary_photo_url", "url", "Image URL or storage URL")}
-        ${inputHtml("Panel image URL", "panel_photo_url", "url", "Optional")}
+      <div class="aircraft-media-grid">
+        ${mediaPickerCard0117D("Primary image", "primary_photo_url", d.primary_photo_url)}
+        ${mediaPickerCard0117D("Panel image", "panel_photo_url", d.panel_photo_url)}
       </div>
+      <div class="aircraft-note compact"><strong>Aircraft images.</strong> Keep or clear existing aircraft images here. New image selection is handled through the media library.</div>
       ${textHtml("Member/public summary", "summary", "Short plain-language summary.")}
       ${textHtml("Longer description", "description", "Optional description shown where aircraft details are displayed.")}
       ${textHtml("Internal notes", "internal_notes", "Admin-only notes placeholder.")}`;
@@ -1693,11 +1724,12 @@
         .aircraft-list{display:flex;flex-direction:column;gap:8px;}.aircraft-row,.aircraft-location-row{width:100%;border:1px solid #d7e0ea;background:#fff;border-radius:13px;padding:11px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:4px;}.aircraft-row.selected,.aircraft-location-row.selected{border-color:var(--air-primary);box-shadow:inset 4px 0 0 var(--air-primary);background:color-mix(in srgb,var(--air-secondary) 38%,#fff);}.aircraft-row-title{font-weight:900;font-size:15px;}.aircraft-row-sub,.aircraft-row-meta,.aircraft-location-row span{color:var(--air-muted);font-size:12px;}.aircraft-row-meta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;}
         .aircraft-location-row{padding:0;display:grid;grid-template-columns:minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab;}.aircraft-location-row.dragging{opacity:.55;}.aircraft-location-row.drag-over{outline:2px dashed var(--air-primary);outline-offset:2px;}.aircraft-location-row.saving{opacity:.75;cursor:wait;}.aircraft-location-row.archived{background:#f1f5f9;opacity:.76;}.aircraft-location-row.inactive{background:#fafaf8;}.aircraft-location-row.archived .aircraft-location-copy strong,.aircraft-location-row.archived .aircraft-location-copy span{color:#64748b;}.aircraft-record-row{cursor:grab;}.aircraft-record-row .aircraft-list-badge{margin-top:2px;}.aircraft-location-main{border:0;background:transparent;text-align:left;padding:11px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:9px;align-items:flex-start;cursor:pointer;min-width:0;color:inherit;}.aircraft-drag-handle{font-size:13px;line-height:1;color:var(--air-muted);padding-top:3px;}.aircraft-location-copy{display:flex;flex-direction:column;gap:4px;min-width:0;overflow:hidden;}.aircraft-location-copy strong{color:#172033;font-size:14px;white-space:normal;overflow-wrap:anywhere;line-height:1.25;}.aircraft-location-meta{color:var(--air-muted);font-size:12px;white-space:normal;overflow-wrap:anywhere;line-height:1.3;}.aircraft-order-buttons{display:flex;flex-direction:column;border-left:1px solid #e2e8f0;min-width:34px;}.aircraft-order-button{border:0;border-bottom:1px solid #e2e8f0;background:#f8fafc;color:var(--air-primary);font-weight:900;width:34px;min-height:28px;cursor:pointer;}.aircraft-order-button:last-child{border-bottom:0;}.aircraft-order-button:disabled{opacity:.35;cursor:not-allowed;}.aircraft-order-tools{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin:-2px 0 8px;font-size:12px;color:var(--air-muted);flex-wrap:wrap;}.aircraft-order-status{display:inline-flex;border-radius:999px;padding:5px 8px;background:#eef3f8;color:#334155;font-weight:900;}.aircraft-order-status.ok{background:#eaf7ef;color:#196f3b;}.aircraft-order-status.error{background:#ffecec;color:var(--air-danger);}.aircraft-order-hint{white-space:normal;line-height:1.25;min-width:0;}.asset-type-filter-row{margin:0 0 8px;}.asset-type-filter-row select{width:100%;}.aircraft-list-badge{align-self:flex-start;border-radius:999px;padding:4px 7px;font-size:10px;font-weight:900;letter-spacing:.04em;text-transform:uppercase;background:#eaf7ef;color:#196f3b;white-space:nowrap;max-width:100%;}.aircraft-list-badge.inactive{background:#fff7ed;color:#9a3412;}.aircraft-list-badge.archived{background:#e2e8f0;color:#475569;}
         .aircraft-tabs{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0;}.aircraft-tabs button{border:1px solid #cbd5e1;background:#fff;color:#26344d;border-radius:999px;padding:8px 11px;font-weight:900;cursor:pointer;}.aircraft-tabs button.active{background:var(--air-primary);color:#fff;border-color:var(--air-primary);}
-        .aircraft-form-grid{display:grid;grid-template-columns:repeat(2,minmax(min(260px,100%),1fr));gap:10px 12px;}.aircraft-form-grid.compact{gap:8px 12px;}.aircraft-field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px;min-width:0;} .aircraft-field input,.aircraft-field select,.aircraft-field textarea{min-width:0;}.aircraft-field span{font-size:12px;font-weight:900;color:#334155;text-transform:uppercase;letter-spacing:.03em;}.aircraft-field.full{grid-column:1/-1;}.aircraft-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 4px;}.aircraft-note{background:color-mix(in srgb,var(--air-secondary) 55%,#fff);border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);border-radius:12px;padding:12px;margin-bottom:12px;color:#334155;font-size:13px;line-height:1.45;}
+        .aircraft-form-grid{display:grid;grid-template-columns:repeat(2,minmax(min(260px,100%),1fr));gap:10px 12px;}.aircraft-form-grid.compact{gap:8px 12px;}.aircraft-field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px;min-width:0;}.aircraft-field-hint{font-size:11px;color:var(--air-muted);font-weight:700;line-height:1.25;margin-top:-2px;} .aircraft-field input,.aircraft-field select,.aircraft-field textarea{min-width:0;}.aircraft-field span{font-size:12px;font-weight:900;color:#334155;text-transform:uppercase;letter-spacing:.03em;}.aircraft-field.full{grid-column:1/-1;}.aircraft-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 4px;}.aircraft-note{background:color-mix(in srgb,var(--air-secondary) 55%,#fff);border:1px solid color-mix(in srgb,var(--air-primary) 18%,#d6dee9);border-radius:12px;padding:12px;margin-bottom:12px;color:#334155;font-size:13px;line-height:1.45;}
         .aircraft-location-layout{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:12px;min-width:0;width:100%;overflow:hidden;}.aircraft-location-list-wrap{min-width:0;}.aircraft-list-tools{margin-bottom:8px;}.aircraft-list-tools input{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#172033;font-size:13px;}.aircraft-location-list{display:flex;flex-direction:column;gap:8px;}.aircraft-location-form{min-width:0;overflow:hidden;}.aircraft-status{padding:12px;border-radius:12px;border:1px solid #d6e0ec;background:#eef3f8;color:#26344d;margin-bottom:14px;}.aircraft-status.ok{background:#eaf7ef;color:#196f3b}.aircraft-status.error{background:#ffecec;color:var(--air-danger);border-color:#ffc6c6;}.aircraft-empty{border:1px dashed #cbd5e1;border-radius:12px;padding:14px;color:var(--air-muted);background:#f8fafc;}.aircraft-debug pre{background:#101827;color:#e7edf6;border-radius:12px;padding:12px;overflow:auto;font-size:12px;}
+        .aircraft-media-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:12px}.aircraft-media-card{border:1px solid #dfe9e2;border-radius:14px;background:#fff;padding:12px;display:grid;gap:10px}.aircraft-media-card-head{display:flex;justify-content:space-between;gap:10px;align-items:center}.aircraft-media-card-head strong{font-size:14px;color:#162033}.aircraft-media-card-head span{font-size:11px;color:var(--air-muted);font-weight:900}.aircraft-media-preview{border:1px dashed #d6e4dc;border-radius:12px;background:#f8fafc;min-height:132px;display:grid;place-items:center;overflow:hidden}.aircraft-media-preview img{display:block;width:100%;height:160px;object-fit:cover}.aircraft-media-empty{font-size:12px;color:var(--air-muted);font-weight:850}.aircraft-media-actions{display:flex;gap:8px;flex-wrap:wrap}.aircraft-note.compact{font-size:12px;padding:10px;margin-bottom:12px}@media(max-width:760px){.aircraft-media-grid{grid-template-columns:1fr}}
         @media(max-width:1180px){.aircraft-grid,.aircraft-grid.aircraft-only,.aircraft-location-layout{grid-template-columns:1fr;}.aircraft-filter-row,.aircraft-form-grid,.aircraft-check-grid{grid-template-columns:1fr;}.aircraft-wrap{padding:12px;}}
 
-        .aircraft-requirements-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}.aircraft-requirements-summary>div{border:1px solid #dfe9e2;background:#f7fbf8;border-radius:14px;padding:12px}.aircraft-requirements-summary strong{display:block;font-size:22px;color:var(--air-accent)}.aircraft-requirements-summary span{font-size:12px;color:var(--air-muted);font-weight:800}.aircraft-requirements-card{border:1px solid #dfe9e2;border-radius:14px;padding:12px;margin-bottom:12px;background:#fff}.aircraft-requirements-card h3{margin:0;font-size:15px}.aircraft-req-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;margin-top:10px}.aircraft-req-row{display:flex;gap:9px;align-items:flex-start;border:1px solid #dfe9e2;border-radius:12px;padding:9px;background:#fff;cursor:pointer}.aircraft-req-row.selected{border-color:var(--air-accent);background:#f3faf4}.aircraft-req-copy{display:flex;flex-direction:column;gap:2px;min-width:0}.aircraft-req-copy strong{font-size:13px}.aircraft-req-copy small{font-size:11px;color:var(--air-muted);line-height:1.25}.aircraft-req-copy em{font-style:normal;align-self:flex-start;border-radius:999px;padding:2px 7px;background:#eaf7ef;color:var(--air-accent);font-size:10px;font-weight:900}.aircraft-checkout-required{margin:8px 0 4px}.aircraft-qualified-table{display:grid;border:1px solid #e3ebdf;border-radius:12px;overflow:hidden}.aircraft-qualified-row{display:grid;grid-template-columns:minmax(180px,1.4fr) minmax(160px,1fr) minmax(100px,.7fr) minmax(120px,.8fr);gap:10px;align-items:center;padding:9px 10px;border-bottom:1px solid #e3ebdf;font-size:12px}.aircraft-qualified-row:last-child{border-bottom:0}.aircraft-qualified-row.head{background:#f7fbf8;text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-weight:900;color:#52606d}.aircraft-qualified-row small{display:block;color:var(--air-muted);font-size:11px;margin-top:2px}.aircraft-qualified-row.needs-attention{background:#fff7ed}.aircraft-list-badge.active{background:#eaf7ef;color:var(--air-accent)}.aircraft-list-badge.inactive{background:#f2f4f7;color:#475467}.aircraft-requirements-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.aircraft-req-row.inherited{cursor:default;background:#f8fafc;color:#475569}.aircraft-req-row.inherited .aircraft-req-copy strong{color:#334155}.aircraft-locked-check{display:inline-grid;place-items:center;width:17px;height:17px;border-radius:6px;background:#eaf7ef;color:var(--air-accent);font-size:12px;font-weight:900;margin-top:1px}.aircraft-qualified-row{grid-template-columns:minmax(170px,1.1fr) minmax(190px,1.1fr) minmax(280px,1.5fr) minmax(110px,.7fr)}.aircraft-qualified-row.ready{background:#fff}.aircraft-qualified-issues{display:inline-flex;align-items:center;border-radius:999px;padding:5px 8px;font-weight:900;line-height:1.25;max-width:100%}.aircraft-qualified-issues.ok{background:#eaf7ef;color:var(--air-accent)}.aircraft-qualified-issues.alert{background:#fff1c2;color:#92400e;white-space:normal;border:1px solid #fed7aa}@media(max-width:760px){.aircraft-requirements-summary{grid-template-columns:1fr}.aircraft-qualified-table{overflow-x:auto}.aircraft-qualified-row{min-width:620px}}
+        .aircraft-requirements-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}.aircraft-requirements-summary>div{border:1px solid #dfe9e2;background:#f7fbf8;border-radius:14px;padding:12px}.aircraft-requirements-summary strong{display:block;font-size:22px;color:var(--air-accent)}.aircraft-requirements-summary span{font-size:12px;color:var(--air-muted);font-weight:800}.aircraft-requirements-card{border:1px solid #dfe9e2;border-radius:14px;padding:12px;margin-bottom:12px;background:#fff}.aircraft-requirements-card h3{margin:0;font-size:15px}.aircraft-req-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;margin-top:10px}.aircraft-req-row{display:flex;gap:9px;align-items:flex-start;border:1px solid #dfe9e2;border-radius:12px;padding:9px;background:#fff;cursor:pointer}.aircraft-req-row.selected{border-color:var(--air-accent);background:#f3faf4}.aircraft-req-copy{display:flex;flex-direction:column;gap:2px;min-width:0}.aircraft-req-copy strong{font-size:13px}.aircraft-req-copy small{font-size:11px;color:var(--air-muted);line-height:1.25}.aircraft-req-copy em{font-style:normal;align-self:flex-start;border-radius:999px;padding:2px 7px;background:#eaf7ef;color:var(--air-accent);font-size:10px;font-weight:900}.aircraft-checkout-required{margin:8px 0 4px}.aircraft-qualified-table{display:grid;border:1px solid #e3ebdf;border-radius:12px;overflow:hidden}.aircraft-qualified-row{display:grid;grid-template-columns:minmax(180px,1.4fr) minmax(160px,1fr) minmax(100px,.7fr) minmax(120px,.8fr);gap:10px;align-items:center;padding:9px 10px;border-bottom:1px solid #e3ebdf;font-size:12px}.aircraft-qualified-row:last-child{border-bottom:0}.aircraft-qualified-row.head{background:#f7fbf8;text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-weight:900;color:#52606d}.aircraft-qualified-row small{display:block;color:var(--air-muted);font-size:11px;margin-top:2px}.aircraft-qualified-row.needs-attention{background:#fff7ed}.aircraft-list-badge.active{background:#eaf7ef;color:var(--air-accent)}.aircraft-list-badge.inactive{background:#f2f4f7;color:#475467}.aircraft-requirements-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.aircraft-req-row.inherited{cursor:default;background:#f8fafc;color:#475569}.aircraft-req-row.inherited .aircraft-req-copy strong{color:#334155}.aircraft-locked-check{display:inline-grid;place-items:center;width:17px;height:17px;border-radius:6px;background:#eaf7ef;color:var(--air-accent);font-size:12px;font-weight:900;margin-top:1px}.aircraft-qualified-row{grid-template-columns:minmax(170px,1.1fr) minmax(190px,1.1fr) minmax(280px,1.5fr) minmax(110px,.7fr)}.aircraft-qualified-row.ready{background:#fff}.aircraft-qualified-issues{display:inline-flex;align-items:center;border-radius:999px;padding:5px 8px;font-weight:900;line-height:1.25;max-width:100%}.aircraft-qualified-issues.ok{background:#eaf7ef;color:var(--air-accent)}.aircraft-qualified-issues.alert{background:#fff1c2;color:#92400e;white-space:normal;border:1px solid #fed7aa}.aircraft-qualified-row.checkout-record{grid-template-columns:minmax(190px,1.2fr) minmax(190px,1fr) minmax(145px,.7fr) minmax(145px,.7fr)!important}.aircraft-qualified-row.preview-record{grid-template-columns:minmax(190px,1.1fr) minmax(150px,.7fr) minmax(340px,1.5fr)!important}.aircraft-qualified-row.preview-record small{color:var(--air-muted);font-weight:800}.aircraft-qualified-row.preview-record.needs-attention small{color:#92400e}@media(max-width:760px){.aircraft-requirements-summary{grid-template-columns:1fr}.aircraft-qualified-table{overflow-x:auto}.aircraft-qualified-row{min-width:620px}}
       </style>
       <main class="aircraft-wrap ${mountOptions.embedded ? "embedded" : ""}">
         ${mountOptions.embedded ? `` : `
@@ -1801,6 +1833,12 @@
       const handler = () => setAssetRequirement0117A(el.dataset.assetQualificationRequirement, !!el.checked);
       el.addEventListener("change", handler);
     });
+    document.querySelectorAll("[data-media-clear]").forEach(btn => btn.addEventListener("click", () => {
+      const key = clean(btn.getAttribute("data-media-clear"));
+      if (!key) return;
+      setDraft(key, "");
+      render();
+    }));
     field("aircraft-new-asset-type")?.addEventListener("click", newAssetType);
     field("aircraft-save-asset-type")?.addEventListener("click", saveAssetType);
     field("aircraft-clear-asset-type")?.addEventListener("click", clearAssetType);
@@ -2000,29 +2038,20 @@
     return init(mountOptions);
   }
 
-  window.SyncEtcAircraftAdminPage = {
+  const aircraftAdminApi = {
     version: VERSION,
     mount,
-    hasUnsavedChanges: () => !!(state.dirty || state.locationDirty || state.assetTypeDirty),
-    confirmDiscard
-  };
-
-  window.SyncEtcAircraftAdmin = {
-    version: VERSION,
-    mount,
-    isDirty: () => !!(state.dirty || state.locationDirty || state.assetTypeDirty),
-    confirmDiscard
-  };
-
-
-  window.SyncEtcAircraftAdminPage = {
-    version: VERSION,
     boot: init,
+    reload: init,
     isDirty,
+    hasUnsavedChanges: isDirty,
     confirmDiscard,
-    setActiveView,
-    reload: init
+    setActiveView
   };
+
+  window.SyncEtcAircraftAdmin = aircraftAdminApi;
+  window.SyncEtcAircraftAdminPage = aircraftAdminApi;
+
 
   window.addEventListener("beforeunload", (event) => {
     if (state.dirty || state.locationDirty || state.assetTypeDirty) { event.preventDefault(); event.returnValue = DIRTY_MESSAGE; return DIRTY_MESSAGE; }

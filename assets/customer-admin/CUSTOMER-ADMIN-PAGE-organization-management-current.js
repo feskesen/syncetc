@@ -1,16 +1,16 @@
 // CUSTOMER-ADMIN-PAGE-organization-management-current.js
-// Internal Version: 2026-06-17-117-D
+// Internal Version: 2026-06-17-117-E
 // Purpose: Customer/organization-side Organization Management console runtime. Immutable admin workbench shell with left navigation and right-panel module loading.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-17-117-D";
+  const VERSION = "2026-06-17-117-E";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
   const SUPABASE_JS_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
-  const AIRCRAFT_ADMIN_EXPECTED_VERSION = "2026-06-17-117-D";
+  const AIRCRAFT_ADMIN_EXPECTED_VERSION = "2026-06-17-117-E";
   const AIRCRAFT_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js?v=${encodeURIComponent(AIRCRAFT_ADMIN_EXPECTED_VERSION)}`;
   const PEOPLE_ADMIN_EXPECTED_VERSION = "2026-06-17-117-D";
   const PEOPLE_ADMIN_SCRIPT_URL = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-people-current.js?v=${encodeURIComponent(PEOPLE_ADMIN_EXPECTED_VERSION)}`;
@@ -276,7 +276,7 @@
 
     { key: "assets-types", label: "Asset Types", short: "Classifications", group: "Assets", status: "active", kind: "aircraft", aircraftView: "asset-types", description: "Manage simple asset classifications such as aircraft, vehicles, simulators, equipment, vessels, or other asset groups." },
     { key: "assets-locations", label: "Spaces & Locations", short: "Locations", group: "Assets", status: "active", kind: "aircraft", aircraftView: "locations", description: "Manage shared locations such as airports, hangars, meeting rooms, offices, docks, storage, or other operating locations." },
-    { key: "assets-aircraft", label: "Assets / Aircraft", short: "Fleet records", group: "Assets", status: "active", kind: "aircraft", aircraftView: "identity", description: "Manage aircraft identity, classification, status, visibility, usage, rates, media, and setup fields." },
+    { key: "assets-aircraft", label: "Aircraft Setup", short: "Profile/settings", group: "Assets", status: "active", kind: "aircraft", aircraftView: "identity", description: "Manage stable aircraft profile, visibility, status, rates, images, requirements, and reference settings." },
     { key: "assets-usage", label: "Usage / Meters", short: "Hobbs/Tach/usage", group: "Assets", status: "placeholder", href: "/aircraft-admin#usage", description: "Usage basis, Hobbs/Tach/current readings, and future hours logs." },
     { key: "assets-maintenance-reminders", label: "Maintenance Reminders", short: "Due items", group: "Assets", status: "placeholder", href: "/aircraft-admin#maintenance", description: "Recurring aircraft/asset reminders by date, hours, or other basis." },
     { key: "assets-squawks", label: "Squawks / Discrepancies", short: "Maintenance issues", group: "Assets", status: "placeholder", description: "Operational discrepancy reporting and resolution workflow. Maintenance/squawk system remains separate from forum discussions." },
@@ -473,7 +473,7 @@
       <div class="omg-card"><h3>Active modules</h3><p class="omg-muted">Ready to use in this management console.</p><div class="omg-mini-list">${active.map(renderMiniModule).join("")}</div></div>
       <div class="omg-card"><h3>Existing modules</h3><p class="omg-muted">Available organization tools that can be opened from here.</p><div class="omg-mini-list">${existing.slice(0, 10).map(renderMiniModule).join("")}</div></div>
       <div class="omg-card wide"><h3>Placeholder modules</h3><p class="omg-muted">Future management areas shown so the organization structure is easy to understand.</p><div class="omg-placeholder-grid">${placeholder.map(renderPlaceholderChip).join("")}</div></div>
-      <div class="omg-card wide"><h3>Management structure</h3><p>This console organizes customer-side management into one consistent workbench. Use the navigation on the left to manage people, assets, website/portal settings, communications, documents, store placeholders, and organization settings.</p><div class="omg-note-row"><span>Daily member landing page</span><strong>Member Dashboard</strong></div><div class="omg-note-row"><span>Customer management</span><strong>Organization Management</strong></div><div class="omg-note-row"><span>Operational tasks</span><strong>Module pages and admin notices</strong></div></div>
+      <div class="omg-card wide"><h3>Management structure</h3><p>This console is the customer-side setup and management workbench. Use it to configure people definitions, asset setup, website/portal settings, communications, documents, store setup, and organization settings.</p><div class="omg-note-row"><span>Daily member landing page</span><strong>Member Dashboard</strong></div><div class="omg-note-row"><span>Customer management</span><strong>Organization Management</strong></div><div class="omg-note-row"><span>Operational tasks</span><strong>Module pages and admin notices</strong></div></div>
     </div>`;
   }
 

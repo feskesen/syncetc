@@ -1,12 +1,12 @@
 // ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-17-117-D
+// Internal Version: 2026-06-17-117-E
 // Purpose: Compatibility loader for the deprecated standalone aircraft admin page. Loads the current customer-admin aircraft workbench module.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-17-117-D";
-  const TARGET_VERSION = "2026-06-17-117-D";
+  const VERSION = "2026-06-17-117-E";
+  const TARGET_VERSION = "2026-06-17-117-E";
   const TARGET_SRC = `https://feskesen.github.io/syncetc/assets/customer-admin/CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js?v=${encodeURIComponent(TARGET_VERSION)}`;
   const SCRIPT_ID = `syncetc-aircraft-admin-current-loader-${TARGET_VERSION.replace(/[^A-Za-z0-9_-]/g, "-")}`;
 

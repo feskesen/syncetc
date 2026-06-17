@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-17-117-D
+// Internal Version: 2026-06-17-117-E
 // Purpose: Customer/organization-side Aircraft Admin foundation. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-17-117-D";
+  const VERSION = "2026-06-17-117-E";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -734,9 +734,9 @@
       operational_json: { status_note: d.dispatch_note || "" },
       usage_json: { usage_tracking_basis: d.usage_tracking_basis, current_tach: d.current_tach, current_hobbs: d.current_hobbs, current_airframe_hours: d.current_airframe_hours },
       billing_json: { billing_basis: d.billing_basis, fuel_included: !!d.fuel_included, tax_behavior: d.tax_behavior },
-      maintenance_json: { placeholder: true, note: "Reminder and squawk systems are future modules." },
+      maintenance_json: { note_type: "aircraft_setup_reference" },
       media_json: { primary_photo_url: d.primary_photo_url, panel_photo_url: d.panel_photo_url },
-      settings_json: { saved_from: "aircraft_admin_0117A", asset_specific_checkout_required: d.asset_specific_checkout_required !== false },
+      settings_json: { saved_from: "aircraft_admin_0117E", asset_specific_checkout_required: d.asset_specific_checkout_required !== false },
       qualification_requirements: collectAssetQualificationRequirements0117A()
     };
   }
@@ -966,9 +966,9 @@
       operational_json: { status_note: d.dispatch_note || "" },
       usage_json: { usage_tracking_basis: d.usage_tracking_basis, current_tach: d.current_tach, current_hobbs: d.current_hobbs, current_airframe_hours: d.current_airframe_hours },
       billing_json: { billing_basis: d.billing_basis, fuel_included: !!d.fuel_included, tax_behavior: d.tax_behavior },
-      maintenance_json: { placeholder: true, note: "Reminder and squawk systems are separate modules." },
+      maintenance_json: { note_type: "aircraft_setup_reference" },
       media_json: { primary_photo_url: d.primary_photo_url, panel_photo_url: d.panel_photo_url },
-      settings_json: { saved_from: "aircraft_admin_0115F" }
+      settings_json: { saved_from: "aircraft_admin_0117E" }
     };
   }
 
@@ -1099,7 +1099,7 @@
     return `
       <section class="${hideHeader ? "aircraft-subpanel" : "aircraft-card"} aircraft-list-card">
         ${hideHeader ? "" : `<div class="aircraft-section-head compact">
-          <div><h2>Assets / Aircraft</h2><p>Manage aircraft records, visibility, dispatch status, and operating details.</p></div>
+          <div><h2>Aircraft Setup / Profile</h2><p>Manage stable aircraft profile, visibility, status, requirements, rates, images, and reference notes.</p></div>
           <button class="aircraft-button secondary" id="aircraft-new">New Aircraft</button>
         </div>
         <div class="aircraft-module-divider"></div>`}
@@ -1142,7 +1142,7 @@
 
   function renderTabs() {
     const tabs = [
-      ["identity", "Identity"], ["classification", "Classification"], ["operations", "Operations"], ["requirements", "Requirements / Qualified Pilots"], ["rates", "Rates / Usage"], ["media", "Media / Notes"], ["maintenance", "Maintenance Setup"]
+      ["identity", "Identity"], ["classification", "Classification"], ["operations", "Operations"], ["requirements", "Requirements / Qualified Pilots"], ["rates", "Rates / Usage"], ["media", "Profile Images / Notes"], ["maintenance", "Maintenance Settings"]
     ];
     return `<div class="aircraft-tabs">${tabs.map(([k,l]) => `<button class="${state.activeTab === k ? "active" : ""}" data-tab="${k}">${l}</button>`).join("")}</div>`;
   }
@@ -1186,10 +1186,10 @@
     const d = state.draft || emptyAircraftDraft();
     return `<label class="aircraft-field"><span>${esc(label)}</span><select data-draft-key="${attr(key)}">${options.map(([v,l]) => `<option value="${attr(v)}" ${clean(d[key]) === clean(v) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>`;
   }
-  function mediaSelectHtml0117D(label, key) {
+  function mediaSelectHtml0117E(label, key) {
     const d = state.draft || emptyAircraftDraft();
     const hasCurrent = Boolean(clean(d[key]));
-    return `<label class="aircraft-field"><span>${esc(label)}</span><select disabled><option>${esc(hasCurrent ? "Current image selected" : "No image selected")}</option></select><small class="aircraft-field-hint">Image selection is managed through the media library.</small></label>`;
+    return `<label class="aircraft-field"><span>${esc(label)}</span><select disabled><option>${esc(hasCurrent ? "Current image selected" : "No image selected")}</option></select><small class="aircraft-field-hint">Image selection belongs in the media library.</small></label>`;
   }
   function checkHtml(label, key) {
     const d = state.draft || emptyAircraftDraft();
@@ -1445,15 +1445,12 @@
   }
 
 
-  function mediaPickerCard0117D(label, draftKey, storedValue) {
+  function mediaPickerCard0117E(label, draftKey, storedValue) {
     const hasMedia = Boolean(clean(storedValue));
     return `<section class="aircraft-media-card" data-aircraft-media-card="${attr(draftKey)}">
       <div class="aircraft-media-card-head"><strong>${esc(label)}</strong><span>${hasMedia ? "Selected" : "None selected"}</span></div>
       <div class="aircraft-media-preview">${hasMedia ? `<img src="${attr(storedValue)}" alt="${esc(label)} preview" loading="lazy">` : `<div class="aircraft-media-empty">No image selected</div>`}</div>
-      <div class="aircraft-media-actions">
-        <button class="aircraft-btn secondary" type="button" data-media-library-placeholder="${attr(draftKey)}" disabled>Choose from media library</button>
-        <button class="aircraft-btn secondary" type="button" data-media-clear="${attr(draftKey)}" ${hasMedia ? "" : "disabled"}>Clear</button>
-      </div>
+      ${hasMedia ? `<div class="aircraft-media-actions"><button class="aircraft-btn secondary" type="button" data-media-clear="${attr(draftKey)}">Clear image</button></div>` : ""}
     </section>`;
   }
 
@@ -1493,7 +1490,7 @@
       ${textHtml("Dispatch/status note", "dispatch_note", "Short internal note when dispatch status needs explanation.")}`;
     if (state.activeTab === "requirements") return renderRequirementsTab0117A(d);
     if (state.activeTab === "rates") return `
-      <div class="aircraft-note"><strong>Rate and usage groundwork.</strong> This records the basics needed later for scheduling/billing. It is not a full finance engine yet.</div>
+      <div class="aircraft-note"><strong>Rate and meter settings.</strong> Record the basic rate and meter preferences used by scheduling and operations.</div>
       <div class="aircraft-form-grid">
         ${inputHtml("Hourly rate", "hourly_rate", "number", "155.00")}
         ${selectHtml("Billing basis", "billing_basis", [["hobbs","Hobbs"],["tach","Tach"],["airframe","Airframe / total time"],["flat","Flat / not hourly"],["manual","Manual"]])}
@@ -1512,21 +1509,21 @@
       <div class="aircraft-check-grid">${checkHtml("Fuel included in rate", "fuel_included")}</div>`;
     if (state.activeTab === "media") return `
       <div class="aircraft-media-grid">
-        ${mediaPickerCard0117D("Primary image", "primary_photo_url", d.primary_photo_url)}
-        ${mediaPickerCard0117D("Panel image", "panel_photo_url", d.panel_photo_url)}
+        ${mediaPickerCard0117E("Primary image", "primary_photo_url", d.primary_photo_url)}
+        ${mediaPickerCard0117E("Panel image", "panel_photo_url", d.panel_photo_url)}
       </div>
-      <div class="aircraft-note compact"><strong>Aircraft images.</strong> Keep or clear existing aircraft images here. New image selection is handled through the media library.</div>
+      <div class="aircraft-note compact"><strong>Aircraft images.</strong> Existing images can be previewed or cleared here. New image upload and library selection will be handled in the media library.</div>
       ${textHtml("Member/public summary", "summary", "Short plain-language summary.")}
-      ${textHtml("Longer description", "description", "Optional description shown where aircraft details are displayed.")}
-      ${textHtml("Internal notes", "internal_notes", "Admin-only notes placeholder.")}`;
+      ${textHtml("Profile description", "description", "Optional description shown where aircraft details are displayed.")}
+      ${textHtml("Private reference notes", "internal_notes", "Private setup/reference notes. Not maintenance history.")}`;
     return `
-      <div class="aircraft-note"><strong>Maintenance setup placeholder.</strong> Reminders, squawks/discrepancies, dispatch grounding workflow, and maintenance history will be built as separate modules on top of this aircraft foundation.</div>
+      <div class="aircraft-note"><strong>Maintenance settings.</strong> Store stable reference settings here. Maintenance history, squawks, and meter logs belong in their own operational modules.</div>
       <div class="aircraft-form-grid">
         ${inputHtml("Hobbs at last major overhaul", "hobbs_at_last_major_overhaul", "number", "Optional")}
         ${inputHtml("Oil change due tach", "oil_change_due_tach", "number", "Optional")}
       </div>
-      ${textHtml("Engine notes", "engine_notes", "Engine details or maintenance setup notes.")}
-      ${textHtml("General maintenance notes", "maintenance_notes_general", "Admin-only maintenance setup notes. Not a squawk log.")}`;
+      ${textHtml("Engine reference notes", "engine_notes", "Stable engine reference details. Not a maintenance log.")}
+      ${textHtml("Maintenance reference notes", "maintenance_notes_general", "Stable maintenance reference notes. Not a squawk log or maintenance history.")}`;
   }
 
   function renderAssetTypes() {
@@ -1688,7 +1685,7 @@
     return `
       <section class="aircraft-card aircraft-aircraft-module-card">
         <div class="aircraft-section-head compact">
-          <div><h2>Assets / Aircraft</h2><p>Manage aircraft records, visibility, dispatch status, and operating details.</p></div>
+          <div><h2>Aircraft Setup / Profile</h2><p>Manage stable aircraft profile, visibility, status, requirements, rates, images, and reference notes.</p></div>
           <button class="aircraft-button secondary" id="aircraft-new">New Aircraft</button>
         </div>
         <div class="aircraft-module-divider"></div>

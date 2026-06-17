@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-aircraft-admin-current.js
-// Internal Version: 2026-06-17-117-B
+// Internal Version: 2026-06-17-117-C
 // Purpose: Customer/organization-side Aircraft Admin foundation. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-17-117-B";
+  const VERSION = "2026-06-17-117-C";
   const SUPABASE_URL = "https://bxywokidhgppmlzyqvem.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okF_HCqwt-0zcSqlifSZ7g_1kCXxdCA";
   const ACCESS_URL = `${SUPABASE_URL}/functions/v1/core-access-action`;
@@ -1422,7 +1422,7 @@
         <div class="aircraft-req-list">${reqRows}</div>
       </section>
       <section class="aircraft-requirements-card">
-        <div class="aircraft-section-head compact"><div><h3>Qualified pilots</h3><p>This view checks aircraft checkout records against the requirements above. Manage person checkouts from Members / People.</p></div></div>
+        <div class="aircraft-section-head compact"><div><h3>Qualified pilots / reservation preview</h3><p>Shows which authorized pilots look ready for this aircraft based on the requirements above. Manage person checkouts from Members / People.</p></div></div>
         <div class="aircraft-qualified-table"><div class="aircraft-qualified-row head"><div>Pilot</div><div>Aircraft checkout</div><div>Requirements</div><div>Result</div></div>${pilotRows}</div>
       </section>`;
   }

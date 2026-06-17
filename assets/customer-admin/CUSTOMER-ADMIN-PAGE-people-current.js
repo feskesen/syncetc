@@ -1,11 +1,11 @@
 // CUSTOMER-ADMIN-PAGE-people-current.js
-// Internal Version: 2026-06-16-116-T
+// Internal Version: 2026-06-16-116-U
 // Purpose: Organization Admin People workbench. Supports standalone page and embedded Organization Management module runtime.
 
 (function () {
   "use strict";
 
-  const VERSION = "2026-06-16-116-T";
+  const VERSION = "2026-06-16-116-U";
   const ROOT_ID = "syncetc-organization-people-root";
   const ROOT_SELECTOR = "#syncetc-organization-people-root, #syncetc-people-admin-root, [data-syncetc-page=\"organization-people\"]";
   const SELECTED_ORG_KEY = "syncetc.selectedOrganizationId";
@@ -1864,25 +1864,24 @@
   }
 
   function normalizeAssetCheckoutStatusForUi0116T(value = "inactive") {
-    const current = key(value || "inactive") || "inactive";
-    return ["approved", "checked-out", "checked_out"].includes(current) ? "active" : current;
+    return assetCheckoutAuthorized0116U(value) ? "active" : "inactive";
+  }
+
+  function assetCheckoutAuthorized0116U(value = "") {
+    return ["active", "approved", "checked-out", "checked_out", "checkedout", "authorized", "current"].includes(key(value));
   }
 
   function assetCheckoutIsCheckedOut0116T(value = "") {
-    return ["active", "approved", "checked-out", "checked_out"].includes(key(value));
+    return assetCheckoutAuthorized0116U(value);
   }
 
   function assetCheckoutStatusValue0116T(value = "inactive") {
-    const current = key(value || "inactive") || "inactive";
-    if (["active", "approved", "checked-out", "checked_out", "checkedout"].includes(current)) return "approved";
-    if (current === "suspended") return "revoked";
-    if (["pending", "revoked", "expired", "waived", "inactive"].includes(current)) return current;
-    return "inactive";
+    return assetCheckoutAuthorized0116U(value) ? "approved" : "inactive";
   }
 
-  function assetCheckoutStatusOptions0116T(value = "inactive") {
-    const current = assetCheckoutStatusValue0116T(value);
-    return [["inactive", "Not checked out"], ["approved", "Checked out"], ["pending", "Pending"], ["revoked", "Suspended / revoked"], ["expired", "Expired"], ["waived", "Waived"]].map(([v,label]) => `<option value="${esc(v)}" ${current === v ? "selected" : ""}>${esc(label)}</option>`).join("");
+  function aircraftCheckoutInfoButton0116U(text) {
+    const tip = clean(text);
+    return tip ? ` <button class="people-info-btn" type="button" tabindex="0" aria-label="${esc(tip)}" title="${esc(tip)}">?</button>` : "";
   }
 
   function assetCheckoutBulkPanel0116T(aircraft, mayEdit) {
@@ -1893,13 +1892,12 @@
       return `<label class="people-aircraft-bulk-item"><input type="checkbox" data-people-ui-only="true" data-aircraft-bulk-id="${esc(safeDomId(assetId))}" data-aircraft-bulk-asset-id="${esc(assetId)}"><span>${esc(assetLabel0116S(asset))}</span></label>`;
     }).filter(Boolean).join("");
     return `<div id="people-aircraft-bulk-panel" class="people-aircraft-bulk-panel" hidden>
-      <div class="people-aircraft-bulk-head"><div><strong>Bulk update aircraft checkouts</strong><small>Select aircraft and apply the same checkout values to those rows.</small></div><div class="people-inline-actions"><button id="people-aircraft-bulk-select-all" class="people-btn secondary" type="button">Select all</button><button id="people-aircraft-bulk-clear" class="people-btn secondary" type="button">Clear</button></div></div>
+      <div class="people-aircraft-bulk-head"><div><strong>Bulk update aircraft checkouts</strong><small>Select aircraft and apply the same authorization values to those rows.</small></div><div class="people-inline-actions"><button id="people-aircraft-bulk-select-all" class="people-btn secondary" type="button">Select all</button><button id="people-aircraft-bulk-clear" class="people-btn secondary" type="button">Clear</button></div></div>
       <div class="people-aircraft-bulk-list">${itemRows || `<div class="people-empty-row compact">No aircraft available.</div>`}</div>
       <div class="people-aircraft-bulk-controls">
-        <label class="people-field"><span>Checkout</span><select id="people-aircraft-bulk-status" data-people-ui-only="true">${assetCheckoutStatusOptions0116T("approved")}</select></label>
-        <label class="people-field"><span>Completed</span><input id="people-aircraft-bulk-completed" data-people-ui-only="true" type="date"></label>
-        <label class="people-field"><span>Expires / valid until</span><input id="people-aircraft-bulk-expires" data-people-ui-only="true" type="date" disabled></label>
-        <label class="people-check people-aircraft-no-expiration"><input id="people-aircraft-bulk-no-expiration" data-people-ui-only="true" type="checkbox" checked><span>No expiration</span></label>
+        <label class="people-check people-aircraft-authorized-bulk"><input id="people-aircraft-bulk-authorized" data-people-ui-only="true" type="checkbox" checked><span>Authorized${aircraftCheckoutInfoButton0116U("Check this when the person is approved to reserve or fly the selected aircraft without an instructor under this organization’s rules.")}</span></label>
+        <label class="people-field"><span>Completed / approved</span><input id="people-aircraft-bulk-completed" data-people-ui-only="true" type="date"></label>
+        <label class="people-field"><span>Valid until${aircraftCheckoutInfoButton0116U("Leave blank if this checkout does not expire.")}</span><input id="people-aircraft-bulk-expires" data-people-ui-only="true" type="date"></label>
         <label class="people-field people-field-wide"><span>Notes</span><input id="people-aircraft-bulk-notes" data-people-ui-only="true" type="text" placeholder="Optional; blank leaves existing notes unchanged"></label>
       </div>
       <div class="people-inline-actions"><button id="people-aircraft-bulk-apply" class="people-btn secondary" type="button">Apply to selected aircraft</button><span id="people-aircraft-bulk-status-message" class="people-action-status"></span></div>
@@ -1915,32 +1913,35 @@
       return `<section class="people-qualification-panel people-aircraft-checkout-panel"><div class="people-role-section-head"><h4>Aircraft checkouts</h4></div><div class="people-empty-row compact">No active aircraft are available for checkout tracking yet.</div></section>`;
     }
     const disabled = mayEdit ? "" : "disabled";
+    const authorizedTip = aircraftCheckoutInfoButton0116U("Check this when the person is approved to reserve or fly this aircraft without an instructor under this organization’s rules.");
+    const validUntilTip = aircraftCheckoutInfoButton0116U("Leave blank if this checkout does not expire.");
     const rows = aircraft.map((asset) => {
       const assetId = clean(asset.operational_asset_id || asset.asset_id || asset.aircraft_id);
       const domId = safeDomId(assetId);
       const assignment = byAssetId.get(assetId) || {};
       const assignmentId = clean(assignment.person_asset_checkout_id || assignment.person_asset_checkout_assignment_id || assignment.asset_checkout_assignment_id || assignment.checkout_assignment_id || "");
-      const status = assetCheckoutStatusValue0116T(assignment.checkout_status || assignment.assignment_status || assignment.status || "inactive");
+      const authorized = assetCheckoutAuthorized0116U(assignment.checkout_status || assignment.assignment_status || assignment.status || "inactive");
       const completed = clean(assignment.completed_at || assignment.issued_at || assignment.approved_at || assignment.issued_date || "").slice(0,10);
       const expires = clean(assignment.expires_at || assignment.expiration_date || assignment.current_through || "").slice(0,10);
-      const noExpiration = status === "approved" && !expires;
       const notes = clean(assignment.notes || "");
       const meta = [clean(asset.aircraft_make || asset.make), clean(asset.aircraft_model || asset.model)].filter(Boolean).join(" ");
-      const expired = status === "approved" && Boolean(expires) && expires < todayIso0116R();
+      const expired = authorized && Boolean(expires) && expires < todayIso0116R();
       return `<div class="people-aircraft-checkout-row ${expired ? "needs-attention" : ""}" role="row" data-aircraft-checkout-field="${esc(domId)}" data-operational-asset-id="${esc(assetId)}" data-assignment-id="${esc(assignmentId)}">
-        <div class="people-aircraft-checkout-title" role="cell"><strong>${esc(assetLabel0116S(asset))}</strong>${meta ? `<small>${esc(meta)}</small>` : ""}${expired ? `<em class="alert">Checkout expired</em>` : ""}</div>
-        <div role="cell"><div class="people-qualification-cell-input"><label class="people-field people-qualification-grid-field"><span>Checkout</span><select id="people-aircraft-checkout-status-${esc(domId)}" ${disabled}>${assetCheckoutStatusOptions0116T(status)}</select></label></div></div>
-        <div role="cell"><div class="people-qualification-cell-input">${qualificationDateInput0116R(`people-aircraft-checkout-completed-${domId}`, "Completed", completed, disabled)}</div></div>
-        <div role="cell"><div class="people-aircraft-expiration-cell"><div class="people-qualification-cell-input">${qualificationDateInput0116R(`people-aircraft-checkout-expires-${domId}`, "Expires / valid until", expires, noExpiration || !mayEdit ? "disabled" : "")}</div><label class="people-aircraft-no-expiration compact"><input id="people-aircraft-checkout-no-expiration-${esc(domId)}" type="checkbox" ${noExpiration ? "checked" : ""} ${disabled}><span>No expiration</span></label></div></div>
+        <div class="people-aircraft-checkout-title" role="cell"><strong>${esc(assetLabel0116S(asset))}</strong>${meta ? `<small>${esc(meta)}</small>` : ""}${expired ? `<em class="alert">Authorization expired</em>` : ""}</div>
+        <div role="cell"><div class="people-qualification-cell-input"><label class="people-qualification-check compact people-aircraft-authorized-check"><input id="people-aircraft-checkout-authorized-${esc(domId)}" type="checkbox" ${authorized ? "checked" : ""} ${disabled}><span><strong>Authorized</strong>${authorizedTip}</span></label></div></div>
+        <div role="cell"><div class="people-qualification-cell-input">${qualificationDateInput0116R(`people-aircraft-checkout-completed-${domId}`, "Completed / approved", completed, disabled)}</div></div>
+        <div role="cell"><div class="people-qualification-cell-input">${qualificationDateInput0116R(`people-aircraft-checkout-expires-${domId}`, "Valid until", expires, disabled)}</div></div>
         <div role="cell"><div class="people-qualification-cell-input"><label class="people-field people-qualification-grid-field"><span>Notes</span><input id="people-aircraft-checkout-notes-${esc(domId)}" type="text" value="${esc(notes)}" ${disabled}></label></div></div>
       </div>`;
     }).join("");
-    return `<section class="people-qualification-panel people-aircraft-checkout-panel"><div class="people-role-section-head"><h4>Aircraft checkouts</h4>${bulkToggle}</div>${assetCheckoutBulkPanel0116T(aircraft, mayEdit)}<div class="people-aircraft-checkout-table-wrap" tabindex="0" aria-label="Aircraft checkouts"><div class="people-aircraft-checkout-table" role="table"><div class="people-aircraft-checkout-row people-qualification-table-head" role="row"><div role="columnheader">Aircraft</div><div role="columnheader">Checkout</div><div role="columnheader">Completed</div><div role="columnheader">Expires / valid until</div><div role="columnheader">Notes</div></div>${rows}</div></div></section>`;
+    return `<section class="people-qualification-panel people-aircraft-checkout-panel"><div class="people-role-section-head"><h4>Aircraft checkouts</h4>${bulkToggle}</div>${assetCheckoutBulkPanel0116T(aircraft, mayEdit)}<div class="people-aircraft-checkout-table-wrap" tabindex="0" aria-label="Aircraft checkouts"><div class="people-aircraft-checkout-table" role="table"><div class="people-aircraft-checkout-row people-qualification-table-head" role="row"><div role="columnheader">Aircraft</div><div role="columnheader">Authorized${authorizedTip}</div><div role="columnheader">Completed / approved</div><div role="columnheader">Valid until${validUntilTip}</div><div role="columnheader">Notes</div></div>${rows}</div></div></section>`;
   }
+
 
   function normalizeExistingAssetCheckoutForSave0116S(assignment = {}) {
     const a = obj(assignment);
-    const status = assetCheckoutStatusValue0116T(a.checkout_status || a.assignment_status || a.status || "approved");
+    const authorized = assetCheckoutAuthorized0116U(a.checkout_status || a.assignment_status || a.status || "approved");
+    const status = authorized ? "approved" : "inactive";
     const expires = clean(a.expires_at || a.expiration_date || a.current_through || "").slice(0,10);
     return {
       person_asset_checkout_id: clean(a.person_asset_checkout_id || a.person_asset_checkout_assignment_id || a.asset_checkout_assignment_id || a.checkout_assignment_id),
@@ -1949,13 +1950,13 @@
       checkout_status: status,
       assignment_status: status,
       status,
-      completed_at: clean(a.completed_at || a.issued_at || a.approved_at || a.issued_date || "").slice(0,10),
-      issued_at: clean(a.issued_at || a.completed_at || a.approved_at || a.issued_date || "").slice(0,10),
-      expires_at: expires,
-      expiration_date: expires,
-      current_through: expires,
+      completed_at: authorized ? clean(a.completed_at || a.issued_at || a.approved_at || a.issued_date || "").slice(0,10) : "",
+      issued_at: authorized ? clean(a.issued_at || a.completed_at || a.approved_at || a.issued_date || "").slice(0,10) : "",
+      expires_at: authorized ? expires : "",
+      expiration_date: authorized ? expires : "",
+      current_through: authorized ? expires : "",
       notes: clean(a.notes || ""),
-      settings_json: obj(a.settings_json),
+      settings_json: Object.assign({}, obj(a.settings_json), { source: "people_aircraft_checkouts_0116U" }),
     };
   }
 
@@ -1967,14 +1968,14 @@
       const assetId = clean(field.getAttribute("data-operational-asset-id"));
       const assignmentId = clean(field.getAttribute("data-assignment-id"));
       if (assetId) renderedAssetIds.add(assetId);
-      const status = assetCheckoutStatusValue0116T($(`people-aircraft-checkout-status-${domId}`)?.value || "inactive");
-      const completed = clean($(`people-aircraft-checkout-completed-${domId}`)?.value);
-      const noExpiration = status !== "inactive" && bool($(`people-aircraft-checkout-no-expiration-${domId}`)?.checked);
-      const expires = noExpiration ? "" : clean($(`people-aircraft-checkout-expires-${domId}`)?.value);
+      const authorized = bool($(`people-aircraft-checkout-authorized-${domId}`)?.checked);
+      const status = authorized ? "approved" : "inactive";
+      const completed = authorized ? clean($(`people-aircraft-checkout-completed-${domId}`)?.value) : "";
+      const expires = authorized ? clean($(`people-aircraft-checkout-expires-${domId}`)?.value) : "";
       const notes = clean($(`people-aircraft-checkout-notes-${domId}`)?.value);
-      const include = Boolean(assetId && (status !== "inactive" || completed || expires || notes || assignmentId));
+      const include = Boolean(assetId && (authorized || completed || expires || notes || assignmentId));
       if (!include) return null;
-      return { person_asset_checkout_id: assignmentId, person_asset_checkout_assignment_id: assignmentId, operational_asset_id: assetId, checkout_status: status, assignment_status: status, status, completed_at: completed, issued_at: completed, expires_at: expires, expiration_date: expires, current_through: expires, notes, settings_json: { source: "people_aircraft_checkouts_0116T", no_expiration: noExpiration } };
+      return { person_asset_checkout_id: assignmentId, person_asset_checkout_assignment_id: assignmentId, operational_asset_id: assetId, checkout_status: status, assignment_status: status, status, completed_at: completed, issued_at: completed, expires_at: expires, expiration_date: expires, current_through: expires, notes, settings_json: { source: "people_aircraft_checkouts_0116U", no_expiration: authorized && !expires } };
     }).filter(Boolean);
     const hiddenExisting = assetCheckoutRowsFor0116S(selected || {}).filter((assignment) => {
       const assetId = assignmentAssetId0116S(assignment);
@@ -1983,51 +1984,11 @@
     return visibleAssignments.concat(hiddenExisting);
   }
 
-  function syncAircraftExpirationControl0116T(domId, markDirty = true) {
-    const noExp = $(`people-aircraft-checkout-no-expiration-${domId}`);
-    const dateInput = $(`people-aircraft-checkout-expires-${domId}`);
-    const statusEl = $(`people-aircraft-checkout-status-${domId}`);
-    if (!noExp || !dateInput) return;
-    const status = assetCheckoutStatusValue0116T(statusEl?.value || "inactive");
-    if (status === "inactive") {
-      noExp.checked = false;
-      dateInput.disabled = false;
-    } else if (noExp.checked) {
-      dateInput.value = "";
-      dateInput.disabled = true;
-    } else {
-      dateInput.disabled = false;
-    }
-    if (markDirty) setDirty(true);
-  }
-
   function setBulkStatusMessage0116T(text = "", mode = "") {
     const el = $("people-aircraft-bulk-status-message");
     if (!el) return;
     el.textContent = text;
     el.className = `people-action-status ${mode || ""}`.trim();
-  }
-
-  function syncAircraftBulkExpiration0116T() {
-    const noExp = $("people-aircraft-bulk-no-expiration");
-    const dateInput = $("people-aircraft-bulk-expires");
-    const statusEl = $("people-aircraft-bulk-status");
-    if (!noExp || !dateInput) return;
-    const status = assetCheckoutStatusValue0116T(statusEl?.value || "approved");
-    if (status === "inactive") {
-      noExp.checked = false;
-      noExp.disabled = true;
-      dateInput.value = "";
-      dateInput.disabled = true;
-      return;
-    }
-    noExp.disabled = false;
-    if (noExp.checked) {
-      dateInput.value = "";
-      dateInput.disabled = true;
-    } else {
-      dateInput.disabled = false;
-    }
   }
 
   function bindAircraftBulkEvents0116T() {
@@ -2047,34 +2008,25 @@
       document.querySelectorAll("[data-aircraft-bulk-id]").forEach((box) => { box.checked = false; });
       setBulkStatusMessage0116T("");
     });
-    $("people-aircraft-bulk-no-expiration")?.addEventListener("change", syncAircraftBulkExpiration0116T);
-    $("people-aircraft-bulk-status")?.addEventListener("change", syncAircraftBulkExpiration0116T);
-    syncAircraftBulkExpiration0116T();
     $("people-aircraft-bulk-apply")?.addEventListener("click", () => {
       const selectedBoxes = Array.from(document.querySelectorAll("[data-aircraft-bulk-id]")).filter((box) => box.checked);
       if (!selectedBoxes.length) {
         setBulkStatusMessage0116T("Select at least one aircraft.", "warn");
         return;
       }
-      const bulkStatus = assetCheckoutStatusValue0116T($("people-aircraft-bulk-status")?.value || "approved");
-      const bulkCompleted = bulkStatus === "inactive" ? "" : clean($("people-aircraft-bulk-completed")?.value || "");
-      const bulkNoExpiration = bulkStatus !== "inactive" && bool($("people-aircraft-bulk-no-expiration")?.checked);
-      const bulkExpires = bulkStatus === "inactive" || bulkNoExpiration ? "" : clean($("people-aircraft-bulk-expires")?.value || "");
+      const bulkAuthorized = bool($("people-aircraft-bulk-authorized")?.checked);
+      const bulkCompleted = bulkAuthorized ? clean($("people-aircraft-bulk-completed")?.value || "") : "";
+      const bulkExpires = bulkAuthorized ? clean($("people-aircraft-bulk-expires")?.value || "") : "";
       const bulkNotes = clean($("people-aircraft-bulk-notes")?.value || "");
       selectedBoxes.forEach((box) => {
         const domId = clean(box.getAttribute("data-aircraft-bulk-id"));
-        const statusEl = $(`people-aircraft-checkout-status-${domId}`);
+        const authorizedEl = $(`people-aircraft-checkout-authorized-${domId}`);
         const completedEl = $(`people-aircraft-checkout-completed-${domId}`);
         const expiresEl = $(`people-aircraft-checkout-expires-${domId}`);
-        const noExpEl = $(`people-aircraft-checkout-no-expiration-${domId}`);
         const notesEl = $(`people-aircraft-checkout-notes-${domId}`);
-        if (statusEl) statusEl.value = bulkStatus;
+        if (authorizedEl) authorizedEl.checked = bulkAuthorized;
         if (completedEl) completedEl.value = bulkCompleted;
-        if (noExpEl) noExpEl.checked = bulkNoExpiration;
-        if (expiresEl) {
-          expiresEl.value = bulkExpires;
-          expiresEl.disabled = bulkNoExpiration || bulkStatus === "inactive";
-        }
+        if (expiresEl) expiresEl.value = bulkExpires;
         if (bulkNotes && notesEl) notesEl.value = bulkNotes;
       });
       setDirty(true);
@@ -2086,18 +2038,6 @@
     document.querySelectorAll("[data-aircraft-checkout-field] input, [data-aircraft-checkout-field] select, [data-aircraft-checkout-field] textarea").forEach((input) => {
       input.addEventListener("input", () => setDirty(true));
       input.addEventListener("change", () => setDirty(true));
-    });
-    document.querySelectorAll("[id^='people-aircraft-checkout-no-expiration-']").forEach((input) => {
-      input.addEventListener("change", () => {
-        const domId = input.id.replace("people-aircraft-checkout-no-expiration-", "");
-        syncAircraftExpirationControl0116T(domId, true);
-      });
-    });
-    document.querySelectorAll("[id^='people-aircraft-checkout-status-']").forEach((input) => {
-      input.addEventListener("change", () => {
-        const domId = input.id.replace("people-aircraft-checkout-status-", "");
-        syncAircraftExpirationControl0116T(domId, false);
-      });
     });
     bindAircraftBulkEvents0116T();
   }
@@ -2329,7 +2269,9 @@
       .people-editor-panel{min-width:0;padding:0;overflow:hidden}.people-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:15px 17px;border-bottom:1px solid var(--people-border)}.people-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-size:12px;font-weight:900}.people-pill.ok{background:#ecfdf5;color:#047857}.people-pill.warn{background:#fff7ed;color:#9a3412}.people-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--people-border);background:#fcfcfd}.people-tab{border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-weight:900;padding:8px 11px;cursor:pointer}.people-tab.active{background:var(--people-primary);color:#fff;border-color:var(--people-primary)}.people-tab-panel{padding:16px}.people-tab-panel[hidden]{display:none!important}.people-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}.people-access-status-grid{padding-bottom:8px}.people-affiliation-grid{padding-top:8px;border-top:1px solid var(--people-border)}.phone-grid{display:grid;grid-template-columns:110px 1fr;gap:10px 14px;align-items:end;margin:10px 0 14px}.primary-pick{min-height:42px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--people-border);border-radius:12px;background:var(--people-soft);font-weight:900;color:var(--people-primary)}.people-check-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.people-check{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border:1px solid var(--people-border);border-radius:12px;background:#fff;font-weight:900}.people-check.disabled{opacity:.62;background:#f8fafc}.people-check input{width:auto;min-height:0;margin-top:2px}.people-check small{display:block;font-size:11px;color:#9a3412;margin-top:2px}.people-access-callout{display:flex;justify-content:space-between;gap:14px;align-items:center;border:1px solid var(--people-border);border-radius:13px;background:var(--people-soft);padding:12px;margin-bottom:14px}.people-access-callout p{margin:4px 0 0;color:var(--people-muted);font-weight:650}.people-access-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 14px}.people-access-summary>div{border:1px solid var(--people-border);border-radius:12px;background:#fff;padding:10px;display:grid;gap:3px}.people-access-summary span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-access-summary strong{font-size:13px;line-height:1.25}.people-role-assignment-wrap{display:grid;gap:12px}.people-role-section{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px}.people-role-section-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}.people-role-section-head h4{margin:0;color:#101828;font-size:15px}.people-role-section-head span{font-size:11px;color:var(--people-muted);font-weight:900;text-transform:uppercase;letter-spacing:.04em}.people-role-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.people-qualification-panel,.people-aviation-details{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px;margin-bottom:14px}.people-qualification-list{display:grid;gap:10px}.people-qualification-row{display:grid;grid-template-columns:minmax(180px,1.5fr) minmax(120px,.8fr) minmax(120px,.8fr) minmax(120px,.8fr) minmax(160px,1fr);gap:10px;align-items:end;border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:10px}.people-qualification-row.selected{background:var(--people-soft);border-color:var(--people-primary)}.people-qualification-check{display:flex;gap:9px;align-items:flex-start;font-weight:900;color:var(--people-primary)}.people-qualification-check input{width:auto;margin-top:3px}.people-qualification-check span{display:grid;gap:3px}.people-qualification-check small{font-weight:750;color:var(--people-muted);line-height:1.25}.people-qualification-notes{min-width:0}.people-inline-actions{margin:10px 0}.people-action-row{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid var(--people-border);padding:12px 14px;background:#fcfcfd}.people-save-state{display:grid;gap:2px;font-weight:900;color:var(--people-muted)}.people-save-state.dirty{color:#9a3412}.people-photo-panel{grid-column:1/-1;display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;align-items:center;border:1px dashed var(--people-border);border-radius:14px;background:var(--people-soft);padding:14px}.people-photo-panel.dragover{box-shadow:0 0 0 3px var(--people-strong-soft);border-color:var(--people-primary)}.people-photo-preview{width:132px;height:132px;border-radius:18px;background:linear-gradient(135deg,var(--people-primary),${rgba(cfg.primary,.72)});color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--people-border);box-shadow:0 10px 26px ${rgba(cfg.primary,.16)}}.people-photo-preview img{width:100%;height:100%;object-fit:cover;display:block}.people-photo-preview span{font-size:38px;font-weight:950;letter-spacing:.03em}.people-photo-copy strong{display:block;color:var(--people-primary);font-size:15px;margin-bottom:4px}.people-photo-copy p{margin:0 0 8px;color:var(--people-muted);font-weight:750}.people-photo-copy small{display:block;color:var(--people-muted);font-weight:750;margin-bottom:10px}.people-photo-actions{display:flex;gap:8px;flex-wrap:wrap}.people-timeline-list{display:grid;gap:10px;margin-top:10px}.people-note-card{border-left:4px solid var(--people-primary);background:#f8fafc;border-radius:12px;padding:10px}.people-note-card strong{display:block;color:var(--people-primary)}.people-note-card span{font-size:12px;color:#64748b;font-weight:800}.people-note-card p{margin:6px 0;white-space:pre-wrap}.people-backend{white-space:pre-wrap;background:#0f172a;color:#e5eefb;border-radius:12px;padding:14px;font-size:12px;max-height:260px;overflow:auto}.people-footer{margin:10px auto 0;text-align:center;color:var(--people-muted);font-size:12px;font-weight:800}.people-footer a{color:var(--people-primary);text-decoration:none;font-weight:950}.people-def-row{padding:0;display:grid;grid-template-columns:30px minmax(0,1fr) 34px;align-items:stretch;overflow:hidden;cursor:grab}.people-def-row.dragging{opacity:.55}.people-def-row.drag-over{outline:2px dashed var(--people-primary);outline-offset:2px}.people-def-drag-handle{display:flex;align-items:center;justify-content:center;color:var(--people-muted);font-weight:950;letter-spacing:-5px;background:#f8fafc;border-right:1px solid var(--people-border);cursor:grab;user-select:none}.people-def-row .people-def-main{border:0;background:transparent;text-align:left;padding:10px;display:grid;gap:7px;cursor:pointer;color:inherit}.people-def-order{display:flex;flex-direction:column;justify-content:space-between;border-left:1px solid var(--people-border);background:#f8fafc}.people-order-button{border:0;background:#f8fafc;color:var(--people-primary);font-weight:950;width:34px;min-height:32px;cursor:pointer}.people-order-button:first-child{border-bottom:1px solid var(--people-border)}.people-order-button:last-child{border-top:1px solid var(--people-border)}.people-order-button:disabled{opacity:.35;cursor:not-allowed}.people-info-btn{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:5px;border:1px solid var(--people-border);border-radius:999px;background:#fff;color:var(--people-primary);font-size:11px;font-weight:950;line-height:1;vertical-align:middle;padding:0;cursor:help}.people-def-editor .people-tab-panel>.people-form-grid{grid-template-columns:1fr}.people-def-editor .people-form-grid .people-form-grid{grid-template-columns:repeat(3,minmax(0,1fr));}.people-action-status.ok{color:#047857}.people-action-status.warn{color:#9a3412}.people-soft-note{background:var(--people-soft);color:var(--people-primary);border:1px solid var(--people-border);border-radius:12px;padding:10px 12px;font-weight:750}.people-permission-role-list{min-height:240px}.people-permission-groups{display:grid;gap:12px}.people-permission-group{border:1px solid var(--people-border);border-radius:13px;background:#fff;padding:12px}.people-permission-group h4{margin:0 0 10px;font-size:16px;color:#101828}.people-permission-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.people-permission-capability{display:flex;align-items:center;gap:9px;border:1px solid var(--people-border);border-radius:12px;background:#fff;padding:10px;font-weight:850;min-height:44px}.people-permission-capability.enabled{background:var(--people-soft);border-color:var(--people-primary);color:var(--people-primary)}.people-permission-capability.locked{opacity:.72}.people-permission-capability input{width:16px;height:16px;accent-color:var(--people-primary)}.people-qualification-profile-list{display:grid;gap:10px}.people-qualification-profile-field{display:grid;grid-template-columns:minmax(160px,.65fr) minmax(0,1.5fr);gap:12px;align-items:start}.people-qualification-label strong{display:block;color:#101828;font-size:14px}.people-qualification-label small{display:block;color:var(--people-muted);font-weight:700;margin-top:3px}.people-qualification-controls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:end}.people-qualification-check.compact{align-self:end;min-height:44px}.people-qualification-notes{min-width:0}.people-qualification-title{display:grid;gap:3px;min-width:180px}.people-qualification-title strong{font-size:14px;color:#101828}.people-qualification-title small{color:var(--people-muted);font-weight:750}.people-qualification-fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;align-items:end;flex:1}.people-qualification-row{display:flex;gap:12px;align-items:flex-start}.people-qualification-row.selected{border-color:var(--people-primary);background:var(--people-soft)}.people-qualification-toggle{margin:0;min-height:42px}.people-aviation-details{border:1px solid var(--people-border);border-radius:14px;background:#fff;padding:12px;margin-top:14px}.people-qualification-grid-panel{overflow:hidden}.people-qualification-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}.people-qualification-table{min-width:1040px;display:grid;border:1px solid var(--people-border);border-radius:13px;overflow:hidden;background:#fff}.people-qualification-table-row{display:grid;grid-template-columns:minmax(190px,1.12fr) minmax(165px,.85fr) minmax(155px,.8fr) minmax(190px,.9fr) minmax(185px,1fr);align-items:center;border-bottom:1px solid var(--people-border);background:#fff}.people-qualification-table-row:last-child{border-bottom:0}.people-qualification-table-row>div{min-width:0;padding:9px 10px}.people-qualification-table-head{background:#f8fafc;color:var(--people-muted);font-size:11px;font-weight:950;text-transform:uppercase;letter-spacing:.045em}.people-qualification-title{display:block}.people-qualification-title strong{display:block;font-size:13px;color:#101828;line-height:1.18}.people-qualification-title small{display:block;color:var(--people-muted);font-weight:750;line-height:1.18;margin-top:1px}.people-qualification-title em{display:inline-flex;margin-top:4px;border:1px solid var(--people-border);border-radius:999px;background:var(--people-soft);color:var(--people-primary);font-style:normal;font-size:10px;font-weight:950;padding:2px 6px}.people-reservation-readiness{border:1px solid var(--people-border);border-radius:12px;padding:10px 12px;margin:0 0 10px;background:#fff;display:grid;gap:5px}.people-reservation-readiness.ok{background:#f0fdf4;border-color:#bbf7d0}.people-reservation-readiness.warn{background:#fff7ed;border-color:#fed7aa}.people-reservation-readiness strong{font-size:14px}.people-reservation-readiness p{margin:0;color:var(--people-muted);font-weight:750}.people-reservation-readiness ul{margin:2px 0 0 18px;padding:0;color:#9a3412;font-weight:850}.people-qualification-cell-input{min-width:0}.people-qualification-cell-input .people-field{margin:0}.people-qualification-cell-input .people-field>span{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important}.people-qualification-cell-input input,.people-qualification-cell-input select{width:100%;min-height:36px}.people-qualification-cell-input .people-qualification-check{min-height:36px;align-items:center}.people-qualification-empty{display:inline-flex;align-items:center;min-height:36px;color:var(--people-muted);font-weight:850}.people-qualification-grid-field input,.people-qualification-grid-field select{font-size:13px}.people-qualification-table-row{grid-template-columns:minmax(210px,1.15fr) minmax(180px,.8fr) minmax(170px,.78fr) minmax(210px,.9fr) minmax(190px,1fr)!important;align-items:center}.people-qualification-table-row>div{display:block;align-self:stretch}.people-qualification-cell-input{display:flex;align-items:center;min-height:38px}.people-qualification-cell-input .people-qualification-check{display:grid;grid-template-columns:22px minmax(0,1fr);gap:8px;align-items:center;width:100%;margin:0;min-height:38px}.people-qualification-cell-input .people-qualification-check input{width:18px;height:18px;margin:0;justify-self:center;accent-color:var(--people-primary)}.people-qualification-cell-input .people-qualification-check span{display:block;min-width:0}.people-qualification-cell-input .people-qualification-check strong{font-size:12px;line-height:1.15;color:var(--people-primary)}.people-qualification-cell-input input[type="date"],.people-qualification-cell-input input[type="text"],.people-qualification-cell-input select{height:38px;box-sizing:border-box}.people-qualification-table-head>div{display:flex;align-items:center}.people-qualification-title strong,.people-qualification-title small{display:block!important;white-space:normal}.people-qualification-title strong{margin:0 0 1px}.people-readiness-card{border:1px solid var(--people-border);border-radius:14px;background:#fff;padding:12px 14px;margin:0 0 12px;display:flex;align-items:flex-start;justify-content:space-between;gap:14px}.people-readiness-card strong{display:block;font-size:14px;color:#101828}.people-readiness-card p{margin:3px 0 0;color:var(--people-muted);font-weight:750}.people-readiness-card ul{margin:8px 0 0 18px;padding:0;color:#92400e;font-weight:800}.people-readiness-card>span{white-space:nowrap;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:950}.people-readiness-card.ready{background:#f0fdf4;border-color:#bbf7d0}.people-readiness-card.ready>span{background:#dcfce7;color:#166534}.people-readiness-card.warn{background:#fffbeb;border-color:#fed7aa}.people-readiness-card.warn>span{background:#fef3c7;color:#92400e}
 .people-readiness-card{border:1px solid var(--people-border);border-radius:12px;padding:10px 12px;margin:0 0 10px;background:#fff;display:grid;gap:3px}.people-readiness-card.ok{background:#f0fdf4;border-color:#bbf7d0}.people-readiness-card.warn{background:#fff7ed;border-color:#fed7aa}.people-readiness-card strong{font-size:13px;color:#101828}.people-readiness-card span{font-weight:950;color:var(--people-primary)}.people-readiness-card small{color:var(--people-muted);font-weight:750;line-height:1.25}.people-qualification-title strong,.people-qualification-title small{display:block!important}.people-qualification-title strong+small{margin-top:1px}.people-qualification-grid-panel .people-role-section-head span{display:none}.people-readiness-card{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;align-items:center;border:1px solid var(--people-border);border-radius:12px;padding:10px 12px;margin:0 0 10px;background:#fff}.people-readiness-card strong{color:#101828}.people-readiness-card span{font-weight:950}.people-readiness-card small{grid-column:2;color:var(--people-muted);font-weight:750}.people-readiness-card.ok{background:var(--people-soft);border-color:var(--people-border)}.people-readiness-card.ok span{color:var(--people-primary)}.people-readiness-card.warn{background:#fff7ed;border-color:#fed7aa}.people-readiness-card.warn span{color:#9a3412}.people-qualification-table-row>div.people-qualification-title{display:grid!important;gap:2px!important;align-content:center!important}.people-qualification-table-row>div.people-qualification-title strong{display:block!important;line-height:1.2!important}.people-qualification-table-row>div.people-qualification-title small{display:block!important;line-height:1.25!important;margin-top:0!important}.people-qualification-table-row .people-qualification-title{display:grid!important;gap:1px!important;align-content:center!important}.people-qualification-table-row .people-qualification-title strong,.people-qualification-table-row .people-qualification-title small{display:block!important}
 
-.people-qualification-table-row.needs-attention{background:#fff7ed}.people-qualification-title em.alert{background:#fef3c7!important;border-color:#fed7aa!important;color:#9a3412!important}.people-aircraft-checkout-panel{overflow:hidden}.people-aircraft-checkout-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}.people-aircraft-checkout-table{min-width:1060px;display:grid;border:1px solid var(--people-border);border-radius:13px;overflow:hidden;background:#fff}.people-aircraft-checkout-row{display:grid;grid-template-columns:minmax(190px,1fr) minmax(150px,.75fr) minmax(155px,.75fr) minmax(170px,.8fr) minmax(210px,1.1fr);align-items:center;border-bottom:1px solid var(--people-border);background:#fff}.people-aircraft-checkout-row:last-child{border-bottom:0}.people-aircraft-checkout-row.needs-attention{background:#fff7ed}.people-aircraft-checkout-row>div{min-width:0;padding:9px 10px;align-self:stretch}.people-aircraft-checkout-title{display:grid!important;gap:1px!important;align-content:center!important}.people-aircraft-checkout-title strong{font-size:13px;color:#101828;line-height:1.2}.people-aircraft-checkout-title small{font-size:12px;color:var(--people-muted);font-weight:750;line-height:1.25}.people-aircraft-checkout-title em.alert{display:inline-flex;margin-top:4px;border:1px solid #fed7aa;border-radius:999px;background:#fef3c7;color:#9a3412;font-style:normal;font-size:10px;font-weight:950;padding:2px 6px}.people-aircraft-checkout-row .people-field{margin:0}.people-aircraft-checkout-row .people-field>span{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important}.people-aircraft-checkout-row input,.people-aircraft-checkout-row select{height:38px;box-sizing:border-box;font-size:13px}.people-readiness-card{display:none!important}.people-aircraft-bulk-panel{border:1px solid var(--people-border);border-radius:13px;background:#f8fafc;padding:12px;margin:0 0 12px}.people-aircraft-bulk-panel[hidden]{display:none!important}.people-aircraft-bulk-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:10px}.people-aircraft-bulk-head strong{display:block;color:#101828;font-size:14px}.people-aircraft-bulk-head small{display:block;color:var(--people-muted);font-weight:750;margin-top:2px}.people-aircraft-bulk-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px;max-height:170px;overflow:auto}.people-aircraft-bulk-item{display:flex;gap:8px;align-items:center;border:1px solid var(--people-border);border-radius:11px;background:#fff;padding:8px 10px;font-weight:850}.people-aircraft-bulk-item input{width:16px;height:16px;accent-color:var(--people-primary)}.people-aircraft-bulk-controls{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;align-items:end}.people-aircraft-bulk-controls .people-field-wide{grid-column:1/-1}.people-aircraft-no-expiration{display:flex;gap:8px;align-items:center;font-size:12px;font-weight:900;color:var(--people-primary)}.people-aircraft-no-expiration input{width:16px!important;height:16px!important;accent-color:var(--people-primary)}.people-aircraft-no-expiration.compact{margin-top:4px;line-height:1.1}.people-aircraft-expiration-cell{display:grid;gap:4px}.people-aircraft-checkout-row{grid-template-columns:minmax(200px,1fr) minmax(160px,.72fr) minmax(160px,.72fr) minmax(190px,.82fr) minmax(220px,1fr)!important}.people-aircraft-checkout-row .people-aircraft-no-expiration span{white-space:nowrap}@media(max-width:960px){.people-aircraft-bulk-list{grid-template-columns:1fr}.people-aircraft-bulk-controls{grid-template-columns:1fr 1fr}}
+.people-qualification-table-row.needs-attention{background:#fff7ed}.people-qualification-title em.alert{background:#fef3c7!important;border-color:#fed7aa!important;color:#9a3412!important}.people-aircraft-checkout-panel{overflow:hidden}.people-aircraft-checkout-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}.people-aircraft-checkout-table{min-width:1060px;display:grid;border:1px solid var(--people-border);border-radius:13px;overflow:hidden;background:#fff}.people-aircraft-checkout-row{display:grid;grid-template-columns:minmax(190px,1fr) minmax(150px,.75fr) minmax(155px,.75fr) minmax(170px,.8fr) minmax(210px,1.1fr);align-items:center;border-bottom:1px solid var(--people-border);background:#fff}.people-aircraft-checkout-row:last-child{border-bottom:0}.people-aircraft-checkout-row.needs-attention{background:#fff7ed}.people-aircraft-checkout-row>div{min-width:0;padding:9px 10px;align-self:stretch}.people-aircraft-checkout-title{display:grid!important;gap:1px!important;align-content:center!important}.people-aircraft-checkout-title strong{font-size:13px;color:#101828;line-height:1.2}.people-aircraft-checkout-title small{font-size:12px;color:var(--people-muted);font-weight:750;line-height:1.25}.people-aircraft-checkout-title em.alert{display:inline-flex;margin-top:4px;border:1px solid #fed7aa;border-radius:999px;background:#fef3c7;color:#9a3412;font-style:normal;font-size:10px;font-weight:950;padding:2px 6px}.people-aircraft-checkout-row .people-field{margin:0}.people-aircraft-checkout-row .people-field>span{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important}.people-aircraft-checkout-row input,.people-aircraft-checkout-row select{height:38px;box-sizing:border-box;font-size:13px}.people-readiness-card{display:none!important}.people-aircraft-bulk-panel{border:1px solid var(--people-border);border-radius:13px;background:#f8fafc;padding:12px;margin:0 0 12px}.people-aircraft-bulk-panel[hidden]{display:none!important}.people-aircraft-bulk-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:10px}.people-aircraft-bulk-head strong{display:block;color:#101828;font-size:14px}.people-aircraft-bulk-head small{display:block;color:var(--people-muted);font-weight:750;margin-top:2px}.people-aircraft-bulk-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px;max-height:170px;overflow:auto}.people-aircraft-bulk-item{display:flex;gap:8px;align-items:center;border:1px solid var(--people-border);border-radius:11px;background:#fff;padding:8px 10px;font-weight:850}.people-aircraft-bulk-item input{width:16px;height:16px;accent-color:var(--people-primary)}.people-aircraft-bulk-controls{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;align-items:end}.people-aircraft-bulk-controls .people-field-wide{grid-column:1/-1}.people-aircraft-no-expiration{display:flex;gap:8px;align-items:center;font-size:12px;font-weight:900;color:var(--people-primary)}.people-aircraft-no-expiration input{width:16px!important;height:16px!important;accent-color:var(--people-primary)}.people-aircraft-no-expiration.compact{margin-top:4px;line-height:1.1}.people-aircraft-expiration-cell{display:grid;gap:4px}.people-aircraft-checkout-row{grid-template-columns:minmax(200px,1fr) minmax(160px,.72fr) minmax(160px,.72fr) minmax(190px,.82fr) minmax(220px,1fr)!important}.people-aircraft-checkout-row .people-aircraft-no-expiration span{white-space:nowrap}
+.people-aircraft-authorized-bulk{margin:0;min-height:42px;align-items:center}.people-aircraft-authorized-bulk input{width:18px!important;height:18px!important;accent-color:var(--people-primary)}.people-aircraft-authorized-check .people-info-btn{margin-left:4px}.people-aircraft-checkout-table .people-info-btn{width:16px;height:16px;font-size:10px;margin-left:4px}.people-aircraft-checkout-row{grid-template-columns:minmax(210px,1.15fr) minmax(180px,.8fr) minmax(170px,.78fr) minmax(210px,.9fr) minmax(190px,1fr)!important}.people-aircraft-checkout-row .people-qualification-check.compact{display:grid;grid-template-columns:22px minmax(0,1fr);gap:8px;align-items:center;width:100%;margin:0;min-height:38px}.people-aircraft-checkout-row .people-qualification-check.compact input{width:18px!important;height:18px!important;margin:0;justify-self:center;accent-color:var(--people-primary)}.people-aircraft-checkout-row .people-qualification-check.compact span{display:block;min-width:0}.people-aircraft-checkout-row .people-qualification-check.compact strong{font-size:12px;line-height:1.15;color:var(--people-primary)}
+@media(max-width:960px){.people-aircraft-bulk-list{grid-template-columns:1fr}.people-aircraft-bulk-controls{grid-template-columns:1fr 1fr}}
       @media(max-width:1100px){.people-workbench{grid-template-columns:1fr}.people-list-panel{position:static;max-height:none}.people-compact-list{max-height:320px;min-height:0}.people-form-grid,.people-check-grid,.people-role-grid,.people-access-summary,.people-qualification-profile-fields{grid-template-columns:1fr 1fr}.people-qualification-row{grid-template-columns:1fr 1fr}.people-module-header,.people-action-row,.people-access-callout{display:grid}.people-header-actions,.people-action-buttons{justify-content:flex-start}.phone-grid{grid-template-columns:1fr}.primary-pick{justify-content:flex-start;padding:0 12px}}
       @media(max-width:640px){.people-form-grid,.people-check-grid,.people-role-grid,.people-access-summary,.people-qualification-row,.people-qualification-profile-row,.people-qualification-profile-fields{grid-template-columns:1fr}.people-photo-panel{grid-template-columns:1fr}.people-photo-preview{margin:auto}.people-btn{width:100%}.people-action-buttons{width:100%}}
       @media print{#syncetc-portal-shell,.people-hero,.people-list-panel,.people-editor-panel,.people-message,.people-module-header{display:none!important}.people-wrap{max-width:none;margin:0;padding:0}.people-card{box-shadow:none;border:none}}

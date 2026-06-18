@@ -267,4 +267,18 @@ You landed in exactly the right place, and your schema already supports it.
 
 ---
 
+## 12. Super-Admin scope & access model (decisions locked 2026-06-17)
+
+These decisions were made after the original review and govern how the Super-Admin / platform tier is built going forward. They refine §1 (access tiers), §4 (workbench map), and Pass 3 in §10. **Pass 1 (the current work) builds none of this — it only finishes the customer→organization data consolidation.** They are recorded here so they survive into future sessions.
+
+1. **Super-Admin scope is narrow.** Platform / Super-Admin owns only what is *not* replicated at the customer-admin level: creating and seeding organizations, initial org setup, platform-wide configuration, super-admin (platform-staff) management, and billing (placeholder for now). It does **not** rebuild org-level operational tools — aircraft, assets, people, events, etc. Those live once, in the customer-admin workbenches.
+
+2. **"Enter any org as admin" model.** Super-Admins help an organization by dropping into that org's *own* admin tools, in that org's context — **not** through duplicate platform-level screens. The existing code already provides the seam for this (`platform_override`); the rebuild uses that seam rather than re-implementing operational UI at the platform level.
+
+3. **Silent super-admin access is auditable and disclosed.** When a Super-Admin enters an org silently, the access is recorded via the existing audit log (`core_audit_log`) and disclosed in the platform's terms. Silent access is permitted, but never invisible to the record.
+
+4. **The future platform-admin rebuild (Pass 3) is modular, utilitarian, and host-agnostic.** When the platform-admin surface is rebuilt — Pass 3, alongside the navigation re-cut in §10 — it is: modular and clean; utilitarian rather than cluttered; built with unobtrusive helper affordances ("?"-on-hover) instead of always-on explanatory clutter; and host-agnostic (the current Webflow hosting is temporary and must not be assumed permanent). This rebuild is **not in scope for Pass 1.**
+
+---
+
 *End of review. This document is meant to live in your repo (e.g. `/docs/architecture-review.md`) so it travels with the project into the build phase — including when you move to Claude Code.*

@@ -170,9 +170,9 @@ async function ensureUniqueCustomerKey(serviceClient: SupabaseClientAny, propose
   for (let i = 0; i < 100; i += 1) {
     const candidate = i === 0 ? base : `${base}-${i}`;
     const { data, error } = await serviceClient
-      .from("core_customers")
-      .select("customer_id")
-      .eq("customer_key", candidate)
+      .from("core_organizations")
+      .select("organization_id")
+      .eq("organization_key", candidate)
       .maybeSingle();
 
     if (error) throw error;
@@ -270,7 +270,7 @@ async function getOrCreateActiveStyleProfile(serviceClient: SupabaseClientAny, c
   const { data: existing, error: existingError } = await serviceClient
     .from("core_customer_style_profiles")
     .select("*")
-    .eq("customer_id", customerId)
+    .eq("organization_id", customerId)
     .eq("is_active", true)
     .order("updated_at", { ascending: false })
     .limit(1)
@@ -282,7 +282,6 @@ async function getOrCreateActiveStyleProfile(serviceClient: SupabaseClientAny, c
   const { data: inserted, error: insertError } = await serviceClient
     .from("core_customer_style_profiles")
     .insert({
-      customer_id: customerId,
       organization_id: customerId,
       profile_name: "Default",
       colors_json: {},
@@ -372,7 +371,6 @@ async function addStyleHistory(
 ): Promise<void> {
   try {
     await serviceClient.from("core_customer_style_profile_history").insert({
-      customer_id: customerId,
       organization_id: customerId,
       style_profile_id: styleProfile.style_profile_id || null,
       event_type: eventType,
@@ -478,8 +476,7 @@ async function addPageSettingsHistory(
     const snapshot = {
       customer_page: {
         customer_page_id: customerPage.customer_page_id,
-        customer_id: customerPage.customer_id,
-        organization_id: customerPage.organization_id || customerPage.customer_id,
+        organization_id: customerPage.organization_id,
         site_id: customerPage.site_id || null,
         template_id: customerPage.template_id || null,
         page_key: customerPage.page_key || null,
@@ -494,8 +491,7 @@ async function addPageSettingsHistory(
 
     await serviceClient.from("core_page_settings_history").insert({
       customer_page_id: customerPage.customer_page_id,
-      customer_id: customerPage.customer_id,
-      organization_id: customerPage.organization_id || customerPage.customer_id,
+      organization_id: customerPage.organization_id,
       page_settings_id: pageSettings.page_settings_id || null,
       event_type: eventType,
       snapshot_json: snapshot,
@@ -724,8 +720,8 @@ async function upsertAircraftRecord(
   serviceClient: SupabaseClientAny,
   input: JsonRecord,
 ): Promise<JsonRecord> {
-  const organizationId = optionalString(input, "organization_id", optionalString(input, "customer_id", ""));
-  if (!organizationId) throw new Error("Missing required organization_id/customer_id.");
+  const organizationId = optionalString(input, "organization_id", "");
+  if (!organizationId) throw new Error("Missing required organization_id.");
 
   const operationalAssetId = optionalNullableString(input, "operational_asset_id") || optionalNullableString(input, "aircraft_id");
   const tailNumber = optionalString(input, "tail_number", optionalString(input, "identifier", "")).toUpperCase().replace(/\s+/g, "");
@@ -886,8 +882,8 @@ async function attachAircraftImageAsset(
   serviceClient: SupabaseClientAny,
   input: JsonRecord,
 ): Promise<{ asset: JsonRecord; aircraft: JsonRecord | null }> {
-  const organizationId = optionalString(input, "organization_id", optionalString(input, "customer_id", ""));
-  if (!organizationId) throw new Error("Missing required organization_id/customer_id.");
+  const organizationId = optionalString(input, "organization_id", "");
+  if (!organizationId) throw new Error("Missing required organization_id.");
 
   const aircraftId = requireString(input, "aircraft_id");
   const role = normalizeAircraftImageRole(input.image_role || input.asset_role);
@@ -902,7 +898,6 @@ async function attachAircraftImageAsset(
   }
 
   const assetPayload: JsonRecord = {
-    customer_id: organizationId,
     organization_id: organizationId,
     operational_asset_id: aircraftId,
     asset_role: role,
@@ -968,8 +963,8 @@ async function listGalleryMedia(
   serviceClient: SupabaseClientAny,
   input: JsonRecord,
 ): Promise<JsonRecord[]> {
-  const organizationId = optionalString(input, "organization_id", optionalString(input, "customer_id", ""));
-  if (!organizationId) throw new Error("Missing required organization_id/customer_id.");
+  const organizationId = optionalString(input, "organization_id", "");
+  if (!organizationId) throw new Error("Missing required organization_id.");
   const includeArchived = optionalBoolean(input, "include_archived", false);
 
   let query = serviceClient
@@ -992,8 +987,8 @@ async function upsertGalleryMedia(
   serviceClient: SupabaseClientAny,
   input: JsonRecord,
 ): Promise<JsonRecord> {
-  const organizationId = optionalString(input, "organization_id", optionalString(input, "customer_id", ""));
-  if (!organizationId) throw new Error("Missing required organization_id/customer_id.");
+  const organizationId = optionalString(input, "organization_id", "");
+  if (!organizationId) throw new Error("Missing required organization_id.");
 
   const galleryMediaId = optionalNullableString(input, "gallery_media_id");
   const title = optionalNullableString(input, "title");
@@ -1100,7 +1095,7 @@ async function listInfoFaqItems(serviceClient: SupabaseClientAny, input: JsonRec
   let query = serviceClient
     .from("core_info_faq_items")
     .select("*")
-    .eq("organization_id", String(page.organization_id || page.customer_id))
+    .eq("organization_id", String(page.organization_id))
     .eq("customer_page_id", customerPageId)
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: true });
@@ -1121,7 +1116,7 @@ async function upsertInfoFaqItem(serviceClient: SupabaseClientAny, input: JsonRe
   const proposedKey = optionalString(input, "faq_key", "") || question;
 
   const payload: JsonRecord = {
-    organization_id: page.organization_id || page.customer_id,
+    organization_id: page.organization_id,
     site_id: page.site_id || null,
     customer_page_id: customerPageId,
     faq_key: normalizeKey(proposedKey) || null,
@@ -1143,7 +1138,7 @@ async function upsertInfoFaqItem(serviceClient: SupabaseClientAny, input: JsonRe
       .from("core_info_faq_items")
       .update(payload)
       .eq("faq_item_id", faqItemId)
-      .eq("organization_id", String(page.organization_id || page.customer_id));
+      .eq("organization_id", String(page.organization_id));
   } else {
     query = serviceClient
       .from("core_info_faq_items")
@@ -1167,7 +1162,7 @@ async function setInfoFaqArchiveState(serviceClient: SupabaseClientAny, input: J
     .from("core_info_faq_items")
     .update(payload)
     .eq("faq_item_id", faqItemId)
-    .eq("organization_id", String(page.organization_id || page.customer_id))
+    .eq("organization_id", String(page.organization_id))
     .select("*")
     .single();
 
@@ -1180,8 +1175,8 @@ async function setGalleryMediaArchiveState(
   input: JsonRecord,
   archive: boolean,
 ): Promise<JsonRecord> {
-  const organizationId = optionalString(input, "organization_id", optionalString(input, "customer_id", ""));
-  if (!organizationId) throw new Error("Missing required organization_id/customer_id.");
+  const organizationId = optionalString(input, "organization_id", "");
+  if (!organizationId) throw new Error("Missing required organization_id.");
   const galleryMediaId = requireString(input, "gallery_media_id");
 
   const payload = archive
@@ -1242,8 +1237,8 @@ async function writeDocumentEvent(
 }
 
 async function listDocuments(serviceClient: SupabaseClientAny, input: JsonRecord): Promise<JsonRecord[]> {
-  const organizationId = optionalString(input, "organization_id", optionalString(input, "customer_id", ""));
-  if (!organizationId) throw new Error("Missing required organization_id/customer_id.");
+  const organizationId = optionalString(input, "organization_id", "");
+  if (!organizationId) throw new Error("Missing required organization_id.");
   const includeArchived = optionalBoolean(input, "include_archived", false);
   const visibility = optionalNullableString(input, "visibility");
   const category = optionalNullableString(input, "category");
@@ -1266,8 +1261,8 @@ async function listDocuments(serviceClient: SupabaseClientAny, input: JsonRecord
 }
 
 async function upsertDocument(serviceClient: SupabaseClientAny, input: JsonRecord, actorUserId: string | null, actorEmail: string): Promise<JsonRecord> {
-  const organizationId = optionalString(input, "organization_id", optionalString(input, "customer_id", ""));
-  if (!organizationId) throw new Error("Missing required organization_id/customer_id.");
+  const organizationId = optionalString(input, "organization_id", "");
+  if (!organizationId) throw new Error("Missing required organization_id.");
 
   const title = requireString(input, "title");
   const documentId = optionalNullableString(input, "document_id") || optionalNullableString(input, "requested_document_id");
@@ -1330,8 +1325,8 @@ async function upsertDocument(serviceClient: SupabaseClientAny, input: JsonRecor
 }
 
 async function setDocumentArchiveState(serviceClient: SupabaseClientAny, input: JsonRecord, archive: boolean, actorUserId: string | null, actorEmail: string): Promise<JsonRecord> {
-  const organizationId = optionalString(input, "organization_id", optionalString(input, "customer_id", ""));
-  if (!organizationId) throw new Error("Missing required organization_id/customer_id.");
+  const organizationId = optionalString(input, "organization_id", "");
+  if (!organizationId) throw new Error("Missing required organization_id.");
   const documentId = requireString(input, "document_id");
   const payload = archive ? { status: "archived", archived_at: nowIso(), updated_by_user_id: actorUserId } : { status: "active", archived_at: null, updated_by_user_id: actorUserId };
   const { data, error } = await serviceClient
@@ -1347,9 +1342,9 @@ async function setDocumentArchiveState(serviceClient: SupabaseClientAny, input: 
 }
 
 async function listDocumentVersions(serviceClient: SupabaseClientAny, input: JsonRecord): Promise<JsonRecord[]> {
-  const organizationId = optionalString(input, "organization_id", optionalString(input, "customer_id", ""));
+  const organizationId = optionalString(input, "organization_id", "");
   const documentId = requireString(input, "document_id");
-  if (!organizationId) throw new Error("Missing required organization_id/customer_id.");
+  if (!organizationId) throw new Error("Missing required organization_id.");
   const { data, error } = await serviceClient
     .from("core_document_versions")
     .select("*")
@@ -1361,11 +1356,11 @@ async function listDocumentVersions(serviceClient: SupabaseClientAny, input: Jso
 }
 
 async function createDocumentVersion(serviceClient: SupabaseClientAny, input: JsonRecord, actorUserId: string | null, actorEmail: string): Promise<JsonRecord> {
-  const organizationId = optionalString(input, "organization_id", optionalString(input, "customer_id", ""));
+  const organizationId = optionalString(input, "organization_id", "");
   const documentId = requireString(input, "document_id");
   const storagePath = requireString(input, "storage_path");
   const originalFileName = requireString(input, "original_file_name");
-  if (!organizationId) throw new Error("Missing required organization_id/customer_id.");
+  if (!organizationId) throw new Error("Missing required organization_id.");
 
   const { data: doc, error: docError } = await serviceClient
     .from("core_documents")
@@ -1444,9 +1439,9 @@ async function createDocumentVersion(serviceClient: SupabaseClientAny, input: Js
 }
 
 async function setDocumentVersionStatus(serviceClient: SupabaseClientAny, input: JsonRecord, targetStatus: string, actorUserId: string | null, actorEmail: string): Promise<JsonRecord> {
-  const organizationId = optionalString(input, "organization_id", optionalString(input, "customer_id", ""));
+  const organizationId = optionalString(input, "organization_id", "");
   const versionId = requireString(input, "version_id");
-  if (!organizationId) throw new Error("Missing required organization_id/customer_id.");
+  if (!organizationId) throw new Error("Missing required organization_id.");
 
   const { data: version, error: versionError } = await serviceClient
     .from("core_document_versions")
@@ -1505,8 +1500,8 @@ async function setDocumentVersionStatus(serviceClient: SupabaseClientAny, input:
 }
 
 async function getDocumentDownloadUrl(serviceClient: SupabaseClientAny, input: JsonRecord): Promise<JsonRecord> {
-  const organizationId = optionalString(input, "organization_id", optionalString(input, "customer_id", ""));
-  if (!organizationId) throw new Error("Missing required organization_id/customer_id.");
+  const organizationId = optionalString(input, "organization_id", "");
+  if (!organizationId) throw new Error("Missing required organization_id.");
   let versionId = optionalNullableString(input, "version_id");
   const documentId = optionalNullableString(input, "document_id");
 
@@ -1748,8 +1743,8 @@ function normalizeAdminRsvpStatus(value: unknown): string {
 
 async function upsertEventRsvpAdmin(serviceClient: SupabaseClientAny, body: JsonRecord, actorUserId: string | null, actorEmail: string): Promise<JsonRecord> {
   const eventId = requireString(body, "event_id");
-  const organizationId = optionalString(body, "organization_id", optionalString(body, "customer_id", ""));
-  if (!organizationId) throw new Error("Missing organization_id/customer_id.");
+  const organizationId = optionalString(body, "organization_id", "");
+  if (!organizationId) throw new Error("Missing organization_id.");
   const rsvpId = optionalNullableString(body, "rsvp_id");
   const status = normalizeAdminRsvpStatus(body.response_status);
   const attendingSelf = optionalBoolean(body, "attending_self", true);
@@ -2021,16 +2016,6 @@ async function navigationFetchPages(serviceClient: SupabaseClientAny, organizati
     if (!error && Array.isArray(data)) pages = data as JsonRecord[];
   } catch {
     pages = [];
-  }
-  if (!pages.length) {
-    const { data, error } = await serviceClient
-      .from("core_customer_pages")
-      .select("*")
-      .eq("customer_id", organizationId)
-      .order("sort_order", { ascending: true })
-      .order("created_at", { ascending: true });
-    if (error) throw error;
-    pages = (data || []) as JsonRecord[];
   }
   return pages.filter((page) => !page.archived_at && navNormalizeKey(page.status || "published") !== "archived");
 }
@@ -2791,7 +2776,7 @@ serve(async (req: Request): Promise<Response> => {
 
     if (action === "list_customers") {
       const { data, error } = await serviceClient
-        .from("core_customers")
+        .from("core_organizations")
         .select("*")
         .order("created_at", { ascending: false });
       if (error) throw error;
@@ -2799,11 +2784,11 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "get_customer") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const { data, error } = await serviceClient
-        .from("core_customers")
+        .from("core_organizations")
         .select("*")
-        .eq("customer_id", customerId)
+        .eq("organization_id", customerId)
         .maybeSingle();
       if (error) throw error;
       return jsonResponse(200, { ok: true, action, customer: data });
@@ -2811,38 +2796,38 @@ serve(async (req: Request): Promise<Response> => {
 
     if (action === "create_customer") {
       const displayName = requireString(body, "display_name");
-      const customerKey = await ensureUniqueCustomerKey(serviceClient, optionalString(body, "customer_key", displayName));
+      const organizationKey = await ensureUniqueCustomerKey(serviceClient, optionalString(body, "organization_key", optionalString(body, "customer_key", displayName)));
 
       const payload = {
-        customer_key: customerKey,
+        organization_key: organizationKey,
         legal_name: optionalNullableString(body, "legal_name"),
         display_name: displayName,
-        customer_type: optionalString(body, "customer_type", "generic") || "generic",
+        organization_type: optionalString(body, "organization_type", optionalString(body, "customer_type", "generic")) || "generic",
         vertical: optionalString(body, "vertical", "generic") || "generic",
         status: normalizeCustomerStatus(body.status, "draft"),
         notes: optionalNullableString(body, "notes"),
       };
 
       const { data: customer, error } = await serviceClient
-        .from("core_customers")
+        .from("core_organizations")
         .insert(payload)
         .select("*")
         .single();
       if (error) throw error;
 
-      await getOrCreateActiveStyleProfile(serviceClient, customer.customer_id);
+      await getOrCreateActiveStyleProfile(serviceClient, customer.organization_id);
 
-      await writeAudit(serviceClient, actorEmail, action, "core_customers", customer.customer_id, body, {
-        customer_id: customer.customer_id,
-        customer_key: customer.customer_key,
+      await writeAudit(serviceClient, actorEmail, action, "core_organizations", customer.organization_id, body, {
+        organization_id: customer.organization_id,
+        organization_key: customer.organization_key,
       }, null, customer);
 
       return jsonResponse(200, { ok: true, action, customer });
     }
 
     if (action === "update_customer") {
-      const customerId = requireString(body, "customer_id");
-      const allowedFields = ["legal_name", "display_name", "customer_type", "vertical", "status", "notes"];
+      const customerId = requireString(body, "organization_id");
+      const allowedFields = ["legal_name", "display_name", "organization_type", "vertical", "status", "notes"];
       const updatePayload: JsonRecord = {};
 
       for (const field of allowedFields) {
@@ -2856,38 +2841,38 @@ serve(async (req: Request): Promise<Response> => {
       }
 
       const { data: before } = await serviceClient
-        .from("core_customers")
+        .from("core_organizations")
         .select("*")
-        .eq("customer_id", customerId)
+        .eq("organization_id", customerId)
         .maybeSingle();
 
       const { data: customer, error } = await serviceClient
-        .from("core_customers")
+        .from("core_organizations")
         .update(updatePayload)
-        .eq("customer_id", customerId)
+        .eq("organization_id", customerId)
         .select("*")
         .single();
       if (error) throw error;
 
-      await writeAudit(serviceClient, actorEmail, action, "core_customers", customerId, body, { customer_id: customerId }, before, customer);
+      await writeAudit(serviceClient, actorEmail, action, "core_organizations", customerId, body, { organization_id: customerId }, before, customer);
       return jsonResponse(200, { ok: true, action, customer });
     }
 
     if (action === "archive_customer" || action === "recover_customer") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const updatePayload = action === "archive_customer"
         ? { status: "archived", archived_at: nowIso() }
         : { status: "draft", archived_at: null };
 
       const { data: customer, error } = await serviceClient
-        .from("core_customers")
+        .from("core_organizations")
         .update(updatePayload)
-        .eq("customer_id", customerId)
+        .eq("organization_id", customerId)
         .select("*")
         .single();
       if (error) throw error;
 
-      await writeAudit(serviceClient, actorEmail, action, "core_customers", customerId, body, updatePayload, null, customer);
+      await writeAudit(serviceClient, actorEmail, action, "core_organizations", customerId, body, updatePayload, null, customer);
       return jsonResponse(200, { ok: true, action, customer });
     }
 
@@ -2909,11 +2894,11 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "list_customer_pages") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const { data: pages, error } = await serviceClient
         .from("core_customer_pages")
         .select("*")
-        .eq("customer_id", customerId)
+        .eq("organization_id", customerId)
         .order("sort_order", { ascending: true })
         .order("created_at", { ascending: true });
       if (error) throw error;
@@ -2925,7 +2910,7 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "enable_customer_page") {
-      const customerId = requireString(body, "customer_id");
+      const organizationId = requireString(body, "organization_id");
       const templateId = requireString(body, "template_id");
       const template = await getTemplateById(serviceClient, templateId);
       if (!template) throw new Error("Template not found.");
@@ -2938,8 +2923,7 @@ serve(async (req: Request): Promise<Response> => {
       const status = normalizePageStatus(body.status, "draft");
 
       const payload = {
-        customer_id: customerId,
-        organization_id: customerId,
+        organization_id: organizationId,
         template_id: templateId,
         page_key: pageKey,
         page_slug: pageSlug || pageKey,
@@ -2950,12 +2934,37 @@ serve(async (req: Request): Promise<Response> => {
         archived_at: status === "archived" ? nowIso() : null,
       };
 
-      const { data: page, error } = await serviceClient
+      // Find-then-update/insert keyed on organization_id + page_key. We no longer write the
+      // legacy customer column, so the existing row is resolved by organization_id rather than
+      // relying on the old customer-scoped upsert conflict target (that composite unique index
+      // is left unchanged in the database).
+      const { data: existingPage, error: existingError } = await serviceClient
         .from("core_customer_pages")
-        .upsert(payload, { onConflict: "customer_id,page_key" })
-        .select("*")
-        .single();
-      if (error) throw error;
+        .select("customer_page_id")
+        .eq("organization_id", organizationId)
+        .eq("page_key", pageKey)
+        .maybeSingle();
+      if (existingError) throw existingError;
+
+      let page: any;
+      if (existingPage && existingPage.customer_page_id) {
+        const { data: updated, error: updateError } = await serviceClient
+          .from("core_customer_pages")
+          .update(payload)
+          .eq("customer_page_id", existingPage.customer_page_id)
+          .select("*")
+          .single();
+        if (updateError) throw updateError;
+        page = updated;
+      } else {
+        const { data: inserted, error: insertError } = await serviceClient
+          .from("core_customer_pages")
+          .insert(payload)
+          .select("*")
+          .single();
+        if (insertError) throw insertError;
+        page = inserted;
+      }
 
       const pageSettings = await getOrCreatePageSettings(serviceClient, page, template);
       const mergedPage = flattenCustomerPage(page, template);
@@ -3175,13 +3184,13 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "get_active_style_profile") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const styleProfile = await getOrCreateActiveStyleProfile(serviceClient, customerId);
       return jsonResponse(200, { ok: true, action, style_profile: styleProfile });
     }
 
     if (action === "update_active_style_profile") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const active = await getOrCreateActiveStyleProfile(serviceClient, customerId);
       const payload = stylePayloadFromBody(body);
       payload.is_active = true;
@@ -3206,11 +3215,11 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "list_customer_style_profiles") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const { data, error } = await serviceClient
         .from("core_customer_style_profiles")
         .select("*")
-        .eq("customer_id", customerId)
+        .eq("organization_id", customerId)
         .order("is_active", { ascending: false })
         .order("updated_at", { ascending: false });
       if (error) throw error;
@@ -3218,10 +3227,9 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "save_design_profile") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const profileName = requireString(body, "profile_name");
       const payload = {
-        customer_id: customerId,
         organization_id: customerId,
         ...stylePayloadFromBody({ ...body, profile_name: profileName }),
         is_active: false,
@@ -3243,14 +3251,14 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "apply_saved_design_profile") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const sourceStyleProfileId = requireString(body, "source_style_profile_id");
       const active = await getOrCreateActiveStyleProfile(serviceClient, customerId);
 
       const { data: source, error: sourceError } = await serviceClient
         .from("core_customer_style_profiles")
         .select("*")
-        .eq("customer_id", customerId)
+        .eq("organization_id", customerId)
         .eq("style_profile_id", sourceStyleProfileId)
         .maybeSingle();
       if (sourceError) throw sourceError;
@@ -3283,7 +3291,7 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "list_style_profile_history") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const limit = clampInteger(optionalNumber(body, "limit", 10), 1, 100);
       const offset = clampInteger(optionalNumber(body, "offset", 0), 0, 100000);
       const eventGroup = optionalString(body, "event_group", "all") || "all";
@@ -3292,7 +3300,7 @@ serve(async (req: Request): Promise<Response> => {
       let query = serviceClient
         .from("core_customer_style_profile_history")
         .select("*", { count: "exact" })
-        .eq("customer_id", customerId)
+        .eq("organization_id", customerId)
         .order("created_at", { ascending: false })
         .range(offset, offset + limit - 1);
 
@@ -3314,14 +3322,14 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "restore_style_profile_snapshot") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const historyId = requireString(body, "history_id");
       const active = await getOrCreateActiveStyleProfile(serviceClient, customerId);
 
       const { data: history, error: historyError } = await serviceClient
         .from("core_customer_style_profile_history")
         .select("*")
-        .eq("customer_id", customerId)
+        .eq("organization_id", customerId)
         .eq("history_id", historyId)
         .maybeSingle();
       if (historyError) throw historyError;
@@ -3354,7 +3362,7 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "reset_active_style_profile_to_default") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const active = await getOrCreateActiveStyleProfile(serviceClient, customerId);
       const payload = {
         ...DEFAULT_STYLE_PROFILE,
@@ -3381,19 +3389,19 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "get_active_customer_logo") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const styleProfile = await getOrCreateActiveStyleProfile(serviceClient, customerId);
       const logoAsset = await fetchLogoAsset(serviceClient, styleProfile.logo_asset_id);
       return jsonResponse(200, { ok: true, action, style_profile: styleProfile, logo_asset: logoAsset });
     }
 
     if (action === "list_customer_assets") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const assetType = optionalNullableString(body, "asset_type");
       let query = serviceClient
         .from("core_assets")
         .select("*")
-        .eq("customer_id", customerId)
+        .eq("organization_id", customerId)
         .order("updated_at", { ascending: false });
 
       if (assetType) query = query.eq("asset_type", assetType);
@@ -3403,9 +3411,8 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "create_customer_asset") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const payload = {
-        customer_id: customerId,
         organization_id: customerId,
         operational_asset_id: optionalNullableString(body, "operational_asset_id"),
         asset_role: optionalNullableString(body, "asset_role"),
@@ -3438,14 +3445,14 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "set_active_logo_asset") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const assetId = requireString(body, "asset_id");
       const styleProfile = await getOrCreateActiveStyleProfile(serviceClient, customerId);
 
       const { data: asset, error: assetError } = await serviceClient
         .from("core_assets")
         .select("*")
-        .eq("customer_id", customerId)
+        .eq("organization_id", customerId)
         .eq("asset_id", assetId)
         .maybeSingle();
       if (assetError) throw assetError;
@@ -3468,7 +3475,7 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "clear_active_logo_asset") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const styleProfile = await getOrCreateActiveStyleProfile(serviceClient, customerId);
       const { data: updatedStyle, error } = await serviceClient
         .from("core_customer_style_profiles")
@@ -3487,7 +3494,7 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "archive_customer_asset" || action === "restore_customer_asset") {
-      const customerId = requireString(body, "customer_id");
+      const customerId = requireString(body, "organization_id");
       const assetId = requireString(body, "asset_id");
       const payload = action === "archive_customer_asset"
         ? { status: "archived", archived_at: nowIso() }
@@ -3496,7 +3503,7 @@ serve(async (req: Request): Promise<Response> => {
       const { data: asset, error } = await serviceClient
         .from("core_assets")
         .update(payload)
-        .eq("customer_id", customerId)
+        .eq("organization_id", customerId)
         .eq("asset_id", assetId)
         .select("*")
         .single();
@@ -3572,8 +3579,8 @@ serve(async (req: Request): Promise<Response> => {
 
 
     if (action === "list_aircraft") {
-      const organizationId = optionalString(body, "organization_id", optionalString(body, "customer_id", ""));
-      if (!organizationId) throw new Error("Missing required organization_id/customer_id.");
+      const organizationId = optionalString(body, "organization_id", "");
+      if (!organizationId) throw new Error("Missing required organization_id.");
       const includeArchived = optionalBoolean(body, "include_archived", false);
 
       let query = serviceClient
@@ -3606,8 +3613,8 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "bulk_upsert_aircraft") {
-      const organizationId = optionalString(body, "organization_id", optionalString(body, "customer_id", ""));
-      if (!organizationId) throw new Error("Missing required organization_id/customer_id.");
+      const organizationId = optionalString(body, "organization_id", "");
+      if (!organizationId) throw new Error("Missing required organization_id.");
 
       const rawRows = Array.isArray(body.rows) ? body.rows as JsonRecord[] : [];
       if (!rawRows.length) throw new Error("Missing rows array.");
@@ -3620,7 +3627,6 @@ serve(async (req: Request): Promise<Response> => {
         try {
           const normalized = normalizeWebflowAircraftRow(rawRows[i]);
           normalized.organization_id = organizationId;
-          normalized.customer_id = organizationId;
           const aircraft = await upsertAircraftRecord(serviceClient, normalized);
           saved.push(aircraft);
         } catch (error) {

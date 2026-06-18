@@ -903,7 +903,7 @@
       return;
     }
     select.innerHTML = `<option value="">Select customer...</option>` + customers.map((customer) => `
-      <option value="${escapeHtml(customer.customer_id)}" ${customer.customer_id === selectedCustomerId ? "selected" : ""}>${escapeHtml(customer.display_name)} (${escapeHtml(customer.customer_key)})</option>
+      <option value="${escapeHtml(customer.organization_id)}" ${customer.organization_id === selectedCustomerId ? "selected" : ""}>${escapeHtml(customer.display_name)} (${escapeHtml(customer.organization_key)})</option>
     `).join("");
   }
 
@@ -1051,7 +1051,7 @@
           isSaving = true;
           setStatus("Restoring history snapshot...");
           const result = await callCoreAdminAction("restore_style_profile_snapshot", {
-            customer_id: selectedCustomerId,
+            organization_id: selectedCustomerId,
             history_id: historyId
           });
           activeStyleProfile = result.style_profile;
@@ -1077,7 +1077,7 @@
       renderSavedProfiles();
       return;
     }
-    const result = await callCoreAdminAction("list_customer_style_profiles", { customer_id: selectedCustomerId });
+    const result = await callCoreAdminAction("list_customer_style_profiles", { organization_id: selectedCustomerId });
     savedProfiles = Array.isArray(result.style_profiles) ? result.style_profiles : [];
     renderSavedProfiles();
   }
@@ -1094,7 +1094,7 @@
     styleHistoryFilter = filterEl ? filterEl.value || "all" : styleHistoryFilter || "all";
 
     const result = await callCoreAdminAction("list_style_profile_history", {
-      customer_id: selectedCustomerId,
+      organization_id: selectedCustomerId,
       limit: styleHistoryLimit,
       offset: 0,
       event_group: styleHistoryFilter
@@ -1113,7 +1113,7 @@
       return;
     }
 
-    const result = await callCoreAdminAction("list_customer_pages", { customer_id: selectedCustomerId });
+    const result = await callCoreAdminAction("list_customer_pages", { organization_id: selectedCustomerId });
     customerPages = Array.isArray(result.customer_pages) ? result.customer_pages : [];
     renderPreviewPageSelect();
     await renderRealPagePreview();
@@ -1129,7 +1129,7 @@
     setStatus("Loading customers...");
     const result = await callCoreAdminAction("list_customers");
     customers = Array.isArray(result.customers) ? result.customers : [];
-    if (!selectedCustomerId && customers.length) selectedCustomerId = customers[0].customer_id;
+    if (!selectedCustomerId && customers.length) selectedCustomerId = customers[0].organization_id;
     renderCustomerSelect();
     if (selectedCustomerId) {
       await loadActiveStyleProfile();
@@ -1143,7 +1143,7 @@
   async function loadActiveStyleProfile() {
     if (!selectedCustomerId) return;
     setStatus("Loading active style profile...");
-    const result = await callCoreAdminAction("get_active_style_profile", { customer_id: selectedCustomerId });
+    const result = await callCoreAdminAction("get_active_style_profile", { organization_id: selectedCustomerId });
     activeStyleProfile = result.style_profile;
     applyPayloadToForm(activeStyleProfile);
     markClean();
@@ -1158,7 +1158,7 @@
     const payload = getFormPayload();
     setStatus("Saving style profile...");
     isSaving = true;
-    const result = await callCoreAdminAction("update_active_style_profile", { customer_id: selectedCustomerId, note: "Layout Designer save", ...payload });
+    const result = await callCoreAdminAction("update_active_style_profile", { organization_id: selectedCustomerId, note: "Layout Designer save", ...payload });
     activeStyleProfile = result.style_profile;
     applyPayloadToForm(activeStyleProfile);
     styleHistoryLimit = 10;
@@ -1301,7 +1301,7 @@
         const payload = getFormPayload();
         setStatus("Saving new design profile...");
         const result = await callCoreAdminAction("save_design_profile", {
-          customer_id: selectedCustomerId,
+          organization_id: selectedCustomerId,
           profile_name: profileName.trim(),
           note: "Saved from Layout Designer",
           ...payload
@@ -1330,7 +1330,7 @@
         isSaving = true;
         setStatus("Applying saved design profile...");
         const result = await callCoreAdminAction("apply_saved_design_profile", {
-          customer_id: selectedCustomerId,
+          organization_id: selectedCustomerId,
           source_style_profile_id: sourceStyleProfileId
         });
 
@@ -1414,7 +1414,7 @@
         isSaving = true;
         setStatus("Reverting style to system default...");
         const result = await callCoreAdminAction("reset_active_style_profile_to_default", {
-          customer_id: selectedCustomerId
+          organization_id: selectedCustomerId
         });
         activeStyleProfile = result.style_profile;
         applyPayloadToForm(activeStyleProfile);

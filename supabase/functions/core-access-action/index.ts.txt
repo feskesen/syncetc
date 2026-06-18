@@ -296,16 +296,13 @@ async function fetchEnabledPortalPages(serviceClient: SupabaseClientAny, organiz
   const out = new Map<string, JsonRecord[]>();
   if (!ids.length) return out;
 
-  const selectCols = "customer_page_id,customer_id,organization_id,site_id,template_id,page_key,page_slug,status,nav_label,sort_order,show_in_nav,archived_at";
-  const [byCustomer, byOrganization] = await Promise.all([
-    serviceClient.from("core_customer_pages").select(selectCols).in("customer_id", ids).is("archived_at", null),
-    serviceClient.from("core_customer_pages").select(selectCols).in("organization_id", ids).is("archived_at", null),
-  ]);
-  if (byCustomer.error) throw byCustomer.error;
-  if (byOrganization.error) throw byOrganization.error;
+  const selectCols = "customer_page_id,organization_id,site_id,template_id,page_key,page_slug,status,nav_label,sort_order,show_in_nav,archived_at";
+  const { data: pageRows, error: pageError } = await serviceClient
+    .from("core_customer_pages").select(selectCols).in("organization_id", ids).is("archived_at", null);
+  if (pageError) throw pageError;
 
   const pageById = new Map<string, JsonRecord>();
-  for (const page of [...(byCustomer.data || []), ...(byOrganization.data || [])] as JsonRecord[]) {
+  for (const page of (pageRows || []) as JsonRecord[]) {
     if (!pageStatusIsEnabled(page.status)) continue;
     const id = clean(page.customer_page_id);
     if (id) pageById.set(id, page);
@@ -327,7 +324,7 @@ async function fetchEnabledPortalPages(serviceClient: SupabaseClientAny, organiz
   const settingsMap = new Map<string, JsonRecord>((settings || []).map((setting: JsonRecord) => [clean(setting.customer_page_id), setting] as [string, JsonRecord]));
 
   for (const page of pages) {
-    const orgId = clean(page.organization_id || page.customer_id);
+    const orgId = clean(page.organization_id);
     if (!orgId) continue;
     const portalPage = safePortalPage(page, templateMap.get(clean(page.template_id)), settingsMap.get(clean(page.customer_page_id)));
     const list = out.get(orgId) || [];
@@ -720,21 +717,6 @@ async function fetchStyleProfiles(serviceClient: SupabaseClientAny, organization
   for (const profile of byOrg || []) {
     const orgId = clean(profile.organization_id);
     if (orgId && !styleMap.has(orgId)) styleMap.set(orgId, profile);
-  }
-
-  const missingIds = organizationIds.filter((id) => !styleMap.has(id));
-  if (missingIds.length) {
-    const { data: byCustomer, error: customerStyleError } = await serviceClient
-      .from("core_customer_style_profiles")
-      .select("*")
-      .in("customer_id", missingIds)
-      .eq("is_active", true)
-      .order("updated_at", { ascending: false });
-    if (customerStyleError) throw customerStyleError;
-    for (const profile of byCustomer || []) {
-      const orgId = clean(profile.organization_id || profile.customer_id);
-      if (orgId && !styleMap.has(orgId)) styleMap.set(orgId, profile);
-    }
   }
 
   return styleMap;

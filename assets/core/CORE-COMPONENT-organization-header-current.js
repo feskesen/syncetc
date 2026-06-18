@@ -384,7 +384,7 @@
     }
     return `<label class="syncetc-org-header-org-select"><span>Organization</span><select data-syncetc-org-select aria-label="Organization selector">${orgs.map((orgRaw) => {
       const org = obj(orgRaw);
-      const id = clean(org.organization_id || org.id || org.customer_id);
+      const id = clean(org.organization_id || org.id);
       const name = firstText(org.display_name, org.name, org.organization_name, "Organization");
       const orgKey = firstText(org.organization_key, org.key, org.customer_key);
       return `<option value="${esc(id)}" ${id && id === selected ? "selected" : ""}>${esc(name)}${orgKey ? ` (${esc(orgKey)})` : ""}</option>`;

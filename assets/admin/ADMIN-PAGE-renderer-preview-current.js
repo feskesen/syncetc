@@ -57,7 +57,7 @@
   function writeQueryState() {
     const params = new URLSearchParams();
 
-    if (selectedCustomer?.customer_key) params.set("customer", selectedCustomer.customer_key);
+    if (selectedCustomer?.organization_key) params.set("customer", selectedCustomer.organization_key);
 
     const selectedPage = selectedPageBundle?.customer_page
       || customerPages.find((page) => page.customer_page_id === selectedCustomerPageId)
@@ -928,8 +928,8 @@
     }
 
     select.innerHTML = `<option value="">Select customer...</option>` + customers.map((customer) => `
-      <option value="${escapeHtml(customer.customer_id)}" ${customer.customer_id === selectedCustomerId ? "selected" : ""}>
-        ${escapeHtml(customer.display_name)} (${escapeHtml(customer.customer_key)})
+      <option value="${escapeHtml(customer.organization_id)}" ${customer.organization_id === selectedCustomerId ? "selected" : ""}>
+        ${escapeHtml(customer.display_name)} (${escapeHtml(customer.organization_key)})
       </option>
     `).join("");
   }
@@ -967,12 +967,12 @@
     customers = Array.isArray(result.customers) ? result.customers : [];
 
     if (!selectedCustomerId && pendingCustomerKey) {
-      const pendingCustomer = customers.find((customer) => customer.customer_key === pendingCustomerKey);
-      if (pendingCustomer) selectedCustomerId = pendingCustomer.customer_id;
+      const pendingCustomer = customers.find((customer) => customer.organization_key === pendingCustomerKey);
+      if (pendingCustomer) selectedCustomerId = pendingCustomer.organization_id;
     }
 
-    if (!selectedCustomerId && customers.length) selectedCustomerId = customers[0].customer_id;
-    selectedCustomer = customers.find((customer) => customer.customer_id === selectedCustomerId) || null;
+    if (!selectedCustomerId && customers.length) selectedCustomerId = customers[0].organization_id;
+    selectedCustomer = customers.find((customer) => customer.organization_id === selectedCustomerId) || null;
 
     renderCustomerSelect();
 
@@ -984,15 +984,15 @@
   async function loadCustomerData() {
     if (!selectedCustomerId) return;
 
-    selectedCustomer = customers.find((customer) => customer.customer_id === selectedCustomerId) || null;
+    selectedCustomer = customers.find((customer) => customer.organization_id === selectedCustomerId) || null;
 
     setStatus("Loading customer style and pages...");
 
-    const styleResult = await callCoreAdminAction("get_active_customer_logo", { customer_id: selectedCustomerId });
+    const styleResult = await callCoreAdminAction("get_active_customer_logo", { organization_id: selectedCustomerId });
     activeStyleProfile = styleResult.style_profile || null;
     activeLogoAsset = styleResult.logo_asset || null;
 
-    const pagesResult = await callCoreAdminAction("list_customer_pages", { customer_id: selectedCustomerId });
+    const pagesResult = await callCoreAdminAction("list_customer_pages", { organization_id: selectedCustomerId });
     customerPages = Array.isArray(pagesResult.customer_pages) ? pagesResult.customer_pages : [];
 
     renderPageSelect();
@@ -1288,7 +1288,7 @@
     document.getElementById("se-customer-select")?.addEventListener("change", async (event) => {
       try {
         selectedCustomerId = event.target.value || "";
-        selectedCustomer = customers.find((customer) => customer.customer_id === selectedCustomerId) || null;
+        selectedCustomer = customers.find((customer) => customer.organization_id === selectedCustomerId) || null;
         selectedCustomerPageId = "";
         selectedPageBundle = null;
         writeQueryState();

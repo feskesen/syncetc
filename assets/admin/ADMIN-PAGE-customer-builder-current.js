@@ -603,16 +603,16 @@
     list.innerHTML = customers.map((customer) => {
       const status = String(customer.status || "draft");
       const statusClass = status === "active" ? "active" : status === "archived" ? "archived" : "";
-      const activeClass = customer.customer_id === selectedCustomerId ? "active" : "";
+      const activeClass = customer.organization_id === selectedCustomerId ? "active" : "";
 
       return `
-        <div class="se-customer-row ${activeClass}" data-customer-id="${escapeHtml(customer.customer_id)}">
+        <div class="se-customer-row ${activeClass}" data-customer-id="${escapeHtml(customer.organization_id)}">
           <div class="se-customer-top">
             <div>
               <p class="se-customer-name">${escapeHtml(customer.display_name)}</p>
               <div class="se-customer-meta">
-                key: ${escapeHtml(customer.customer_key)}<br>
-                type: ${escapeHtml(customer.customer_type)} | vertical: ${escapeHtml(customer.vertical)}
+                key: ${escapeHtml(customer.organization_key)}<br>
+                type: ${escapeHtml(customer.organization_type)} | vertical: ${escapeHtml(customer.vertical)}
               </div>
             </div>
             <span class="se-pill ${statusClass}">${escapeHtml(status)}</span>
@@ -636,7 +636,7 @@
     const wrap = document.getElementById("se-selected-customer");
     if (!wrap) return;
 
-    const customer = customers.find((item) => item.customer_id === selectedCustomerId);
+    const customer = customers.find((item) => item.organization_id === selectedCustomerId);
 
     if (!customer) {
       wrap.innerHTML = `<div class="se-empty">Select a customer to edit it.</div>`;
@@ -658,7 +658,7 @@
         <span class="se-label">Customer Type</span>
         <select id="se-edit-customer-type" class="se-select">
           ${["generic", "flying_club", "fbo", "flight_school", "service_company"].map((value) => `
-            <option value="${value}" ${customer.customer_type === value ? "selected" : ""}>${value}</option>
+            <option value="${value}" ${customer.organization_type === value ? "selected" : ""}>${value}</option>
           `).join("")}
         </select>
       </label>
@@ -687,8 +687,8 @@
       </label>
 
       <div class="se-customer-meta">
-        Customer ID: ${escapeHtml(customer.customer_id)}<br>
-        Stable customer key: ${escapeHtml(customer.customer_key)}
+        Customer ID: ${escapeHtml(customer.organization_id)}<br>
+        Stable customer key: ${escapeHtml(customer.organization_key)}
       </div>
 
       <div class="se-actions">
@@ -727,7 +727,7 @@
     const result = await callCoreAdminAction("list_customers");
     customers = Array.isArray(result.customers) ? result.customers : [];
 
-    if (selectedCustomerId && !customers.some((customer) => customer.customer_id === selectedCustomerId)) {
+    if (selectedCustomerId && !customers.some((customer) => customer.organization_id === selectedCustomerId)) {
       selectedCustomerId = null;
     }
 
@@ -748,16 +748,16 @@
     const result = await callCoreAdminAction("create_customer", {
       display_name: displayName.trim(),
       legal_name: document.getElementById("se-create-legal-name")?.value || "",
-      customer_type: document.getElementById("se-create-customer-type")?.value || "generic",
+      organization_type: document.getElementById("se-create-customer-type")?.value || "generic",
       vertical: document.getElementById("se-create-vertical")?.value || "generic",
       status: document.getElementById("se-create-status")?.value || "draft",
       notes: document.getElementById("se-create-notes")?.value || ""
     });
 
-    selectedCustomerId = result.customer?.customer_id || null;
+    selectedCustomerId = result.customer?.organization_id || null;
     clearCreateForm();
     await refreshCustomers();
-    setStatus(`Customer created. Key: ${result.customer?.customer_key || "(not returned)"}`);
+    setStatus(`Customer created. Key: ${result.customer?.organization_key || "(not returned)"}`);
   }
 
   async function saveSelectedCustomer() {
@@ -766,10 +766,10 @@
     setStatus("Saving customer...");
 
     await callCoreAdminAction("update_customer", {
-      customer_id: selectedCustomerId,
+      organization_id: selectedCustomerId,
       display_name: document.getElementById("se-edit-display-name")?.value || "",
       legal_name: document.getElementById("se-edit-legal-name")?.value || "",
-      customer_type: document.getElementById("se-edit-customer-type")?.value || "generic",
+      organization_type: document.getElementById("se-edit-customer-type")?.value || "generic",
       vertical: document.getElementById("se-edit-vertical")?.value || "generic",
       status: document.getElementById("se-edit-status")?.value || "draft",
       notes: document.getElementById("se-edit-notes")?.value || ""
@@ -781,12 +781,12 @@
 
   async function archiveSelectedCustomer() {
     if (!selectedCustomerId) return;
-    const customer = customers.find((item) => item.customer_id === selectedCustomerId);
+    const customer = customers.find((item) => item.organization_id === selectedCustomerId);
     const confirmed = window.confirm(`Archive customer "${customer?.display_name || selectedCustomerId}"?`);
     if (!confirmed) return;
 
     setStatus("Archiving customer...");
-    await callCoreAdminAction("archive_customer", { customer_id: selectedCustomerId });
+    await callCoreAdminAction("archive_customer", { organization_id: selectedCustomerId });
     await refreshCustomers();
     setStatus("Customer archived.");
   }
@@ -795,7 +795,7 @@
     if (!selectedCustomerId) return;
 
     setStatus("Recovering customer...");
-    await callCoreAdminAction("recover_customer", { customer_id: selectedCustomerId });
+    await callCoreAdminAction("recover_customer", { organization_id: selectedCustomerId });
     await refreshCustomers();
     setStatus("Customer recovered to draft status.");
   }

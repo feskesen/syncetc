@@ -188,7 +188,7 @@
   }
 
   function getSelectedCustomer() {
-    return customers.find((customer) => customer.customer_id === selectedCustomerId) || null;
+    return customers.find((customer) => customer.organization_id === selectedCustomerId) || null;
   }
 
   function getPageForTemplate(template) {
@@ -291,8 +291,8 @@
     }
 
     select.innerHTML = `<option value="">Select customer...</option>` + customers.map((customer) => `
-      <option value="${escapeHtml(customer.customer_id)}" ${customer.customer_id === selectedCustomerId ? "selected" : ""}>
-        ${escapeHtml(customer.display_name)} (${escapeHtml(customer.customer_key)})
+      <option value="${escapeHtml(customer.organization_id)}" ${customer.organization_id === selectedCustomerId ? "selected" : ""}>
+        ${escapeHtml(customer.display_name)} (${escapeHtml(customer.organization_key)})
       </option>
     `).join("");
   }
@@ -615,7 +615,7 @@
     customers = Array.isArray(customerResult.customers) ? customerResult.customers : [];
     templates = Array.isArray(templateResult.templates) ? templateResult.templates : [];
 
-    if (!selectedCustomerId && customers.length) selectedCustomerId = customers[0].customer_id;
+    if (!selectedCustomerId && customers.length) selectedCustomerId = customers[0].organization_id;
 
     if (selectedCustomerId) {
       await loadCustomerPages();
@@ -635,7 +635,7 @@
     }
 
     setStatus("Loading customer pages...");
-    const result = await callCoreAdminAction("list_customer_pages", { customer_id: selectedCustomerId });
+    const result = await callCoreAdminAction("list_customer_pages", { organization_id: selectedCustomerId });
     customerPages = Array.isArray(result.customer_pages) ? result.customer_pages : [];
   }
 
@@ -659,7 +659,7 @@
     setStatus(`Enabling ${template.template_name || template.template_key} as draft / hidden from nav...`);
 
     await callCoreAdminAction("enable_customer_page", {
-      customer_id: selectedCustomerId,
+      organization_id: selectedCustomerId,
       template_id: templateId,
       nav_label: template.template_name || template.template_key,
       page_key: template.template_key,

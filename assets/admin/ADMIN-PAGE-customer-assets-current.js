@@ -193,8 +193,8 @@
     }
 
     select.innerHTML = `<option value="">Select customer...</option>` + customers.map((customer) => `
-      <option value="${escapeHtml(customer.customer_id)}" ${customer.customer_id === selectedCustomerId ? "selected" : ""}>
-        ${escapeHtml(customer.display_name)} (${escapeHtml(customer.customer_key)})
+      <option value="${escapeHtml(customer.organization_id)}" ${customer.organization_id === selectedCustomerId ? "selected" : ""}>
+        ${escapeHtml(customer.display_name)} (${escapeHtml(customer.organization_key)})
       </option>
     `).join("");
   }
@@ -319,7 +319,7 @@
     const result = await callCoreAdminAction("list_customers");
     customers = Array.isArray(result.customers) ? result.customers : [];
 
-    if (!selectedCustomerId && customers.length) selectedCustomerId = customers[0].customer_id;
+    if (!selectedCustomerId && customers.length) selectedCustomerId = customers[0].organization_id;
 
     renderCustomers();
 
@@ -333,12 +333,12 @@
 
     setStatus("Loading customer assets...");
 
-    const logoResult = await callCoreAdminAction("get_active_customer_logo", { customer_id: selectedCustomerId });
+    const logoResult = await callCoreAdminAction("get_active_customer_logo", { organization_id: selectedCustomerId });
     activeStyleProfile = logoResult.style_profile || null;
     activeLogoAsset = logoResult.logo_asset || null;
 
     const assetsResult = await callCoreAdminAction("list_customer_assets", {
-      customer_id: selectedCustomerId,
+      organization_id: selectedCustomerId,
       asset_type: "logo"
     });
     assets = Array.isArray(assetsResult.assets) ? assetsResult.assets : [];
@@ -360,12 +360,12 @@
   }
 
   function getSelectedCustomer() {
-    return customers.find((customer) => customer.customer_id === selectedCustomerId) || null;
+    return customers.find((customer) => customer.organization_id === selectedCustomerId) || null;
   }
 
   function getCustomerStorageKey() {
     const customer = getSelectedCustomer();
-    return customer?.customer_key || selectedCustomerId || "customer";
+    return customer?.organization_key || selectedCustomerId || "customer";
   }
 
   function validateLogoFile(file) {
@@ -406,7 +406,7 @@
     const publicUrl = publicData?.publicUrl || "";
 
     const result = await callCoreAdminAction("create_customer_asset", {
-      customer_id: selectedCustomerId,
+      organization_id: selectedCustomerId,
       asset_type: "logo",
       url: publicUrl,
       storage_path: storagePath,
@@ -445,7 +445,7 @@
 
     setStatus("Adding logo asset...");
     const result = await callCoreAdminAction("create_customer_asset", {
-      customer_id: selectedCustomerId,
+      organization_id: selectedCustomerId,
       asset_type: "logo",
       url,
       storage_path: storagePath,
@@ -466,7 +466,7 @@
 
     setStatus("Setting active logo...");
     await callCoreAdminAction("set_active_logo_asset", {
-      customer_id: selectedCustomerId,
+      organization_id: selectedCustomerId,
       asset_id: assetId
     });
 
@@ -480,7 +480,7 @@
 
     setStatus("Clearing active logo...");
     await callCoreAdminAction("clear_active_logo_asset", {
-      customer_id: selectedCustomerId
+      organization_id: selectedCustomerId
     });
 
     await loadCustomerAssets();
@@ -492,7 +492,7 @@
 
     setStatus("Archiving logo asset...");
     await callCoreAdminAction("archive_customer_asset", {
-      customer_id: selectedCustomerId,
+      organization_id: selectedCustomerId,
       asset_id: assetId
     });
 
@@ -505,7 +505,7 @@
 
     setStatus("Restoring logo asset...");
     await callCoreAdminAction("restore_customer_asset", {
-      customer_id: selectedCustomerId,
+      organization_id: selectedCustomerId,
       asset_id: assetId
     });
 

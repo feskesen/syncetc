@@ -68,7 +68,7 @@
 
   function customerLabel(customer) {
     const name = cleanText(customer.display_name || customer.legal_name || "Unnamed organization");
-    const key = cleanText(customer.customer_key || customer.organization_key || customer.vertical || "");
+    const key = cleanText(customer.organization_key || customer.vertical || "");
     return key ? `${name} (${key})` : name;
   }
 
@@ -382,7 +382,7 @@
   async function loadCustomers() {
     const result = await callCoreAdminAction("list_customers", {});
     customers = Array.isArray(result.customers) ? result.customers : [];
-    if (!selectedCustomerId && customers[0]) selectedCustomerId = String(customers[0].customer_id);
+    if (!selectedCustomerId && customers[0]) selectedCustomerId = String(customers[0].organization_id);
     render();
     if (selectedCustomerId) await loadDocuments(false);
   }
@@ -991,7 +991,7 @@
   }
 
   function mainHtml() {
-    const customerOptions = customers.map((c) => `<option value="${escapeHtml(c.customer_id)}" ${String(c.customer_id) === selectedCustomerId ? "selected" : ""}>${escapeHtml(customerLabel(c))}</option>`).join("");
+    const customerOptions = customers.map((c) => `<option value="${escapeHtml(c.organization_id)}" ${String(c.organization_id) === selectedCustomerId ? "selected" : ""}>${escapeHtml(customerLabel(c))}</option>`).join("");
     return `
       <div class="sd-toolbar">
         <label class="sd-field" style="margin:0"><span class="sd-label">Organization</span><select id="sd-customer-select" class="sd-select">${customerOptions}</select><span class="sd-help">Display name plus key are shown so duplicate test names are distinguishable.</span></label>

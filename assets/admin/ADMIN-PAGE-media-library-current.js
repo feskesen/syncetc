@@ -339,8 +339,8 @@
     customers = result.customers || [];
     const select = getEl("se-customer");
     if (select) {
-      select.innerHTML = customers.map((c) => `<option value="${escapeHtml(c.customer_id)}">${escapeHtml(c.display_name || c.customer_key)} (${escapeHtml(c.customer_key || "")})</option>`).join("");
-      if (!selectedCustomerId && customers[0]) selectedCustomerId = customers[0].customer_id;
+      select.innerHTML = customers.map((c) => `<option value="${escapeHtml(c.organization_id)}">${escapeHtml(c.display_name || c.organization_key)} (${escapeHtml(c.organization_key || "")})</option>`).join("");
+      if (!selectedCustomerId && customers[0]) selectedCustomerId = customers[0].organization_id;
       select.value = selectedCustomerId;
     }
     await loadMedia();
@@ -354,7 +354,6 @@
     }
     setStatus("Loading media...");
     const result = await callCoreAdminAction("list_gallery_media", {
-      customer_id: selectedCustomerId,
       organization_id: selectedCustomerId,
       include_archived: showArchived,
     });
@@ -556,7 +555,6 @@
 
   function basePayload() {
     return {
-      customer_id: selectedCustomerId,
       organization_id: selectedCustomerId,
       title: getValue("se-title"),
       caption: getValue("se-caption"),
@@ -699,14 +697,14 @@
   async function archiveMedia(mediaId) {
     if (!window.confirm("Archive this media item? It can be restored later.")) return;
     setStatus("Archiving media...");
-    await callCoreAdminAction("archive_gallery_media", { customer_id: selectedCustomerId, organization_id: selectedCustomerId, gallery_media_id: mediaId });
+    await callCoreAdminAction("archive_gallery_media", { organization_id: selectedCustomerId, gallery_media_id: mediaId });
     if (selectedMediaId === mediaId) resetForm(true);
     await loadMedia();
   }
 
   async function restoreMedia(mediaId) {
     setStatus("Restoring media...");
-    await callCoreAdminAction("restore_gallery_media", { customer_id: selectedCustomerId, organization_id: selectedCustomerId, gallery_media_id: mediaId });
+    await callCoreAdminAction("restore_gallery_media", { organization_id: selectedCustomerId, gallery_media_id: mediaId });
     await loadMedia();
   }
 

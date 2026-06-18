@@ -509,8 +509,8 @@
     }
 
     select.innerHTML = `<option value="">Select customer...</option>` + customers.map((customer) => `
-      <option value="${escapeHtml(customer.customer_id)}" ${customer.customer_id === selectedCustomerId ? "selected" : ""}>
-        ${escapeHtml(customer.display_name)} (${escapeHtml(customer.customer_key)})
+      <option value="${escapeHtml(customer.organization_id)}" ${customer.organization_id === selectedCustomerId ? "selected" : ""}>
+        ${escapeHtml(customer.display_name)} (${escapeHtml(customer.organization_key)})
       </option>
     `).join("");
   }
@@ -1885,7 +1885,7 @@ What is your application process?,Submit an application and wait for review.,Mem
     const result = await callCoreAdminAction("list_customers");
     customers = Array.isArray(result.customers) ? result.customers : [];
 
-    if (!selectedCustomerId && customers.length) selectedCustomerId = customers[0].customer_id;
+    if (!selectedCustomerId && customers.length) selectedCustomerId = customers[0].organization_id;
 
     renderCustomers();
 
@@ -1905,7 +1905,7 @@ What is your application process?,Submit an application and wait for review.,Mem
     }
 
     setStatus("Loading customer pages...");
-    const result = await callCoreAdminAction("list_customer_pages", { customer_id: selectedCustomerId });
+    const result = await callCoreAdminAction("list_customer_pages", { organization_id: selectedCustomerId });
     customerPages = Array.isArray(result.customer_pages) ? result.customer_pages : [];
 
     renderPages();

@@ -372,7 +372,7 @@ async function getAircraftPagePayload(serviceClient: SupabaseClientAny, supabase
 
   const { data: page, error: pageError } = await serviceClient
     .from("core_customer_pages")
-    .select("customer_page_id, customer_id, organization_id, site_id, template_id, page_key, page_slug, status, nav_label, sort_order, show_in_nav, archived_at")
+    .select("customer_page_id, organization_id, site_id, template_id, page_key, page_slug, status, nav_label, sort_order, show_in_nav, archived_at")
     .eq("organization_id", organizationId)
     .eq("page_key", pageKey)
     .is("archived_at", null)
@@ -799,7 +799,7 @@ async function resolvePublicPageContext(
 
   const { data: page, error: pageError } = await serviceClient
     .from("core_customer_pages")
-    .select("customer_page_id, customer_id, organization_id, site_id, template_id, page_key, page_slug, status, nav_label, sort_order, show_in_nav, archived_at")
+    .select("customer_page_id, organization_id, site_id, template_id, page_key, page_slug, status, nav_label, sort_order, show_in_nav, archived_at")
     .eq("organization_id", organizationId)
     .eq("page_key", pageKey)
     .is("archived_at", null)
